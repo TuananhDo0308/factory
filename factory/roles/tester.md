@@ -28,7 +28,7 @@ Correct every fault you find, in the test files you own. Change a file only to c
 
 ## In a repair round
 
-The tests have been written and the code built, and the combined change did not pass. A failing test is presumed to be the code's fault and goes to the implementer, not to you. You are called only when a reviewer raised a finding against one of your test files, or when the spec has no implementer.
+The tests have been written and the code built, and the combined change did not pass. A failing test is presumed to be the code's fault and goes to the fixer, who repairs the code, not to you. You are called only when a reviewer raised a finding against one of your test files, or when the spec has no source files.
 
 The spec decides who is right, not the code. You may now read the code to understand a failure. Correct a test when the failure is right about it: it asks for something the spec does not require, calls the code differently from the interfaces, is broken in itself, or a criterion has no test that would fail without the change. If the test is right according to the spec, leave it exactly as it is, return `done` and say so in `openIssues`. Never loosen, skip or delete a test to make it pass.
 

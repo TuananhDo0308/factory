@@ -18,8 +18,9 @@ Nhóm agent được điều phối bằng code (một script Workflow), không 
 | Checker | Chạy các lệnh kiểm tra của hợp đồng và liệt kê file đã thay đổi | Không |
 | Reviewer | Đánh giá toàn bộ thay đổi so với hợp đồng, và chỗ các phần ghép với nhau | Không |
 | Spec reviewer | Chỉ khi task được tách: đọc kỹ từng dòng các file của một spec | Không |
+| Fixer | Chỉ khi thay đổi chưa đạt: sửa code dựa trên report tổng hợp từ checker và các reviewer. Không bao giờ sửa test | Có (chỉ file nguồn) |
 
-Lý do tách spec: một agent nhận quá nhiều việc cùng lúc dễ đoán mò và bịa chi tiết. Mỗi spec được build, và sửa nếu cần, bởi một agent riêng trong một phiên riêng, chỉ thấy đúng spec đó; không agent nào nhận nhiều spec cùng lúc. Test của một spec do một agent khác với agent viết code đảm nhận: hai agent làm song song từ cùng một spec và không thấy sản phẩm của nhau, để test đo đúng yêu cầu chứ không được viết cho khớp với code đã làm. Viết xong, tester tự soát lại test theo spec cho đến khi một lượt soát không còn gì phải sửa; từ đó test là chuẩn: khi test fail thì mặc định code sai. Review cũng được chia như vậy: mỗi spec có một reviewer riêng, cộng một reviewer đánh giá toàn bộ thay đổi theo hợp đồng. Không reviewer nào thấy lời giải thích của implementer, nên họ đánh giá code chứ không đánh giá câu chuyện về code.
+Lý do tách spec: một agent nhận quá nhiều việc cùng lúc dễ đoán mò và bịa chi tiết. Mỗi spec được build bởi một agent riêng trong một phiên riêng, chỉ thấy đúng spec đó; không agent nào nhận nhiều spec cùng lúc. Test của một spec do một agent khác với agent viết code đảm nhận: hai agent làm song song từ cùng một spec và không thấy sản phẩm của nhau, để test đo đúng yêu cầu chứ không được viết cho khớp với code đã làm. Viết xong, tester tự soát lại test theo spec cho đến khi một lượt soát không còn gì phải sửa; từ đó test là chuẩn: khi test fail thì mặc định code sai. Review cũng được chia như vậy: mỗi spec có một reviewer riêng, cộng một reviewer đánh giá toàn bộ thay đổi theo hợp đồng. Không reviewer nào thấy lời giải thích của implementer, nên họ đánh giá code chứ không đánh giá câu chuyện về code. Sửa lỗi là chỗ duy nhất một agent làm việc trên toàn bộ thay đổi: lỗi thường nằm ở chỗ hai phần ghép nhau, nên một fixer nhận report tổng hợp và bản đồ file, không nhận các spec.
 
 ## Quy trình
 
@@ -29,7 +30,7 @@ Lý do tách spec: một agent nhận quá nhiều việc cùng lúc dễ đoán
    - **Build**: mỗi spec có một implementer viết code và một tester viết test, chạy song song; mỗi bên sở hữu file riêng và không được xem phần spec dành cho bên kia. Viết xong, tester được gọi lại trong phiên mới để soát test theo spec và sửa nếu sai, lặp đến khi một lượt soát không sửa gì (tối đa hai lượt), trong lúc implementer vẫn đang làm. Spec không có file test thì không có tester; spec chỉ có file test thì không có implementer. Spec độc lập chạy song song; spec phụ thuộc thì chờ. Agent nào báo đã sửa file không thuộc quyền của mình sẽ làm dừng lượt chạy.
    - **Check**: checker chạy các lệnh kiểm tra và liệt kê file đã đổi. File bị sửa mà không spec nào sở hữu sẽ dừng cả lượt chạy.
    - **Review**: một reviewer mới đánh giá toàn bộ thay đổi theo hợp đồng. Khi có nhiều spec, mỗi spec có thêm một reviewer riêng chỉ thấy spec đó và các file của nó; tất cả chạy song song. Một tiêu chí chỉ đạt khi mọi reviewer phụ trách nó đều đánh giá là đạt.
-   - **Repair**: nếu còn lỗi, mặc định code sai. Mỗi spec bị ảnh hưởng có một implementer sửa riêng, chỉ thấy spec đó và các lỗi liên quan tới nó, và phải sửa code cho qua test. Tester chỉ được gọi lại khi một reviewer báo lỗi chặn vào chính file test của nó. Sau đó checker và các reviewer mới xem lại. Tối đa hai vòng.
+   - **Repair**: nếu còn lỗi, các lỗi được gom thành một report và mặc định code sai. Một fixer duy nhất nhận hợp đồng, report và bản đồ file, phải sửa code cho qua test và chỉ được sửa file nguồn. Tester chỉ được gọi lại khi một reviewer báo lỗi chặn vào chính file test của nó. Sau đó checker và các reviewer mới xem lại. Tối đa hai vòng.
 3. **Xác nhận và báo cáo** (phiên chat): tự chạy lại các lệnh kiểm tra, rồi báo cáo kết quả, từng tiêu chí kèm bằng chứng, và những gì còn mở.
 
 Code tự tính đạt hay không đạt: mọi lệnh kiểm tra thoát với mã 0, mọi tiêu chí được đánh giá là đạt, và không còn lỗi chặn. Không agent nào tự tuyên bố "đạt".
@@ -49,7 +50,8 @@ factory/
 │   ├── tester.md         người viết test cho từng spec
 │   ├── checker.md
 │   ├── reviewer.md       reviewer toàn bộ thay đổi
-│   └── spec-reviewer.md  reviewer cho từng spec
+│   ├── spec-reviewer.md  reviewer cho từng spec
+│   └── fixer.md          người sửa code theo report ở vòng sửa
 └── evals/                các bài test của skill
     └── adds-json-flag-to-cli/
 ```
@@ -86,8 +88,8 @@ Skill cũng tự kích hoạt khi bạn yêu cầu một "factory" hoặc một 
 - Script workflow không tự chạy được lệnh, nên kết quả kiểm tra trong lượt chạy do agent checker báo về. Phiên chat chạy lại các lệnh đó sau khi workflow xong để có bằng chứng trực tiếp.
 - Quy tắc "planner, checker và các reviewer không sửa gì" là chỉ dẫn trong prompt, không phải giới hạn công cụ được ép buộc. Code chỉ phát hiện được file bị sửa ngoài quyền sở hữu của các spec.
 - Implementer và tester của một spec làm việc trên cùng một thư mục, nên việc "không xem file của nhau" cũng là chỉ dẫn trong prompt. Code chỉ so danh sách file mỗi agent tự báo đã sửa với các file nó sở hữu.
-- Một lệnh kiểm tra thất bại không gán được cho spec nào, nên ở vòng sửa nó được gửi cho implementer của mọi spec.
-- Test là chuẩn nên một test sai mà lọt qua cả vòng tự soát lẫn reviewer sẽ khiến code đúng bị sửa theo nó. Implementer chỉ có thể ghi lại nghi ngờ để phiên chat báo cho bạn.
+- Mỗi vòng sửa chỉ có một fixer cho toàn bộ report. Với task lớn có nhiều lỗi cùng lúc, agent này có thể bị quá tải và sửa sót.
+- Test là chuẩn nên một test sai mà lọt qua cả vòng tự soát lẫn reviewer sẽ khiến code đúng bị sửa theo nó. Fixer chỉ có thể ghi lại nghi ngờ để phiên chat báo cho bạn.
 - Các implementer và tester chạy song song trên cùng một thư mục làm việc; an toàn là nhờ không file nào có hai chủ.
 - Trạng thái của một lượt chạy không được lưu để tiếp tục sau khi phiên kết thúc.
 - Một quy trình chung cho mọi loại việc (tính năng, sửa lỗi, refactor, test); chưa có chế độ riêng cho từng loại.

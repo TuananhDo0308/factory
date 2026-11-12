@@ -1,6 +1,6 @@
 ---
 name: factory
-description: Run a software task through a small team of agents that work together - a planner that writes specs, one implementer and one separate tester per spec, a checker and independent reviewers - orchestrated by a workflow script instead of by you. Use this whenever the user asks for a "factory", an agent team, or wants a coding task (feature, bug fix, refactor, tests) planned, built and independently reviewed by several agents rather than done in one pass, even if they do not say the word "factory".
+description: Run a software task through a small team of agents that work together - a planner that writes specs, one implementer and one separate tester per spec, a checker, independent reviewers and a fixer - orchestrated by a workflow script instead of by you. Use this whenever the user asks for a "factory", an agent team, or wants a coding task (feature, bug fix, refactor, tests) planned, built and independently reviewed by several agents rather than done in one pass, even if they do not say the word "factory".
 ---
 
 # Factory
@@ -20,8 +20,9 @@ You do not write the change, and you do not coordinate the agents by hand. Your 
 | Checker | Runs the contract's checks and lists the changed files. Changes nothing | [roles/checker.md](roles/checker.md) |
 | Reviewer | Judges the whole change against the contract, and how the parts fit together. Changes nothing | [roles/reviewer.md](roles/reviewer.md) |
 | Spec reviewer | Only when the work was split: reads one spec's files line by line. Changes nothing | [roles/spec-reviewer.md](roles/spec-reviewer.md) |
+| Fixer | Only when the change did not pass: repairs the code from the combined report of the checker and the reviewers. Never changes a test | [roles/fixer.md](roles/fixer.md) |
 
-A large task is split into several specs because an agent handed too much at once starts guessing and inventing details. Every spec is built, and if necessary repaired, by its own agent in its own session, which sees only that spec; no agent is ever handed several specs. The tests of a spec are written by a different agent from the one that writes its code, working at the same time from the same spec, so that the tests measure what was asked for and cannot be fitted to what was built. The tester then re-checks its own tests against the spec until a pass finds nothing to correct, and from there the tests are the standard: when a test fails, the code is presumed wrong. Review is split the same way: each spec has its own reviewer, and one more reviewer judges the whole change against the contract. No reviewer sees an implementer's explanation of its work, so each one judges the code with fresh eyes.
+A large task is split into several specs because an agent handed too much at once starts guessing and inventing details. Every spec is built by its own agent in its own session, which sees only that spec; no agent is ever handed several specs. The tests of a spec are written by a different agent from the one that writes its code, working at the same time from the same spec, so that the tests measure what was asked for and cannot be fitted to what was built. The tester then re-checks its own tests against the spec until a pass finds nothing to correct, and from there the tests are the standard: when a test fails, the code is presumed wrong. Review is split the same way: each spec has its own reviewer, and one more reviewer judges the whole change against the contract. No reviewer sees an implementer's explanation of its work, so each one judges the code with fresh eyes. Repair is the one place where a single agent works across the whole change: failures often sit where two parts meet, so one fixer gets the combined report and a map of the files, not the specs.
 
 ## 1. Write the contract
 
@@ -59,7 +60,8 @@ Call the Workflow tool with `scriptPath` set to the absolute path of `workflow/f
     "tester": "/absolute/path/to/this/skill/roles/tester.md",
     "checker": "/absolute/path/to/this/skill/roles/checker.md",
     "reviewer": "/absolute/path/to/this/skill/roles/reviewer.md",
-    "specReviewer": "/absolute/path/to/this/skill/roles/spec-reviewer.md"
+    "specReviewer": "/absolute/path/to/this/skill/roles/spec-reviewer.md",
+    "fixer": "/absolute/path/to/this/skill/roles/fixer.md"
   },
   "ignoreFiles": []
 }
@@ -73,13 +75,13 @@ The workflow runs in the background and you are notified when it finishes. Do no
 2. **Build**: for each spec, one implementer writes the code and one tester writes the tests, side by side; each owns its own files and neither is shown the other's part of the spec. After writing, the tester is started again in a fresh session to check its tests against the spec and correct them, until a pass changes nothing (at most two passes); this runs while the implementer is still building. A spec with no test files gets no tester, and a spec with only test files gets no implementer. Specs that do not depend on each other run in parallel; a dependent spec waits. An agent that reports changing a file it does not own stops the run.
 3. **Check**: the checker runs the contract's checks and lists the changed files. A change to a file no spec owns stops the run.
 4. **Review**: a fresh reviewer judges the whole change against the contract. When there are several specs, each spec also gets its own reviewer, which sees only that spec and its files; all of them run in parallel. A criterion passes only if every reviewer responsible for it says it is met.
-5. **Repair**: if a check failed, a criterion is not met, or there is a blocking finding, the code is presumed wrong. Each affected spec gets its own repair implementer, which sees only that spec and the failures that concern it, and must make the code satisfy the tests. A tester is called back only when a reviewer raised a blocking finding against one of its test files. Then a new checker and new reviewers look again. At most two rounds.
+5. **Repair**: if a check failed, a criterion is not met, or there is a blocking finding, the failures are gathered into one report and the code is presumed wrong. A single fixer gets the contract, the report and a map of the files, and must make the code satisfy the tests; it may change source files only. A tester is called back only when a reviewer raised a blocking finding against one of its test files. Then a new checker and new reviewers look again. At most two rounds.
 
 If the Workflow tool is not available in this session, tell the user that the factory cannot run here. Do not fall back to coordinating the agents by hand: the guarantees above exist only because code enforces them.
 
 ## 3. Read the result
 
-The workflow returns an object with `outcome`, `reason`, `specs`, `builds` (implementers), `tests` (testers; an entry with `selfCheck` is a self-check pass and lists the `problems` it corrected), `check`, `review`, `specReviews`, `failures` and `repairRounds`.
+The workflow returns an object with `outcome`, `reason`, `specs`, `builds` (implementers), `repairs` (the fixer, one entry per round, with the `fixes` it made), `tests` (testers; an entry with `selfCheck` is a self-check pass and lists the `problems` it corrected), `check`, `review`, `specReviews`, `failures` and `repairRounds`.
 
 - **`passed`**: every check exited with 0, every criterion was judged met, and no blocking finding remains.
 - **`failed`**: failures remain after the repair rounds. They are listed in `failures`.
@@ -96,7 +98,7 @@ Read `reason` and decide, with the user if the choice is theirs:
 - **Files were changed that no spec owns**: look at those files. If the change is needed, add the file to the spec that should own it and run again with `specs`. If it is not needed, ask the user before undoing anything.
 - **An agent returned no result**: run the workflow again.
 
-For a change small enough to describe in a sentence, you may write the single spec yourself, using the fields in [roles/planner.md](roles/planner.md), and pass it as `specs` to skip the planner. Put source files in `filesOwned` and test files in `testFiles`. The tester, the checker and the reviewer still run.
+For a change small enough to describe in a sentence, you may write the single spec yourself, using the fields in [roles/planner.md](roles/planner.md), and pass it as `specs` to skip the planner. Put source files in `filesOwned` and test files in `testFiles`. The tester, the checker, the reviewer and, if needed, the fixer still run.
 
 Never get to green by weakening the target: do not delete or loosen tests, drop a criterion, remove a check or raise the repair limit. If a criterion turns out to be wrong, that is a question for the user.
 
@@ -106,7 +108,7 @@ Finish with a short report to the user:
 
 - **Outcome**: passed, failed or blocked, in one line, with the reason if it did not pass.
 - **What changed**: the files and the behavior, and how the work was split into specs. Name any spec that ran without a tester, and why, and any spec whose tests were still being corrected in the last self-check pass.
-- **Disputed tests**: any test an implementer reported in `openIssues` as contradicting the spec. Tests win by default, so this is where a wrong test would show up; let the user decide.
+- **Disputed tests**: any test the fixer reported in `openIssues` as contradicting the contract. Tests win by default, so this is where a wrong test would show up; let the user decide.
 - **Criteria**: each `C1..Cn` with met / not met and the evidence.
 - **Checks**: each command and the real result from your own run, including any not run.
 - **Review**: findings left open from any reviewer, and anything a reviewer could not review.

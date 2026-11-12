@@ -1,13 +1,13 @@
 export const meta = {
   name: 'factory',
-  description: 'Run a coding contract through a planner, one implementer and one tester per spec, a checker and fresh reviewers, with bounded repair rounds',
+  description: 'Run a coding contract through a planner, one implementer and one tester per spec, a checker, fresh reviewers and a single fixer, with bounded repair rounds',
   whenToUse: 'Called by the factory skill after the contract is written. Not meant to be started without its args.',
   phases: [
     { title: 'Spec', detail: 'planner turns the contract into specs; code validates them' },
     { title: 'Build', detail: 'one implementer per spec, beside a tester that writes the tests and then re-checks them in fresh sessions' },
     { title: 'Check', detail: 'checker runs the contract checks and lists changed files' },
     { title: 'Review', detail: 'one reviewer for the whole change, plus one per spec when the work was split' },
-    { title: 'Repair', detail: 'the code is presumed wrong: implementers fix it, a tester only on a reviewer finding; then check and review again' },
+    { title: 'Repair', detail: 'one fixer repairs the code from the combined report, a tester only on a reviewer finding; then check and review again' },
   ],
 }
 
@@ -185,44 +185,47 @@ function evaluate(contract, check, review, specReviews) {
   return failures
 }
 
-// Splits the failures between the agents that have to fix them. Each spec has
-// up to two: its implementer (source files) and its tester (test files).
+// Every source file of the change: what the fixer may touch in a repair round.
+function sourceFiles(specs) {
+  const set = new Set()
+  for (const s of specs) for (const f of s.filesOwned || []) set.add(normPath(f))
+  return [...set]
+}
+
+// Splits the failures of one round into the combined report for the fixer and
+// the few that go back to a tester.
 //
 // The tests are the standard. They were written from the spec and re-checked
-// by the tester before the code was judged, so a failure that does not name a
-// file is presumed to be the code's fault and goes to the implementer alone.
-// A test is sent back to its tester only when a reviewer raised a finding
-// against that test file.
-//   - a finding goes to whoever owns the file it names; if nobody owns that
-//     file, to the implementer of the spec whose reviewer raised it;
-//   - an unmet criterion goes to the implementer of the spec whose reviewer
-//     judged it, or, when it came from the reviewer of the whole change, of
-//     every spec responsible for it;
-//   - a failed check, or anything else that cannot be pinned to one spec, goes
-//     to every implementer, and each decides whether its own files cause it.
-// A spec that owns only test files has no implementer, so its tester stands in.
-// Returns [{ spec, code, tests }] for the specs that have something to look at,
-// where `code` is for the implementer and `tests` is for the tester.
-function failuresBySpec(failures, specs) {
-  const groups = new Map(specs.map(s => [s.id, { code: [], tests: [] }]))
+// by the tester before the code was judged, so a failure is presumed to be the
+// code's fault and goes into the report. One fixer gets the whole report: a
+// failure often sits where two parts meet, and an agent that sees one spec
+// cannot repair both sides of it.
+//   - a finding against a test file goes to the tester that owns the file: a
+//     reviewer naming the test is the only thing that sends a test back;
+//   - every other failure goes into the report;
+//   - except that a spec with no source files has no code to fix, so a failure
+//     that belongs to such a spec goes to its tester.
+// Returns { code, tests }: `code` is the fixer's report, in the order the
+// failures were found; `tests` is [{ spec, failures }] for the testers.
+function splitFailures(failures, specs) {
+  const code = []
+  const bySpec = new Map(specs.map(s => [s.id, []]))
   const owns = (files, file) => (files || []).map(normPath).includes(file)
-  const raisedBy = f => specs.filter(s => s.id === f.spec)
   for (const f of failures) {
-    let placed = false
-    if (f.kind === 'finding') {
-      for (const s of specs) {
-        if (owns(s.filesOwned, f.file)) { groups.get(s.id).code.push(f); placed = true }
-        if (owns(s.testFiles, f.file)) { groups.get(s.id).tests.push(f); placed = true }
-      }
+    const testOwners = f.kind === 'finding' ? specs.filter(s => owns(s.testFiles, f.file)) : []
+    if (testOwners.length > 0) {
+      for (const s of testOwners) bySpec.get(s.id).push(f)
+      continue
     }
-    if (placed) continue
-    let targets = []
-    if (f.kind === 'finding') targets = raisedBy(f)
-    else if (f.kind === 'criterion') targets = f.spec ? raisedBy(f) : specs.filter(s => (s.criteria || []).includes(f.id))
-    if (targets.length === 0) targets = specs
-    for (const s of targets) (hasCode(s) ? groups.get(s.id).code : groups.get(s.id).tests).push(f)
+    let concerned = specs
+    if (f.kind === 'finding' && owns(sourceFiles(specs), f.file)) concerned = specs.filter(s => owns(s.filesOwned, f.file))
+    else if (f.spec) concerned = specs.filter(s => s.id === f.spec)
+    else if (f.kind === 'criterion') concerned = specs.filter(s => (s.criteria || []).includes(f.id))
+    if (concerned.length === 0) concerned = specs
+    if (concerned.some(hasCode)) code.push(f)
+    for (const s of concerned) if (!hasCode(s)) bySpec.get(s.id).push(f)
   }
-  return specs.map(s => ({ spec: s, ...groups.get(s.id) })).filter(g => g.code.length > 0 || g.tests.length > 0)
+  return { code, tests: specs.map(s => ({ spec: s, failures: bySpec.get(s.id) })).filter(g => g.failures.length > 0) }
 }
 
 // ---------------------------------------------------------------------------
@@ -390,6 +393,36 @@ const SELF_CHECK_SCHEMA = {
   required: ['status', 'blockedReason', 'problems', 'filesChanged', 'openIssues'],
 }
 
+const FIX_SCHEMA = {
+  type: 'object',
+  properties: {
+    status: { type: 'string', enum: ['done', 'blocked'] },
+    blockedReason: { type: 'string', description: 'Why the report could not be acted on; empty when done' },
+    filesChanged: STRINGS,
+    fixes: {
+      type: 'array',
+      items: {
+        type: 'object',
+        properties: {
+          failure: { type: 'string', description: 'The failure from the report, in a few words' },
+          action: { type: 'string', description: 'What was changed, or why nothing was' },
+        },
+        required: ['failure', 'action'],
+      },
+    },
+    checksRun: {
+      type: 'array',
+      items: {
+        type: 'object',
+        properties: { command: { type: 'string' }, result: { type: 'string' } },
+        required: ['command', 'result'],
+      },
+    },
+    openIssues: STRINGS,
+  },
+  required: ['status', 'blockedReason', 'filesChanged', 'fixes', 'checksRun', 'openIssues'],
+}
+
 const CHECK_SCHEMA = {
   type: 'object',
   properties: {
@@ -552,7 +585,7 @@ function runReview(contract, check, specs, round) {
         '',
         `The work was split into ${specs.length} parts, each built by a different implementer that could not see the others' code. Each part is also being reviewed line by line by its own reviewer, so spend your attention on the places where the parts meet and on whether the change as a whole satisfies the contract. The parts and the interfaces they were told to share:`,
         '',
-        specs.map(s => [`${s.id}: ${s.title}`, 'Source files:', bullets(s.filesOwned), 'Test files:', bullets(s.testFiles), `Interfaces: ${s.interfaces || 'none'}`].join('\n')).join('\n\n'),
+        partsText(specs),
       ].join('\n')
     : ''
   return agent(
@@ -592,27 +625,50 @@ function runSpecReview(spec, contract, check, round) {
   )
 }
 
-function repairSpec(spec, failures, contract, round) {
+// The parts of the change and who owns which file, without the specs themselves.
+function partsText(specs) {
+  return specs
+    .map(s => [`${s.id}: ${s.title}`, 'Source files:', bullets(s.filesOwned), 'Test files:', bullets(s.testFiles), `Interfaces: ${s.interfaces || 'none'}`].join('\n'))
+    .join('\n\n')
+}
+
+// The one fixer of a repair round. It gets the combined report and the map of
+// the change, not the specs, and may change source files only.
+function fixCode(report, testFailures, contract, specs, round) {
+  const beingCorrected =
+    testFailures.length > 0
+      ? [
+          '',
+          'These failures are in test files and are being corrected by their testers right now. Do not act on them; they are listed so that you do not bend the code to a test that is about to change:',
+          '',
+          JSON.stringify(testFailures, null, 2),
+        ]
+      : []
   return agent(
     [
-      header('implementer'),
+      header('fixer'),
       '',
-      `This is repair round ${round}. The spec below has already been built, and the combined change did not pass. These are the failures that may concern your spec:`,
+      `This is repair round ${round}. The change below was built, checked and reviewed, and did not pass. Fix the code so that it does.`,
       '',
-      JSON.stringify(failures, null, 2),
+      contractText(contract),
       '',
-      'Fix the ones caused by the files you own. Other parts of the work are being repaired by other agents at the same time, each in its own files. The tests were written from the spec and re-checked by a tester, so they are the standard: when a test fails, the code is presumed wrong, and your job is to make the code satisfy it. You may now read the test files to see what they expect, but not change them. If a failure is not caused by your files, change nothing for it, return `done`, and say so in `openIssues`. Do the same, with your reason, in the rare case where you are certain a test contradicts the spec.',
+      'The report: every failure the checker and the reviewers found that the code has to answer for.',
       '',
-      'Your spec:',
+      JSON.stringify(report, null, 2),
+      ...beingCorrected,
       '',
-      specText(spec, contract, 'implementer'),
+      'The parts of the change. You may change the source files listed here and nothing else. The test files are the standard the code is judged by: read them to see what they expect, but do not change them.',
+      '',
+      partsText(specs),
+      '',
+      `See the change so far with \`git diff ${args.base}\` and \`git status --short\` (new files are untracked).`,
     ].join('\n'),
-    { label: `repair ${round} ${spec.id}`, phase: 'Repair', schema: BUILD_SCHEMA },
+    { label: `fixer (round ${round})`, phase: 'Repair', schema: FIX_SCHEMA },
   )
 }
 
 // Only reached when a reviewer raised a finding against a test file, or for a
-// spec that has no implementer.
+// spec that has no source files.
 function repairTests(spec, failures, contract, round) {
   return agent(
     [
@@ -642,7 +698,7 @@ const maxRepairRounds = Number.isInteger(input.maxRepairRounds) ? input.maxRepai
 const maxSpecRevisions = Number.isInteger(input.maxSpecRevisions) ? input.maxSpecRevisions : 2
 const maxTestChecks = Number.isInteger(input.maxTestChecks) ? input.maxTestChecks : 2
 
-const state = { outcome: 'blocked', reason: '', overview: '', risks: [], specs: [], builds: [], tests: [], check: null, review: null, specReviews: [], failures: [], repairRounds: 0 }
+const state = { outcome: 'blocked', reason: '', overview: '', risks: [], specs: [], builds: [], tests: [], repairs: [], check: null, review: null, specReviews: [], failures: [], repairRounds: 0 }
 
 function stop(outcome, reason) {
   state.outcome = outcome
@@ -653,15 +709,18 @@ function stop(outcome, reason) {
 
 // Records what one build or repair agent returned. Returns the reason the run
 // has to stop because of it, or '' if the agent did its job inside its own files.
-// `tag` marks a later session on the same spec: { repairRound } or { selfCheck }.
+// A job is { role, spec, allowed }: `allowed` is the list of files it may change,
+// and `spec` is absent for the fixer, which works across the whole change.
+// `tag` marks a later session: { repairRound } or { selfCheck }.
 function settle(job, result, tag) {
   const r = result || { status: 'blocked', blockedReason: `The ${job.role} did not return a result.`, filesChanged: [], openIssues: [] }
-  const entry = { spec: job.spec.id, ...tag, ...r }
+  const entry = { ...(job.spec ? { spec: job.spec.id } : {}), ...tag, ...r }
   if (job.role === 'tester') state.tests.push(entry)
+  else if (job.role === 'fixer') state.repairs.push(entry)
   else state.builds.push(entry)
-  const who = `${job.spec.id} ${job.role}`
+  const who = job.spec ? `${job.spec.id} ${job.role}` : job.role
   if (r.status !== 'done') return `${who}: ${r.blockedReason || 'no reason given'}`
-  const outside = filesOutsideAssignment(r.filesChanged, job.role === 'tester' ? job.spec.testFiles : job.spec.filesOwned)
+  const outside = filesOutsideAssignment(r.filesChanged, job.allowed)
   if (outside.length > 0) return `${who}: changed files it does not own (${outside.join(', ')})`
   return ''
 }
@@ -669,7 +728,7 @@ function settle(job, result, tag) {
 const missing = []
 if (isBlank(input.repo)) missing.push('repo')
 if (isBlank(input.base)) missing.push('base')
-for (const role of ['planner', 'implementer', 'tester', 'checker', 'reviewer', 'specReviewer']) {
+for (const role of ['planner', 'implementer', 'tester', 'checker', 'reviewer', 'specReviewer', 'fixer']) {
   if (!input.roles || isBlank(input.roles[role])) missing.push(`roles.${role}`)
 }
 if (!contract || isBlank(contract.objective)) missing.push('contract.objective')
@@ -719,8 +778,8 @@ for (const level of levels) {
   // implementer is still building. Barrier on purpose: the next level depends
   // on everything in this one.
   const jobs = level.flatMap(spec => [
-    ...(hasCode(spec) ? [{ spec, role: 'implementer' }] : []),
-    ...(hasTests(spec) ? [{ spec, role: 'tester' }] : []),
+    ...(hasCode(spec) ? [{ spec, role: 'implementer', allowed: spec.filesOwned }] : []),
+    ...(hasTests(spec) ? [{ spec, role: 'tester', allowed: spec.testFiles }] : []),
   ])
   const results = await parallel(
     jobs.map(j => () => (j.role === 'tester' ? testSpec(j.spec, contract, maxTestChecks) : buildSpec(j.spec, contract).then(result => [{ result, tag: {} }]))),
@@ -762,16 +821,18 @@ while (true) {
 
   round++
   state.repairRounds = round
-  // Each affected spec is repaired by its own implementer, and by its own
-  // tester when a reviewer faulted a test file; each sees only that spec and
-  // the failures that concern its files. All of them own disjoint files, so
-  // they can run at the same time.
-  const jobs = failuresBySpec(state.failures, specs).flatMap(g => [
-    ...(g.code.length > 0 ? [{ spec: g.spec, role: 'implementer', failures: g.code }] : []),
-    ...(g.tests.length > 0 ? [{ spec: g.spec, role: 'tester', failures: g.tests }] : []),
-  ])
-  log(`${state.failures.length} failure(s); repair round ${round}/${maxRepairRounds} for ${jobs.map(j => `${j.spec.id} ${j.role}`).join(', ')}.`)
-  const fixes = await parallel(jobs.map(j => () => (j.role === 'tester' ? repairTests(j.spec, j.failures, contract, round) : repairSpec(j.spec, j.failures, contract, round))))
+  // One fixer takes the combined report and repairs the code. A tester is
+  // called back only for its own test files. They own disjoint files, so they
+  // can run at the same time.
+  const split = splitFailures(state.failures, specs)
+  const jobs = [
+    ...(split.code.length > 0 ? [{ role: 'fixer', allowed: sourceFiles(specs), failures: split.code }] : []),
+    ...split.tests.map(g => ({ spec: g.spec, role: 'tester', allowed: g.spec.testFiles, failures: g.failures })),
+  ]
+  log(`${state.failures.length} failure(s); repair round ${round}/${maxRepairRounds}: ${jobs.map(j => (j.spec ? `${j.spec.id} tester` : 'fixer')).join(', ')}.`)
+  const fixes = await parallel(
+    jobs.map(j => () => (j.role === 'tester' ? repairTests(j.spec, j.failures, contract, round) : fixCode(j.failures, split.tests.flatMap(g => g.failures), contract, specs, round))),
+  )
   const stuck = jobs.map((j, i) => settle(j, fixes[i], { repairRound: round })).filter(Boolean)
   if (stuck.length > 0) return stop('failed', `Repair round ${round} could not be carried out. ${stuck.join(' | ')}`)
 }
