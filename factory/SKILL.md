@@ -1,90 +1,114 @@
 ---
 name: factory
-description: Run a software task through a small team of agents that work together - a planner, one or more implementers and an independent reviewer - coordinated by you. Use this whenever the user asks for a "factory", an agent team, or wants a coding task (feature, bug fix, refactor, tests) planned, built and independently reviewed by several agents rather than done in one pass, even if they do not say the word "factory".
+description: Run a software task through a small team of agents that work together - a planner that writes specs, one implementer and one separate tester per spec, a checker and independent reviewers - orchestrated by a workflow script instead of by you. Use this whenever the user asks for a "factory", an agent team, or wants a coding task (feature, bug fix, refactor, tests) planned, built and independently reviewed by several agents rather than done in one pass, even if they do not say the word "factory".
 ---
 
 # Factory
 
-You are the coordinator of a small team. You do not write the change yourself: you turn the request into a clear contract, hand each piece of work to the right agent, check what comes back, and report honestly to the user.
+A factory run has three parts. You write the contract with the user. A workflow script then runs the team: it is code, so the order of steps, what each agent is allowed to see, and the number of repair rounds are fixed and cannot drift. Finally you confirm the result yourself and report.
 
-The point of using a team is that each agent sees the task with fresh eyes. A planner that has not started coding plans more carefully; a reviewer that has not seen the implementer's reasoning judges the code and not the story told about it. Protect that separation, because it is the only thing the team gives you that a single agent does not.
+You do not write the change, and you do not coordinate the agents by hand. Your judgment goes into the two places code cannot cover: understanding what the user wants, and telling them honestly what came out.
 
 ## The team
 
 | Role | Does | Brief |
 |---|---|---|
-| Coordinator (you) | Writes the contract, delegates, runs the checks, decides, reports | this file |
-| Planner | Reads the code and returns one or more specs. Changes nothing | [roles/planner.md](roles/planner.md) |
-| Implementer | Builds one spec, in the files that spec owns | [roles/implementer.md](roles/implementer.md) |
-| Reviewer | Judges the finished change against the contract. Changes nothing | [roles/reviewer.md](roles/reviewer.md) |
+| You | Write the contract, start the workflow, confirm the result, report | this file |
+| Planner | Turns the contract into one or more specs. Changes nothing | [roles/planner.md](roles/planner.md) |
+| Implementer | Builds one spec, in the source files that spec owns. Writes no tests | [roles/implementer.md](roles/implementer.md) |
+| Tester | Writes the tests for one spec, in the test files that spec owns, without seeing the implementer's code | [roles/tester.md](roles/tester.md) |
+| Checker | Runs the contract's checks and lists the changed files. Changes nothing | [roles/checker.md](roles/checker.md) |
+| Reviewer | Judges the whole change against the contract, and how the parts fit together. Changes nothing | [roles/reviewer.md](roles/reviewer.md) |
+| Spec reviewer | Only when the work was split: reads one spec's files line by line. Changes nothing | [roles/spec-reviewer.md](roles/spec-reviewer.md) |
 
-Start each agent with the Agent tool, `subagent_type: "general-purpose"`. Never use `"fork"`: a fork inherits your whole conversation, so it is not a fresh pair of eyes.
+A large task is split into several specs because an agent handed too much at once starts guessing and inventing details. Every spec is built, and if necessary repaired, by its own agent in its own session, which sees only that spec; no agent is ever handed several specs. The tests of a spec are written by a different agent from the one that writes its code, working at the same time from the same spec, so that the tests measure what was asked for and cannot be fitted to what was built. Review is split the same way: each spec has its own reviewer, and one more reviewer judges the whole change against the contract. No reviewer sees an implementer's explanation of its work, so each one judges the code with fresh eyes.
 
-An agent knows only what you put in its prompt. Every assignment contains:
+## 1. Write the contract
 
-1. The line `Read your role brief first: <absolute path to the role file>`, resolved from this skill's directory.
-2. The repository path, and what this agent specifically must do.
-3. For a planner or reviewer: the contract (see step 1), copied in full. For a reviewer also how to see the change (for example `git diff <base>`) and the check results you observed.
-4. For an implementer: its one spec, copied in full and unedited, and nothing from the other specs.
-
-Do not pass an agent another agent's explanation of its own work. Pass the artifacts: the spec, the diff, the command output.
-
-## The loop
-
-### 1. Contract
-
-Read enough of the repository to understand the request, then write a short contract:
+Read enough of the repository to understand the request, then write:
 
 - **Objective**: one or two sentences.
 - **Acceptance criteria**: numbered `C1..Cn`, each something an outsider could check.
 - **Out of scope**: what this task will not touch.
-- **Checks**: the project's real test/build/lint commands, found in its own files. If there are none, say so; do not invent one.
+- **Checks**: the project's real test, build or lint commands, found in its own files, each runnable from the repository root. If there are none, use an empty list and say so in the report; do not invent one.
 
-Ask the user only what you cannot find out from the code and what would change the outcome. Note the starting commit (`git rev-parse HEAD`) so the change can be diffed later, and leave any uncommitted work of the user's alone.
+Ask the user only what you cannot find out from the code and what would change the outcome. Every agent downstream works from this text alone, so a vague criterion here becomes a guess everywhere else.
 
-### 2. Spec
+Then record the starting point:
 
-Send the contract to a planner. It returns one or more specs: self-contained work orders, each sized for a single implementer. A small task comes back as one spec. A large one is split into several, because an agent handed too much at once starts guessing and inventing details; smaller specs keep each implementer on ground it can actually check.
+- `git rev-parse HEAD` for the base commit. The workflow needs a Git repository with at least one commit; if there is none, tell the user instead of creating one.
+- `git status --short` for files that were already modified or untracked. These are the user's work in progress: list them as `ignoreFiles` so the run does not mistake them for its own changes, and leave them alone.
 
-Read the specs critically before building. Send them back to the planner, naming the specific gap, if:
+## 2. Run the workflow
 
-- a criterion is not covered by any spec, or a spec reaches outside the contract's scope;
-- a file is owned by two specs;
-- two specs share an interface that is not spelled out exactly in both;
-- a spec is still too large to state its "done when" in a few lines, or the task was split into more pieces than it needs.
+Call the Workflow tool with `scriptPath` set to the absolute path of `workflow/factory.js` in this skill's directory, and these `args` (as a JSON object, not a string):
 
-Then go straight on to building. Do not stop to ask the user to approve the specs unless they asked for that.
+```json
+{
+  "repo": "/absolute/path/to/repository",
+  "base": "<commit from git rev-parse HEAD>",
+  "contract": {
+    "objective": "...",
+    "criteria": [{ "id": "C1", "text": "..." }, { "id": "C2", "text": "..." }],
+    "outOfScope": ["..."],
+    "checks": [{ "name": "test", "command": "python3 -m pytest -q" }]
+  },
+  "roles": {
+    "planner": "/absolute/path/to/this/skill/roles/planner.md",
+    "implementer": "/absolute/path/to/this/skill/roles/implementer.md",
+    "tester": "/absolute/path/to/this/skill/roles/tester.md",
+    "checker": "/absolute/path/to/this/skill/roles/checker.md",
+    "reviewer": "/absolute/path/to/this/skill/roles/reviewer.md",
+    "specReviewer": "/absolute/path/to/this/skill/roles/spec-reviewer.md"
+  },
+  "ignoreFiles": []
+}
+```
 
-For a change small enough to describe in a sentence, write the single spec yourself, in the planner's format, and skip the planner. Never skip the reviewer.
+Optional args: `maxRepairRounds` (default 2), `maxSpecRevisions` (default 2), and `specs` (see "When the run is blocked").
 
-### 3. Build
+The workflow runs in the background and you are notified when it finishes. Do not start the agents yourself while it runs, and do not predict its result. It does this:
 
-Start one implementer per spec and give each only its own spec. Specs that do not depend on each other go out in the same message so they run in parallel. A spec that depends on another waits until that one has finished.
+1. **Spec**: the planner returns specs. Code rejects them, and sends them back with the reasons, if a criterion is uncovered, a file has two owners, or the dependencies cannot be ordered.
+2. **Build**: for each spec, one implementer writes the code and one tester writes the tests, side by side; each owns its own files and neither is shown the other's part of the spec. A spec with no test files gets no tester, and a spec with only test files gets no implementer. Specs that do not depend on each other run in parallel; a dependent spec waits. An agent that reports changing a file it does not own stops the run.
+3. **Check**: the checker runs the contract's checks and lists the changed files. A change to a file no spec owns stops the run.
+4. **Review**: a fresh reviewer judges the whole change against the contract. When there are several specs, each spec also gets its own reviewer, which sees only that spec and its files; all of them run in parallel. A criterion passes only if every reviewer responsible for it says it is met.
+5. **Repair**: if a check failed, a criterion is not met, or there is a blocking finding, each affected spec is repaired by its own implementer and its own tester, each seeing only that spec and the failures that concern its files; a tester may fix a test that contradicts the spec but never one that the code simply fails. Then a new checker and new reviewers look again. At most two rounds.
 
-Read each implementer's return when it arrives. If one reports that its spec was wrong, unclear or needed a file it does not own, resolve that before continuing: correct the spec yourself for a small gap, or go back to the planner if the split itself was wrong. Do not let an implementer quietly work around its spec, because the other implementers are relying on the same text.
+If the Workflow tool is not available in this session, tell the user that the factory cannot run here. Do not fall back to coordinating the agents by hand: the guarantees above exist only because code enforces them.
 
-### 4. Check
+## 3. Read the result
 
-When all implementers are done, run the contract's checks yourself on the combined result and read the output. Pieces that each pass alone can still fail together, so the whole is what counts. An agent saying "tests pass" is a claim; the command output is the evidence. A check you could not run is reported as not run, never as passed.
+The workflow returns an object with `outcome`, `reason`, `specs`, `builds` (implementers), `tests` (testers), `check`, `review`, `specReviews`, `failures` and `repairRounds`.
 
-### 5. Review
+- **`passed`**: every check exited with 0, every criterion was judged met, and no blocking finding remains.
+- **`failed`**: failures remain after the repair rounds. They are listed in `failures`.
+- **`blocked`**: the run stopped because it needed a decision that code cannot make. `reason` says what.
 
-Send a new reviewer the contract, the way to see the diff, and the check output you observed. It reviews the whole change against the contract, not spec by spec, and returns a verdict per criterion and a list of findings.
+Whatever the outcome, confirm it yourself before reporting. Run each of the contract's checks from the repository root and read the output, and look at `git status --short` and `git diff --stat <base>`. The checker's results came from an agent; what you run now is the evidence you report. If your run disagrees with the workflow's result, report the disagreement and treat the task as not passing.
 
-### 6. Repair or finish
+## When the run is blocked
 
-If a check fails or the reviewer reports a blocking finding, send the specific failures, together with the spec that owns the affected files, to an implementer, then repeat steps 4 and 5 with a **new** reviewer, since the previous one is no longer fresh. Allow at most two repair rounds. If the work is still not passing after that, stop and tell the user what remains; more rounds rarely fix what two did not, and the user would rather know.
+Read `reason` and decide, with the user if the choice is theirs:
 
-Never get to green by weakening the target: do not delete or loosen tests, drop a criterion, or skip a check. If a criterion turns out to be wrong, that is a question for the user.
+- **The specs could not be made valid, or an implementer reported its spec was wrong or needed a file it does not own**: correct the specs. Take `specs` from the result, fix the problem, and run the workflow again with the corrected list as the `specs` arg; the planner is then skipped. Work already done stays in the repository, so say in the affected spec what is already in place.
+- **An agent changed files it does not own** (an implementer touched a test file, or a tester the code): the separation between code and tests was broken for that spec. Show the user the file and ask whether to keep the change or undo it; do not undo it yourself.
+- **Files were changed that no spec owns**: look at those files. If the change is needed, add the file to the spec that should own it and run again with `specs`. If it is not needed, ask the user before undoing anything.
+- **An agent returned no result**: run the workflow again.
+
+For a change small enough to describe in a sentence, you may write the single spec yourself, using the fields in [roles/planner.md](roles/planner.md), and pass it as `specs` to skip the planner. Put source files in `filesOwned` and test files in `testFiles`. The tester, the checker and the reviewer still run.
+
+Never get to green by weakening the target: do not delete or loosen tests, drop a criterion, remove a check or raise the repair limit. If a criterion turns out to be wrong, that is a question for the user.
 
 ## Report
 
 Finish with a short report to the user:
 
-- **Outcome**: done, done with open issues, or stopped, in one line.
-- **What changed**: the files and the behavior.
+- **Outcome**: passed, failed or blocked, in one line, with the reason if it did not pass.
+- **What changed**: the files and the behavior, and how the work was split into specs. Name any spec that ran without a tester, and why.
 - **Criteria**: each `C1..Cn` with met / not met and the evidence.
-- **Checks**: each command and its real result, including any not run.
-- **Review**: the reviewer's verdict and any findings left open.
+- **Checks**: each command and the real result from your own run, including any not run.
+- **Review**: findings left open from any reviewer, and anything a reviewer could not review.
+- **Repairs**: how many rounds were needed and what they fixed.
 
 Do not commit, push or open a pull request unless the user asked for it.
