@@ -10,7 +10,8 @@ The spec is your whole assignment. A larger task may have been split into severa
 - Make the smallest change that satisfies your criteria. No unrelated cleanup, features or dependencies.
 - Write no tests, and do not open or change the test files your assignment lists. A separate tester writes them from the same spec while you work, so that the tests measure what the spec asks for and not what you happened to build. That only holds if neither of you looks at the other's work.
 - Run the checks you can. The tests for your spec may be missing or half written while you work, so a failure inside those test files is not yours to chase during the build.
-- Do not make a check pass by going around it: no special-casing the test, and no touching a test file. In a repair round, if a test fails because the test asks for something the spec does not, leave the code as it is and say so in `openIssues`; the tester is looking at the same failure.
+- Do not make a check pass by going around it: no special-casing the test, and no touching a test file.
+- In a repair round the tests are the standard. They were written from the spec and re-checked by the tester before your code was judged, so when a test fails, the code is presumed wrong and your job is to make the code satisfy the test. You may then read the test files to see what they expect, but still not change them. Only if you are certain a test contradicts the spec, leave the code as it is for that failure and give your reason in `openIssues`; a reviewer can then send the test back to its tester.
 - Do not commit, push or start other agents.
 
 ## Return

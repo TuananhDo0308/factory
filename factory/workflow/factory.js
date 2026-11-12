@@ -4,10 +4,10 @@ export const meta = {
   whenToUse: 'Called by the factory skill after the contract is written. Not meant to be started without its args.',
   phases: [
     { title: 'Spec', detail: 'planner turns the contract into specs; code validates them' },
-    { title: 'Build', detail: 'one implementer and one tester per spec, side by side, in dependency order' },
+    { title: 'Build', detail: 'one implementer per spec, beside a tester that writes the tests and then re-checks them in fresh sessions' },
     { title: 'Check', detail: 'checker runs the contract checks and lists changed files' },
     { title: 'Review', detail: 'one reviewer for the whole change, plus one per spec when the work was split' },
-    { title: 'Repair', detail: 'the implementer and tester of each affected spec, then check and review again' },
+    { title: 'Repair', detail: 'the code is presumed wrong: implementers fix it, a tester only on a reviewer finding; then check and review again' },
   ],
 }
 
@@ -187,13 +187,20 @@ function evaluate(contract, check, review, specReviews) {
 
 // Splits the failures between the agents that have to fix them. Each spec has
 // up to two: its implementer (source files) and its tester (test files).
+//
+// The tests are the standard. They were written from the spec and re-checked
+// by the tester before the code was judged, so a failure that does not name a
+// file is presumed to be the code's fault and goes to the implementer alone.
+// A test is sent back to its tester only when a reviewer raised a finding
+// against that test file.
 //   - a finding goes to whoever owns the file it names; if nobody owns that
-//     file, to both agents of the spec whose reviewer raised it;
-//   - an unmet criterion goes to both agents of the spec whose reviewer judged
-//     it, or, when it came from the reviewer of the whole change, of every spec
-//     responsible for it: the code may be wrong, or the test may be missing;
+//     file, to the implementer of the spec whose reviewer raised it;
+//   - an unmet criterion goes to the implementer of the spec whose reviewer
+//     judged it, or, when it came from the reviewer of the whole change, of
+//     every spec responsible for it;
 //   - a failed check, or anything else that cannot be pinned to one spec, goes
-//     to every agent, and each decides whether its own files cause it.
+//     to every implementer, and each decides whether its own files cause it.
+// A spec that owns only test files has no implementer, so its tester stands in.
 // Returns [{ spec, code, tests }] for the specs that have something to look at,
 // where `code` is for the implementer and `tests` is for the tester.
 function failuresBySpec(failures, specs) {
@@ -213,14 +220,9 @@ function failuresBySpec(failures, specs) {
     if (f.kind === 'finding') targets = raisedBy(f)
     else if (f.kind === 'criterion') targets = f.spec ? raisedBy(f) : specs.filter(s => (s.criteria || []).includes(f.id))
     if (targets.length === 0) targets = specs
-    for (const s of targets) {
-      groups.get(s.id).code.push(f)
-      groups.get(s.id).tests.push(f)
-    }
+    for (const s of targets) (hasCode(s) ? groups.get(s.id).code : groups.get(s.id).tests).push(f)
   }
-  return specs
-    .map(s => ({ spec: s, code: hasCode(s) ? groups.get(s.id).code : [], tests: hasTests(s) ? groups.get(s.id).tests : [] }))
-    .filter(g => g.code.length > 0 || g.tests.length > 0)
+  return specs.map(s => ({ spec: s, ...groups.get(s.id) })).filter(g => g.code.length > 0 || g.tests.length > 0)
 }
 
 // ---------------------------------------------------------------------------
@@ -376,6 +378,18 @@ const TEST_SCHEMA = {
   required: ['status', 'blockedReason', 'filesChanged', 'coverage', 'openIssues'],
 }
 
+const SELF_CHECK_SCHEMA = {
+  type: 'object',
+  properties: {
+    status: { type: 'string', enum: ['done', 'blocked'] },
+    blockedReason: { type: 'string', description: 'Why the tests could not be checked or corrected; empty when done' },
+    problems: { ...STRINGS, description: 'Each fault found in the tests and how it was corrected; empty if none' },
+    filesChanged: { ...STRINGS, description: 'Every test file changed in this pass; empty means the tests were left exactly as found' },
+    openIssues: STRINGS,
+  },
+  required: ['status', 'blockedReason', 'problems', 'filesChanged', 'openIssues'],
+}
+
 const CHECK_SCHEMA = {
   type: 'object',
   properties: {
@@ -483,6 +497,37 @@ function writeTests(spec, contract) {
   )
 }
 
+// A later session of the same tester, with fresh context: it reads the tests as
+// an outsider would, against the spec, and corrects what is wrong.
+function selfCheckTests(spec, contract, pass) {
+  return agent(
+    [
+      header('tester'),
+      '',
+      `This is self-check pass ${pass} on the tests of the spec below. They were written in an earlier session of your role; you are seeing them for the first time. Check every test in the files you own against the spec, correct what is wrong, and report what you found. Change a file only to correct a fault: a pass that changes nothing is what confirms the tests, and they are then treated as the standard the code is judged by.`,
+      '',
+      specText(spec, contract, 'tester'),
+    ].join('\n'),
+    { label: `self-check ${pass} ${spec.id}`, phase: 'Build', schema: SELF_CHECK_SCHEMA },
+  )
+}
+
+// The tester's whole turn on one spec: write the tests, then re-check them in
+// fresh sessions until a pass leaves them untouched, at most `maxPasses` times.
+// Returns [{ result, tag }] in the order the sessions ran.
+async function testSpec(spec, contract, maxPasses) {
+  const written = await writeTests(spec, contract)
+  const runs = [{ result: written, tag: {} }]
+  if (!written || written.status !== 'done') return runs
+  for (let pass = 1; pass <= maxPasses; pass++) {
+    const result = await selfCheckTests(spec, contract, pass)
+    runs.push({ result, tag: { selfCheck: pass } })
+    if (!result || result.status !== 'done' || (result.filesChanged || []).length === 0) return runs
+  }
+  if (maxPasses > 0) log(`${spec.id}: the tests were still being corrected in self-check pass ${maxPasses}, the last one allowed; that correction was not re-checked.`)
+  return runs
+}
+
 function runChecks(contract, round) {
   return agent(
     [
@@ -556,7 +601,7 @@ function repairSpec(spec, failures, contract, round) {
       '',
       JSON.stringify(failures, null, 2),
       '',
-      'Fix the ones caused by the files you own. Other parts of the work are being repaired by other agents at the same time, each in its own files; the test files belong to a tester. If a failure is not caused by your files, or a test fails because the test asks for something the spec does not, change nothing for it, return `done`, and say so in `openIssues`.',
+      'Fix the ones caused by the files you own. Other parts of the work are being repaired by other agents at the same time, each in its own files. The tests were written from the spec and re-checked by a tester, so they are the standard: when a test fails, the code is presumed wrong, and your job is to make the code satisfy it. You may now read the test files to see what they expect, but not change them. If a failure is not caused by your files, change nothing for it, return `done`, and say so in `openIssues`. Do the same, with your reason, in the rare case where you are certain a test contradicts the spec.',
       '',
       'Your spec:',
       '',
@@ -566,16 +611,18 @@ function repairSpec(spec, failures, contract, round) {
   )
 }
 
+// Only reached when a reviewer raised a finding against a test file, or for a
+// spec that has no implementer.
 function repairTests(spec, failures, contract, round) {
   return agent(
     [
       header('tester'),
       '',
-      `This is repair round ${round}. The tests for the spec below have already been written and the code has been built, and the combined change did not pass. These are the failures that may concern your tests:`,
+      `This is repair round ${round}. The tests for the spec below have been written and the code built, and the combined change did not pass. These failures were traced to the test files you own:`,
       '',
       JSON.stringify(failures, null, 2),
       '',
-      'Fix the ones caused by the test files you own: a test that asks for something the spec does not require, that calls the code differently from the interfaces in the spec, or that is broken in itself; or a criterion that still has no test that would fail without the change. The code is being repaired by an implementer at the same time. If a failing test is right according to the spec, the code is what is wrong: change nothing for it, return `done`, and say so in `openIssues`. Never change a test to match what the code does.',
+      'Judge each one against the spec and correct the tests where the failure is right: a test that asks for something the spec does not require, that calls the code differently from the interfaces in the spec, that is broken in itself, or a criterion with no test that would fail without the change. If a test is right according to the spec, leave it exactly as it is, return `done`, and say so in `openIssues`. Never change a test to match what the code does.',
       '',
       'Your spec:',
       '',
@@ -593,6 +640,7 @@ const input = args || {}
 const contract = input.contract
 const maxRepairRounds = Number.isInteger(input.maxRepairRounds) ? input.maxRepairRounds : 2
 const maxSpecRevisions = Number.isInteger(input.maxSpecRevisions) ? input.maxSpecRevisions : 2
+const maxTestChecks = Number.isInteger(input.maxTestChecks) ? input.maxTestChecks : 2
 
 const state = { outcome: 'blocked', reason: '', overview: '', risks: [], specs: [], builds: [], tests: [], check: null, review: null, specReviews: [], failures: [], repairRounds: 0 }
 
@@ -605,9 +653,10 @@ function stop(outcome, reason) {
 
 // Records what one build or repair agent returned. Returns the reason the run
 // has to stop because of it, or '' if the agent did its job inside its own files.
-function settle(job, result, round) {
+// `tag` marks a later session on the same spec: { repairRound } or { selfCheck }.
+function settle(job, result, tag) {
   const r = result || { status: 'blocked', blockedReason: `The ${job.role} did not return a result.`, filesChanged: [], openIssues: [] }
-  const entry = round > 0 ? { spec: job.spec.id, repairRound: round, ...r } : { spec: job.spec.id, ...r }
+  const entry = { spec: job.spec.id, ...tag, ...r }
   if (job.role === 'tester') state.tests.push(entry)
   else state.builds.push(entry)
   const who = `${job.spec.id} ${job.role}`
@@ -666,14 +715,17 @@ if (untested.length > 0) log(`No tester for ${untested.join(', ')}: the spec nam
 phase('Build')
 for (const level of levels) {
   // The implementer and the tester of a spec start together, so neither works
-  // from the other's output. Barrier on purpose: the next level depends on
-  // everything in this one.
+  // from the other's output; the tester's self-check passes run while the
+  // implementer is still building. Barrier on purpose: the next level depends
+  // on everything in this one.
   const jobs = level.flatMap(spec => [
     ...(hasCode(spec) ? [{ spec, role: 'implementer' }] : []),
     ...(hasTests(spec) ? [{ spec, role: 'tester' }] : []),
   ])
-  const results = await parallel(jobs.map(j => () => (j.role === 'tester' ? writeTests(j.spec, contract) : buildSpec(j.spec, contract))))
-  const blocked = jobs.map((j, i) => settle(j, results[i], 0)).filter(Boolean)
+  const results = await parallel(
+    jobs.map(j => () => (j.role === 'tester' ? testSpec(j.spec, contract, maxTestChecks) : buildSpec(j.spec, contract).then(result => [{ result, tag: {} }]))),
+  )
+  const blocked = jobs.flatMap((j, i) => (results[i] || [{ result: null, tag: {} }]).map(run => settle(j, run.result, run.tag))).filter(Boolean)
   if (blocked.length > 0) return stop('blocked', `The build could not be completed. ${blocked.join(' | ')}`)
 }
 
@@ -710,15 +762,16 @@ while (true) {
 
   round++
   state.repairRounds = round
-  // Each affected spec is repaired by its own implementer and its own tester,
-  // each with only that spec and the failures that concern its files. All of
-  // them own disjoint files, so they can run at the same time.
+  // Each affected spec is repaired by its own implementer, and by its own
+  // tester when a reviewer faulted a test file; each sees only that spec and
+  // the failures that concern its files. All of them own disjoint files, so
+  // they can run at the same time.
   const jobs = failuresBySpec(state.failures, specs).flatMap(g => [
     ...(g.code.length > 0 ? [{ spec: g.spec, role: 'implementer', failures: g.code }] : []),
     ...(g.tests.length > 0 ? [{ spec: g.spec, role: 'tester', failures: g.tests }] : []),
   ])
   log(`${state.failures.length} failure(s); repair round ${round}/${maxRepairRounds} for ${jobs.map(j => `${j.spec.id} ${j.role}`).join(', ')}.`)
   const fixes = await parallel(jobs.map(j => () => (j.role === 'tester' ? repairTests(j.spec, j.failures, contract, round) : repairSpec(j.spec, j.failures, contract, round))))
-  const stuck = jobs.map((j, i) => settle(j, fixes[i], round)).filter(Boolean)
+  const stuck = jobs.map((j, i) => settle(j, fixes[i], { repairRound: round })).filter(Boolean)
   if (stuck.length > 0) return stop('failed', `Repair round ${round} could not be carried out. ${stuck.join(' | ')}`)
 }
