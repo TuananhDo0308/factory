@@ -39,6 +39,7 @@ Then record the starting point:
 
 - `git rev-parse HEAD` for the base commit. The workflow needs a Git repository with at least one commit; if there is none, tell the user instead of creating one.
 - `git status --short` for files that were already modified or untracked. These are the user's work in progress: list them as `ignoreFiles` so the run does not mistake them for its own changes, and leave them alone.
+- What running the checks leaves behind that the project's `.gitignore` does not cover (build output, coverage reports, logs). The agents run the checks too, so such files appear during the run and would stop it as changes that no spec owns. Add them to `ignoreFiles`. An entry is an exact path, a directory (everything beneath it), `*.ext`, or `**/name` for a name at any depth. Common caches (`__pycache__`, `*.pyc`, `.pytest_cache`, `.mypy_cache`, `.ruff_cache`, `.DS_Store`) are already ignored by the script.
 
 ## 2. Run the workflow
 
@@ -63,9 +64,16 @@ Call the Workflow tool with `scriptPath` set to the absolute path of `workflow/f
     "specReviewer": "/absolute/path/to/this/skill/roles/spec-reviewer.md",
     "fixer": "/absolute/path/to/this/skill/roles/fixer.md"
   },
-  "ignoreFiles": []
+  "ignoreFiles": [],
+  "dashboard": {
+    "file": "/absolute/path/to/this/skill/dashboard/live.js",
+    "id": "2026-01-31-json-flag",
+    "title": "Add a --json flag to wordstats"
+  }
 }
 ```
+
+`dashboard` makes the run show its progress on the skill's dashboard: at each step the script has a small recorder agent overwrite `file` with the state of the run. Give the run an `id` that no earlier run in `dashboard/runs.js` has (the date and a few words) and a `title` of a few words. Tell the user they can watch the run by opening `dashboard/index.html` from this skill's directory in a browser, and note the time (`date +%s`) so you can report how long the run took. Only one run can be shown in progress at a time, so leave `dashboard` out if another factory run is still going.
 
 Optional args: `maxRepairRounds` (default 2), `maxSpecRevisions` (default 2), `maxTestChecks` (self-check passes per tester, default 2), and `specs` (see "When the run is blocked").
 
@@ -89,13 +97,15 @@ The workflow returns an object with `outcome`, `reason`, `specs`, `builds` (impl
 
 Whatever the outcome, confirm it yourself before reporting. Run each of the contract's checks from the repository root and read the output, and look at `git status --short` and `git diff --stat <base>`. The checker's results came from an agent; what you run now is the evidence you report. If your run disagrees with the workflow's result, report the disagreement and treat the task as not passing.
 
+Then file the run in the dashboard's history, so it stays there after the next run overwrites `live.js`. Read `dashboard/live.js`: it holds one object, the last state the workflow recorded. Append that object to the array in `dashboard/runs.js`, adding `seconds` (the time since you started the workflow). Keep what the workflow recorded; if your own checks disagreed with it, set `outcome` to `failed` and say why in `note`. If `live.js` is missing or belongs to another run, build the object from the workflow's result using the field list at the top of `runs.js`. A run that ended `blocked` and that you are about to rerun with corrected specs is filed once, after the rerun.
+
 ## When the run is blocked
 
 Read `reason` and decide, with the user if the choice is theirs:
 
 - **The specs could not be made valid, or an implementer reported its spec was wrong or needed a file it does not own**: correct the specs. Take `specs` from the result, fix the problem, and run the workflow again with the corrected list as the `specs` arg; the planner is then skipped. Work already done stays in the repository, so say in the affected spec what is already in place.
 - **An agent changed files it does not own** (an implementer touched a test file, or a tester the code): the separation between code and tests was broken for that spec. Show the user the file and ask whether to keep the change or undo it; do not undo it yourself.
-- **Files were changed that no spec owns**: look at those files. If the change is needed, add the file to the spec that should own it and run again with `specs`. If it is not needed, ask the user before undoing anything.
+- **Files were changed that no spec owns**: look at those files. If they are output of running the checks, add them to `ignoreFiles` and run again. If the change is needed, add the file to the spec that should own it and run again with `specs`. If it is not needed, ask the user before undoing anything.
 - **An agent returned no result**: run the workflow again.
 
 For a change small enough to describe in a sentence, you may write the single spec yourself, using the fields in [roles/planner.md](roles/planner.md), and pass it as `specs` to skip the planner. Put source files in `filesOwned` and test files in `testFiles`. The tester, the checker, the reviewer and, if needed, the fixer still run.

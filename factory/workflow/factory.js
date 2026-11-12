@@ -125,12 +125,28 @@ function filesOutsideAssignment(filesChanged, allowed) {
   return (filesChanged || []).map(normPath).filter(f => f && !mine.has(f))
 }
 
-// Files changed in the repository that no spec owns and that were not already
-// dirty before the run started.
+// Caches that running a project's checks leaves behind. They are never source,
+// and a repository without a .gitignore for them would otherwise stop every run
+// at the first check, because the agents and the checker run the tests.
+const GENERATED = ['**/__pycache__', '*.pyc', '**/.pytest_cache', '**/.mypy_cache', '**/.ruff_cache', '**/.DS_Store']
+
+// An ignore entry is an exact path, a directory (everything beneath it),
+// `*.ext` (any file with that ending) or `**/name` (a file or directory of that
+// name at any depth).
+function matchesIgnore(file, entry) {
+  const e = normPath(entry)
+  if (!e) return false
+  if (e.startsWith('**/')) return file.split('/').includes(e.slice(3))
+  if (e.startsWith('*.')) return file.endsWith(e.slice(1))
+  return file === e || file.startsWith(`${e}/`)
+}
+
+// Files changed in the repository that no spec owns, that were not already
+// dirty before the run started and that are not generated caches.
 function filesOutsideOwnership(changedFiles, specs, ignoreFiles) {
   const owned = ownedFiles(specs)
-  const ignored = new Set((ignoreFiles || []).map(normPath))
-  return (changedFiles || []).map(normPath).filter(f => f && !owned.has(f) && !ignored.has(f))
+  const ignore = [...GENERATED, ...(ignoreFiles || [])]
+  return (changedFiles || []).map(normPath).filter(f => f && !owned.has(f) && !ignore.some(e => matchesIgnore(f, e)))
 }
 
 // Decides pass or fail from the raw facts. An agent's own "verdict" is never
@@ -226,6 +242,62 @@ function splitFailures(failures, specs) {
     for (const s of concerned) if (!hasCode(s)) bySpec.get(s.id).push(f)
   }
   return { code, tests: specs.map(s => ({ spec: s, failures: bySpec.get(s.id) })).filter(g => g.failures.length > 0) }
+}
+
+// One reviewer's result in a few words, for the dashboard.
+function reviewLine(review) {
+  const criteria = review.criteria || []
+  const met = criteria.filter(c => c.status === 'met').length
+  const blocking = (review.findings || []).filter(f => f.severity === 'blocking').length
+  return {
+    text: `${met}/${criteria.length} criteria met${blocking > 0 ? `, ${blocking} blocking finding(s)` : ''}`,
+    state: met === criteria.length && blocking === 0 ? 'ok' : 'fail',
+  }
+}
+
+// The run as the dashboard shows it, built from the raw state so that what is
+// displayed is decided here and not by the agent that writes the file.
+// `run` is { id, title, agents, maxRepairRounds }; `progress` is { phase,
+// outcome, levels, build: { <spec id>: { impl, test } }, repairs }.
+function runRecord(run, contract, state, progress) {
+  const specs = state.specs || []
+  const failed = new Set((state.failures || []).filter(f => f.kind === 'criterion').map(f => f.id))
+  const results = state.check ? state.check.results || [] : []
+  return {
+    id: run.id,
+    title: run.title,
+    outcome: progress.outcome,
+    reason: state.reason,
+    phase: progress.phase,
+    agents: run.agents,
+    repairRounds: state.repairRounds,
+    maxRepairRounds: run.maxRepairRounds,
+    specLine: specs.length > 0 && progress.levels ? `${specs.length} spec(s) · ${progress.levels} level(s)` : '',
+    specs: specs.map(s => {
+      const build = progress.build[s.id] || {}
+      const passes = (state.tests || []).filter(t => t.spec === s.id && t.selfCheck)
+      const last = passes[passes.length - 1]
+      return {
+        id: s.id,
+        title: s.title,
+        impl: hasCode(s) ? build.impl || 'wait' : 'none',
+        test: hasTests(s) ? build.test || 'wait' : 'none',
+        waitFor: (s.dependsOn || []).join(', '),
+        testNote: last ? `Self-check ${last.selfCheck}: ${(last.filesChanged || []).length === 0 ? 'nothing changed' : 'tests corrected'}` : '',
+      }
+    }),
+    check: state.check
+      ? {
+          text: results.map(r => `${r.name}: exit ${r.exitCode}`).join(' · ') || 'no checks to run',
+          state: results.every(r => r.exitCode === 0) ? 'ok' : 'fail',
+        }
+      : { text: contract.checks.map(c => c.command).join(' · ') },
+    review: state.review
+      ? [{ tag: 'whole change', ...reviewLine(state.review) }, ...(state.specReviews || []).map(r => ({ tag: r.spec, ...reviewLine(r) }))]
+      : [],
+    repairs: progress.repairs,
+    criteria: contract.criteria.map(c => ({ id: c.id, text: c.text, status: state.review ? (failed.has(c.id) ? 'not_met' : 'met') : '' })),
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -481,6 +553,33 @@ const REVIEW_SCHEMA = {
 // Agent calls
 // ---------------------------------------------------------------------------
 
+// Every agent of the team is started through here, so the run can report how
+// many it used. The recorder below is not counted: it is not part of the team.
+let started = 0
+function spawn(prompt, opts) {
+  started++
+  return agent(prompt, opts)
+}
+
+// A script cannot write files, so a small agent writes the dashboard's progress
+// file. It is handed the finished text and decides nothing.
+function writeProgress(file, record, label, phaseTitle) {
+  return agent(
+    [
+      'You are the recorder of a Factory run. Your only job is to write one file. Do not read, run or change anything else, and do not judge the content.',
+      '',
+      `Overwrite the file ${file} (create it if it does not exist) so that it contains exactly the single line between the two marker lines below, without the markers:`,
+      '',
+      '-----BEGIN-----',
+      `window.FACTORY_LIVE = ${JSON.stringify(record)}`,
+      '-----END-----',
+      '',
+      'Then reply with the single word: written',
+    ].join('\n'),
+    { label, phase: phaseTitle, model: 'haiku', effort: 'low' },
+  )
+}
+
 function planSpecs(contract, previous, problems) {
   const redo = problems
     ? [
@@ -492,14 +591,14 @@ function planSpecs(contract, previous, problems) {
         JSON.stringify(previous, null, 2),
       ].join('\n')
     : ''
-  return agent(
+  return spawn(
     [header('planner'), '', 'Turn this contract into one or more specs.', '', contractText(contract), redo].join('\n'),
     { label: problems ? 'planner (revision)' : 'planner', phase: 'Spec', schema: PLAN_SCHEMA },
   )
 }
 
 function buildSpec(spec, contract) {
-  return agent(
+  return spawn(
     [
       header('implementer'),
       '',
@@ -516,7 +615,7 @@ function buildSpec(spec, contract) {
 // Tester of one spec. It runs beside the implementer of the same spec, so the
 // tests are written from the spec and cannot be fitted to the code.
 function writeTests(spec, contract) {
-  return agent(
+  return spawn(
     [
       header('tester'),
       '',
@@ -533,7 +632,7 @@ function writeTests(spec, contract) {
 // A later session of the same tester, with fresh context: it reads the tests as
 // an outsider would, against the spec, and corrects what is wrong.
 function selfCheckTests(spec, contract, pass) {
-  return agent(
+  return spawn(
     [
       header('tester'),
       '',
@@ -562,7 +661,7 @@ async function testSpec(spec, contract, maxPasses) {
 }
 
 function runChecks(contract, round) {
-  return agent(
+  return spawn(
     [
       header('checker'),
       '',
@@ -588,7 +687,7 @@ function runReview(contract, check, specs, round) {
         partsText(specs),
       ].join('\n')
     : ''
-  return agent(
+  return spawn(
     [
       header('reviewer'),
       '',
@@ -608,7 +707,7 @@ function runReview(contract, check, specs, round) {
 
 // Reviewer of one spec: sees that spec and the files it owns, nothing else.
 function runSpecReview(spec, contract, check, round) {
-  return agent(
+  return spawn(
     [
       header('specReviewer'),
       '',
@@ -644,7 +743,7 @@ function fixCode(report, testFailures, contract, specs, round) {
           JSON.stringify(testFailures, null, 2),
         ]
       : []
-  return agent(
+  return spawn(
     [
       header('fixer'),
       '',
@@ -670,7 +769,7 @@ function fixCode(report, testFailures, contract, specs, round) {
 // Only reached when a reviewer raised a finding against a test file, or for a
 // spec that has no source files.
 function repairTests(spec, failures, contract, round) {
-  return agent(
+  return spawn(
     [
       header('tester'),
       '',
@@ -700,10 +799,34 @@ const maxTestChecks = Number.isInteger(input.maxTestChecks) ? input.maxTestCheck
 
 const state = { outcome: 'blocked', reason: '', overview: '', risks: [], specs: [], builds: [], tests: [], repairs: [], check: null, review: null, specReviews: [], failures: [], repairRounds: 0 }
 
-function stop(outcome, reason) {
+// Progress for the dashboard, only when the caller passed `dashboard.file`.
+// Records are written at the barriers of the run, one after another and without
+// holding the team up; only the last one is waited for.
+const dash = input.dashboard && !isBlank(input.dashboard.file) ? input.dashboard : null
+const progress = { phase: 'Spec', outcome: 'running', levels: 0, build: {}, repairs: [] }
+let recording = Promise.resolve()
+
+function record(phaseTitle, outcome) {
+  progress.phase = phaseTitle
+  progress.outcome = outcome
+  if (!dash) return recording
+  const run = {
+    id: isBlank(dash.id) ? `run-${String(input.base || '').slice(0, 7)}` : dash.id,
+    title: isBlank(dash.title) ? (contract && contract.objective) || '' : dash.title,
+    agents: started,
+    maxRepairRounds,
+  }
+  const snapshot = runRecord(run, contract, state, progress)
+  const label = outcome === 'running' ? `record ${phaseTitle}` : `record ${outcome}`
+  recording = recording.then(() => writeProgress(dash.file, snapshot, label, phaseTitle)).catch(() => null)
+  return recording
+}
+
+async function stop(outcome, reason) {
   state.outcome = outcome
   state.reason = reason
   log(`${outcome}: ${reason}`)
+  if (contract && Array.isArray(contract.criteria) && Array.isArray(contract.checks)) await record(progress.phase, outcome)
   return state
 }
 
@@ -738,6 +861,7 @@ if (missing.length > 0) return stop('blocked', `Missing workflow args: ${missing
 
 // --- Spec -------------------------------------------------------------------
 phase('Spec')
+record('Spec', 'running')
 let specs = input.specs
 let problems
 if (Array.isArray(specs) && specs.length > 0) {
@@ -766,6 +890,7 @@ if (Array.isArray(specs) && specs.length > 0) {
 }
 
 const levels = buildLevels(specs)
+progress.levels = levels.length
 log(`${specs.length} spec(s) in ${levels.length} build level(s): ${levels.map(l => l.map(s => s.id).join('+')).join(' -> ')}`)
 const untested = specs.filter(s => !hasTests(s)).map(s => s.id)
 if (untested.length > 0) log(`No tester for ${untested.join(', ')}: the spec names no test files.`)
@@ -781,21 +906,27 @@ for (const level of levels) {
     ...(hasCode(spec) ? [{ spec, role: 'implementer', allowed: spec.filesOwned }] : []),
     ...(hasTests(spec) ? [{ spec, role: 'tester', allowed: spec.testFiles }] : []),
   ])
+  for (const spec of level) progress.build[spec.id] = { impl: 'run', test: 'run' }
+  record('Build', 'running')
   const results = await parallel(
     jobs.map(j => () => (j.role === 'tester' ? testSpec(j.spec, contract, maxTestChecks) : buildSpec(j.spec, contract).then(result => [{ result, tag: {} }]))),
   )
   const blocked = jobs.flatMap((j, i) => (results[i] || [{ result: null, tag: {} }]).map(run => settle(j, run.result, run.tag))).filter(Boolean)
   if (blocked.length > 0) return stop('blocked', `The build could not be completed. ${blocked.join(' | ')}`)
+  for (const spec of level) progress.build[spec.id] = { impl: 'ok', test: 'ok' }
 }
 
 // --- Check and review, then bounded repair ----------------------------------
 let round = 0
 while (true) {
+  if (round === 0) record('Check', 'running')
   const check = await runChecks(contract, round)
   if (!check) return stop('blocked', 'The checker did not return a result.')
   state.check = check
 
   const stray = filesOutsideOwnership(check.changedFiles, specs, input.ignoreFiles)
+  const caches = (check.changedFiles || []).map(normPath).filter(f => !ownedFiles(specs).has(f) && GENERATED.some(e => matchesIgnore(f, e)))
+  if (caches.length > 0) log(`Not counted as changes: ${caches.length} generated cache file(s) (${caches.join(', ')}).`)
   if (stray.length > 0) {
     return stop('blocked', `Files were changed that no spec owns: ${stray.join(', ')}. Either the specs were incomplete or an agent went outside its assignment.`)
   }
@@ -803,6 +934,7 @@ while (true) {
   // With several specs, every spec gets its own reviewer, alongside the reviewer
   // of the whole change. None of them depends on another, so they run together.
   const reviewedSpecs = specs.length > 1 ? specs : []
+  record(round === 0 ? 'Review' : 'Repair', 'running')
   const reviews = await parallel([
     () => runReview(contract, check, specs, round),
     ...reviewedSpecs.map(spec => () => runSpecReview(spec, contract, check, round)),
@@ -829,10 +961,15 @@ while (true) {
     ...(split.code.length > 0 ? [{ role: 'fixer', allowed: sourceFiles(specs), failures: split.code }] : []),
     ...split.tests.map(g => ({ spec: g.spec, role: 'tester', allowed: g.spec.testFiles, failures: g.failures })),
   ]
-  log(`${state.failures.length} failure(s); repair round ${round}/${maxRepairRounds}: ${jobs.map(j => (j.spec ? `${j.spec.id} tester` : 'fixer')).join(', ')}.`)
+  const who = jobs.map(j => (j.spec ? `${j.spec.id} tester` : 'fixer')).join(', ')
+  log(`${state.failures.length} failure(s); repair round ${round}/${maxRepairRounds}: ${who}.`)
+  const repair = { round, text: `${state.failures.length} failure(s) sent to ${who}`, state: 'run' }
+  progress.repairs = [...progress.repairs, repair]
+  record('Repair', 'running')
   const fixes = await parallel(
     jobs.map(j => () => (j.role === 'tester' ? repairTests(j.spec, j.failures, contract, round) : fixCode(j.failures, split.tests.flatMap(g => g.failures), contract, specs, round))),
   )
   const stuck = jobs.map((j, i) => settle(j, fixes[i], { repairRound: round })).filter(Boolean)
   if (stuck.length > 0) return stop('failed', `Repair round ${round} could not be carried out. ${stuck.join(' | ')}`)
+  progress.repairs = progress.repairs.map(r => (r.round === round ? { ...r, state: 'ok' } : r))
 }

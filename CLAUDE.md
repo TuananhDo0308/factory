@@ -8,6 +8,7 @@ This repository is the source of **Factory**, a Claude Code skill that runs a co
 - `factory/workflow/factory.js`: the Workflow script. It runs Spec, Build, Check, Review and Repair, validates specs, orders them by dependency, and decides pass or fail from the raw results.
 - `factory/roles/*.md`: one brief per role (planner, implementer, tester, checker, reviewer, spec-reviewer, fixer). The script tells each agent to read its brief; the paths are passed in through `args`.
 - `factory/evals/<case-name>/`: test cases in the `claude plugin eval` layout (prompt, starting files, graders).
+- `factory/dashboard/`: a static page for people, shipped with the skill. `index.html` shows the team, the rules the script enforces, per-phase progress of each run and the benchmark, and opens straight from disk. It reads finished runs from `runs.js` (the invoking session appends one after each run; the field list is at the top of that file) and the run in progress from `live.js`, which it reloads every few seconds. `live.js` is git-ignored: the script builds each progress record itself (`runRecord`) and, because it cannot write files, has a small recorder agent overwrite the file at each barrier of the run, when the `dashboard` arg is passed. The recorder is not a team role and has no brief. The page's roles, flow and rules are written out by hand, so update them when the team or the script changes.
 - `factory-workspace/`: test run outputs, created on demand next to the skill. Disposable and git-ignored; never part of the skill.
 
 ## How to work here
@@ -23,8 +24,8 @@ This repository is the source of **Factory**, a Claude Code skill that runs a co
 
 ## Testing
 
-- **Script logic**: the helpers at the top of `factory.js` (`validateSpecs`, `buildLevels`, `filesOutsideOwnership`, `filesOutsideAssignment`, `evaluate`, `splitFailures`) are pure functions. After changing them, copy the part of the file above the "The run" section into a scratch module and test it with `node`. For a syntax check, wrap the whole file in an `async function` and run `node --check`, since the body uses top-level `return`.
-- **End to end**: copy an eval case's `files/` into a scratch directory, `git init` and commit it, then run the workflow against it. A run starts at least six agents (one spec), and 4N+3 to 5N+3 for N specs before any repair, so confirm with the user before running more than one.
+- **Script logic**: the helpers at the top of `factory.js` (`validateSpecs`, `buildLevels`, `matchesIgnore`, `filesOutsideOwnership`, `filesOutsideAssignment`, `evaluate`, `splitFailures`, `runRecord`) are pure functions. After changing them, copy the part of the file above the "The run" section into a scratch module and test it with `node`. For a syntax check, wrap the whole file in an `async function` and run `node --check`, since the body uses top-level `return`.
+- **End to end**: copy an eval case's `files/` into a scratch directory, `git init` and commit it, then run the workflow against it. A run starts at least six agents (one spec), and 4N+3 to 5N+3 for N specs before any repair, plus one small recorder agent per step when `dashboard` is passed, so confirm with the user before running more than one.
 - **Skill evals**: use the `skill-creator` skill's workflow with the cases in `factory/evals/`, saving results under `factory-workspace/iteration-N/`.
 
 ## Boundaries

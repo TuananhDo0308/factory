@@ -4,7 +4,7 @@ Một skill cho Claude Code để chạy một tác vụ lập trình qua một 
 
 Nhóm agent được điều phối bằng code (một script Workflow), không phải bằng một agent đọc hướng dẫn. Thứ tự các bước, việc mỗi agent được thấy gì, và số vòng sửa do code quyết định nên không thể bị làm lệch.
 
-Đây là bản nền (baseline) được viết lại từ đầu: chưa có sổ ghi bằng chứng hay dashboard.
+Đây là bản nền (baseline) được viết lại từ đầu: chưa có sổ ghi bằng chứng. Skill có kèm một dashboard: mở `factory/dashboard/index.html` bằng trình duyệt để xem tiến độ của lượt đang chạy (trang tự đọc lại vài giây một lần), các lượt đã chạy và benchmark.
 
 ## Ai làm gì
 
@@ -52,6 +52,10 @@ factory/
 │   ├── reviewer.md       reviewer toàn bộ thay đổi
 │   ├── spec-reviewer.md  reviewer cho từng spec
 │   └── fixer.md          người sửa code theo report ở vòng sửa
+├── dashboard/            trang theo dõi nhóm agent và các lượt chạy
+│   ├── index.html        mở thẳng bằng trình duyệt
+│   ├── runs.js           các lượt đã chạy, phiên chat thêm một mục sau mỗi lượt
+│   └── live.js           lượt đang chạy, workflow ghi đè ở mỗi bước (không commit)
 └── evals/                các bài test của skill
     └── adds-json-flag-to-cli/
 ```
@@ -91,6 +95,7 @@ Skill cũng tự kích hoạt khi bạn yêu cầu một "factory" hoặc một 
 - Mỗi vòng sửa chỉ có một fixer cho toàn bộ report. Với task lớn có nhiều lỗi cùng lúc, agent này có thể bị quá tải và sửa sót.
 - Test là chuẩn nên một test sai mà lọt qua cả vòng tự soát lẫn reviewer sẽ khiến code đúng bị sửa theo nó. Fixer chỉ có thể ghi lại nghi ngờ để phiên chat báo cho bạn.
 - Các implementer và tester chạy song song trên cùng một thư mục làm việc; an toàn là nhờ không file nào có hai chủ.
+- Tiến độ trên dashboard được cập nhật ở các mốc của lượt chạy (xong Spec, xong mỗi tầng Build, xong Check, xong Review, mỗi vòng sửa), không phải theo từng agent. Mỗi lần cập nhật do một agent nhỏ ghi file, vì script không tự ghi được. Dashboard chỉ hiện được một lượt đang chạy tại một thời điểm.
 - Trạng thái của một lượt chạy không được lưu để tiếp tục sau khi phiên kết thúc.
 - Một quy trình chung cho mọi loại việc (tính năng, sửa lỗi, refactor, test); chưa có chế độ riêng cho từng loại.
 - Không tự commit, push hay mở pull request trừ khi được yêu cầu.
