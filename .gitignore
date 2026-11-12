@@ -1,0 +1,9 @@
+# Test run outputs (disposable)
+factory-workspace/
+
+# Local Claude Code state
+.claude/
+
+__pycache__/
+*.pyc
+.DS_Store
