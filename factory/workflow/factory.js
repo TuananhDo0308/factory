@@ -122,8 +122,14 @@ function ownedFiles(specs) {
 // the fixer this is the per-agent check. A tester is also checked against what
 // git shows in its worktree (`readGather`), which does not rely on its word.
 function filesOutsideAssignment(filesChanged, allowed) {
-  const mine = new Set((allowed || []).map(normPath))
-  return (filesChanged || []).map(normPath).filter(f => f && !mine.has(f))
+  // Agents sometimes report absolute paths; compare them relative to the repository.
+  const root = String(args.repo || '').replace(/\/+$/, '')
+  const rel = p => {
+    const f = normPath(p)
+    return root && f.startsWith(`${root}/`) ? f.slice(root.length + 1) : f
+  }
+  const mine = new Set((allowed || []).map(rel))
+  return (filesChanged || []).map(rel).filter(f => f && !mine.has(f))
 }
 
 // Caches that running a project's checks leaves behind. They are never source,
@@ -955,11 +961,11 @@ const contract = input.contract
 const maxRepairRounds = Number.isInteger(input.maxRepairRounds) ? input.maxRepairRounds : 2
 const maxSpecRevisions = Number.isInteger(input.maxSpecRevisions) ? input.maxSpecRevisions : 2
 const maxTestChecks = Number.isInteger(input.maxTestChecks) ? input.maxTestChecks : 2
-// The testers' worktrees go inside .git by default: git does not list that
-// directory as a change, and tools that look upwards for installed
-// dependencies (node_modules) still find the repository's.
+// The testers' worktrees go next to the repository by default, never inside it:
+// Claude Code refuses every write under .git, so a tester there cannot write a
+// single test, and a directory in the working tree would show up as a change.
 const repo = String(input.repo || '').replace(/\/+$/, '')
-const worktrees = isBlank(input.worktrees) ? `${repo}/.git/factory-worktrees` : String(input.worktrees).replace(/\/+$/, '')
+const worktrees = isBlank(input.worktrees) ? `${repo}-factory-worktrees` : String(input.worktrees).replace(/\/+$/, '')
 
 const state = { outcome: 'blocked', reason: '', overview: '', risks: [], specs: [], builds: [], tests: [], repairs: [], check: null, review: null, specReviews: [], failures: [], repairRounds: 0 }
 
@@ -1072,7 +1078,7 @@ for (const [n, level] of levels.entries()) {
   if (trees.length > 0) {
     setup = readSetup(await runScript(setupScript(trees, repo, input.base), `worktrees (level ${n + 1})`), trees)
     if (setup.problems.length > 0) {
-      return stop('blocked', `The testers' worktrees could not be prepared. ${setup.problems.join(' | ')} If the repository's .git is not a directory, pass a "worktrees" directory.`)
+      return stop('blocked', `The testers' worktrees could not be prepared. ${setup.problems.join(' | ')} If ${worktrees} cannot be created or written to, pass a "worktrees" directory outside the repository that can.`)
     }
   }
 

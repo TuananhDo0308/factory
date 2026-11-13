@@ -70,6 +70,7 @@ test('ownership: stray files stop the run, caches and ignored files do not', () 
   const changed = ['a.py', 'tests/test_a.py', 'other.py', 'tests/__pycache__/x.pyc', 'wip.txt']
   assert.deepEqual(h.filesOutsideOwnership(changed, [spec()], ['wip.txt']), ['other.py'])
   assert.deepEqual(h.filesOutsideAssignment(['./a.py', 'b.py'], ['a.py']), ['b.py'])
+  assert.deepEqual(h.filesOutsideAssignment(['/repo/a.py', '/elsewhere/a.py'], ['a.py']), ['/elsewhere/a.py'])
 })
 
 test('evaluate passes only when checks, criteria and findings are all clean', () => {
