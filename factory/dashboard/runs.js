@@ -363,5 +363,62 @@ window.FACTORY_RUNS = [
   ],
   "seconds": 2024,
   "note": "Three workflow invocations of one run (wf_4cf28f7b-28a): (1) blocked, the tester could not write under .git/factory-worktrees (path classed as sensitive); (2) resumed with worktrees outside the repo, blocked falsely because the S2 implementer reported absolute paths and filesOutsideAssignment compared raw strings; (3) resumed after making that check strip the repo prefix, passed. Dashboard was not used live (live.js held another run's state). Agent count is from the final invocation."
+},
+{
+  "id": "2026-11-13-e2e-share",
+  "title": "e2e: --json flag with linked .venv",
+  "outcome": "passed",
+  "reason": "All checks pass and every criterion is met.",
+  "phase": "Review",
+  "agents": 6,
+  "repairRounds": 0,
+  "maxRepairRounds": 2,
+  "specLine": "1 spec(s) · 1 level(s)",
+  "specs": [
+    {
+      "id": "S1",
+      "title": "--json output flag for wordstats",
+      "impl": "ok",
+      "test": "ok",
+      "waitFor": "",
+      "testNote": "Self-check 1: nothing changed"
+    }
+  ],
+  "check": {
+    "text": "test: exit 0",
+    "state": "ok"
+  },
+  "review": [
+    {
+      "tag": "whole change",
+      "text": "4/4 criteria met",
+      "state": "ok"
+    }
+  ],
+  "repairs": [],
+  "criteria": [
+    {
+      "id": "C1",
+      "text": "`.venv/bin/python wordstats.py --json FILE` prints exactly one JSON object to stdout with the keys \"lines\", \"words\" and \"chars\" and integer values equal to wordstats.stats() of the file's text, and exits 0. `wordstats.main([\"--json\", path])` behaves the same and returns 0.",
+      "status": "met"
+    },
+    {
+      "id": "C2",
+      "text": "Without --json the output and exit code are byte-for-byte what they were before this change, for both a readable file and the existing error cases; every existing test in tests/test_wordstats.py passes unchanged.",
+      "status": "met"
+    },
+    {
+      "id": "C3",
+      "text": "New tests in tests/ cover --json: the printed text parses as JSON, has exactly the three keys with the expected values for a known input, and the text format is not printed.",
+      "status": "met"
+    },
+    {
+      "id": "C4",
+      "text": "README.md documents the --json flag in one or two lines.",
+      "status": "met"
+    }
+  ],
+  "seconds": 241,
+  "note": "End-to-end check of the worktree changes on a copy of adds-json-flag-to-cli with an ignored .venv and .env: the check ran through .venv/bin/python, both were linked into the tester worktree next to the repo, and the tester ran its tests there (10 failing for the missing flag, as expected). Seconds include filing."
 }
 ]
