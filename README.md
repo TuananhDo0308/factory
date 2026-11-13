@@ -33,7 +33,8 @@ Lý do tách spec: một agent nhận quá nhiều việc cùng lúc dễ đoán
    - **Repair**: nếu còn lỗi, các lỗi được gom thành một report và mặc định code sai. Một fixer duy nhất nhận hợp đồng, report và bản đồ file, phải sửa code cho qua test và chỉ được sửa file nguồn. Tester chỉ được gọi lại khi một reviewer báo lỗi chặn vào chính file test của nó. Sau đó checker và các reviewer mới xem lại. Tối đa hai vòng.
 3. **Xác nhận** (phiên chat): tự chạy lại các lệnh kiểm tra.
 4. **Merge** (phiên chat): mỗi lượt chạy làm việc trên một nhánh riêng `factory/<id>`, tách từ nhánh bạn đang đứng (thường là `main`). Chỉ khi workflow trả về `passed` và lần chạy lại kiểm tra cũng đạt, phiên chat mới commit các file thuộc các spec rồi merge fast-forward vào nhánh ban đầu và xóa nhánh riêng. Nếu không đạt, thay đổi nằm lại trên `factory/<id>` và nhánh ban đầu không bị đụng tới.
-5. **Báo cáo** (phiên chat): kết quả, từng tiêu chí kèm bằng chứng, những gì còn mở, và đã merge hay chưa.
+5. **Gửi về XS Factory Bench** (phiên chat): nếu máy có lệnh `xfb`, phiên chat chạy `xfb report` để gửi bản ghi của lượt chạy và transcript lên XS Factory Bench, bất kể kết quả là gì. Không có `xfb` thì bỏ qua. Bước này không bao giờ làm thay đổi lượt chạy: gửi không được thì `xfb` giữ lại và gửi sau.
+6. **Báo cáo** (phiên chat): kết quả, từng tiêu chí kèm bằng chứng, những gì còn mở, và đã merge hay chưa.
 
 Code tự tính đạt hay không đạt: mọi lệnh kiểm tra thoát với mã 0, mọi tiêu chí được đánh giá là đạt, và không còn lỗi chặn. Không agent nào tự tuyên bố "đạt".
 
