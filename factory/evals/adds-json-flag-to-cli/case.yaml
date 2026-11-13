@@ -3,7 +3,8 @@ name: adds-json-flag-to-cli
 expected_outcome: |
   wordstats.py accepts --json and prints the three counts as one JSON object, the default
   text output is unchanged, new tests cover the flag, and the whole test suite passes. The
-  work was planned, built and reviewed by separate agents, and the final report lists each
+  work was specified, built, checked and reviewed by separate agents run by the factory
+  workflow script, and the final report lists each
   acceptance criterion with its evidence and the real check results.
 context:
   scaffold_script: place-files.sh

@@ -7,3 +7,6 @@ factory-workspace/
 __pycache__/
 *.pyc
 .DS_Store
+
+# Progress of the run in flight, rewritten by the workflow
+factory/dashboard/live.js
