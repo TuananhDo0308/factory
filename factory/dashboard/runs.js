@@ -202,5 +202,166 @@ window.FACTORY_RUNS = [
     ],
     "seconds": 284,
     "note": "Rerun of a blocked first run: the tester could not write under .git/factory-worktrees (permission system classed the path as sensitive), so the rerun used a worktrees directory outside the repository and the same spec. Seconds cover both runs."
-  }
+  },
+{
+  "id": "2026-11-13-task-start-date-scylla",
+  "title": "Task start date and timeline drag-to-create (issue #110)",
+  "outcome": "passed",
+  "reason": "All checks pass and every criterion is met after 1 repair round(s).",
+  "phase": "Review",
+  "agents": 34,
+  "repairRounds": 1,
+  "maxRepairRounds": 2,
+  "specLine": "4 spec(s) · 3 level(s)",
+  "specs": [
+    {
+      "id": "S1",
+      "title": "startDate column, domain validation and REST API",
+      "impl": "ok",
+      "test": "ok",
+      "implNote": "",
+      "testNote": "",
+      "waitFor": ""
+    },
+    {
+      "id": "S2",
+      "title": "startDate in server actions, MCP create_task/update_task, and mcp.md docs",
+      "impl": "ok",
+      "test": "ok",
+      "implNote": "",
+      "testNote": "",
+      "waitFor": ""
+    },
+    {
+      "id": "S3",
+      "title": "Client task model, editor hook and drawer Start date picker",
+      "impl": "ok",
+      "test": "ok",
+      "implNote": "",
+      "testNote": "",
+      "waitFor": ""
+    },
+    {
+      "id": "S4",
+      "title": "Timeline start-date bars, drag-to-create, and final full-repo verification",
+      "impl": "ok",
+      "test": "ok",
+      "implNote": "",
+      "testNote": "",
+      "waitFor": ""
+    }
+  ],
+  "check": {
+    "text": "db-push, typecheck, lint, format, test: all exit 0 (644 tests pass)",
+    "state": "ok"
+  },
+  "review": [
+    {
+      "tag": "whole",
+      "text": "all criteria met; 2 minor findings",
+      "state": "ok",
+      "label": "Reviewer"
+    },
+    {
+      "tag": "S1",
+      "text": "0 minor finding(s)",
+      "state": "ok",
+      "label": "Spec reviewer"
+    },
+    {
+      "tag": "S2",
+      "text": "0 minor finding(s)",
+      "state": "ok",
+      "label": "Spec reviewer"
+    },
+    {
+      "tag": "S3",
+      "text": "1 minor finding(s)",
+      "state": "ok",
+      "label": "Spec reviewer"
+    },
+    {
+      "tag": "S4",
+      "text": "0 minor finding(s)",
+      "state": "ok",
+      "label": "Spec reviewer"
+    }
+  ],
+  "repairs": [
+    {
+      "round": 1,
+      "text": "typecheck failed on two new test files (missing status in seed helpers); testers corrected them, no source change",
+      "state": "ok"
+    }
+  ],
+  "criteria": [
+    {
+      "id": "C1",
+      "text": "",
+      "status": "met"
+    },
+    {
+      "id": "C2",
+      "text": "",
+      "status": "met"
+    },
+    {
+      "id": "C3",
+      "text": "",
+      "status": "met"
+    },
+    {
+      "id": "C4",
+      "text": "",
+      "status": "met"
+    },
+    {
+      "id": "C5",
+      "text": "",
+      "status": "met"
+    },
+    {
+      "id": "C6",
+      "text": "",
+      "status": "met"
+    },
+    {
+      "id": "C7",
+      "text": "",
+      "status": "met"
+    },
+    {
+      "id": "C8",
+      "text": "",
+      "status": "met"
+    },
+    {
+      "id": "C9",
+      "text": "",
+      "status": "met"
+    },
+    {
+      "id": "C10",
+      "text": "",
+      "status": "met"
+    },
+    {
+      "id": "C11",
+      "text": "",
+      "status": "met"
+    },
+    {
+      "id": "C12",
+      "text": "",
+      "status": "met"
+    },
+    {
+      "id": "C13",
+      "text": "",
+      "status": "met"
+    }
+  ],
+  "seconds": 2024,
+  "note": "Three workflow invocations of one run (wf_4cf28f7b-28a): (1) blocked, the tester could not write under .git/factory-worktrees (path classed as sensitive); (2) resumed with worktrees outside the repo, blocked falsely because the S2 implementer reported absolute paths and filesOutsideAssignment compared raw strings; (3) resumed after making that check strip the repo prefix, passed. Dashboard was not used live (live.js held another run's state). Agent count is from the final invocation."
+}
 ]
