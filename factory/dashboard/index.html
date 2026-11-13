@@ -19,6 +19,8 @@
 /* Single light look by choice: the canvas this page comes from is white in every theme. */
 
 html, body { height: 100%; margin: 0 }
+/* Views are switched with the hidden attribute; without this, any rule that sets display would show them all. */
+[hidden] { display: none !important }
 body { background: var(--bg); color: var(--ink); font-family: var(--body); font-size: 16px; line-height: 1.4 }
 * { box-sizing: border-box }
 a { color: inherit }
@@ -315,7 +317,7 @@ td .pill { color: var(--on-fill); border-color: var(--on-fill); font-size: 13px;
 
 <footer class="foot">
   <div class="wrap">
-    <div>Factory · branch <span class="mono">workflow-with-testers</span> · <span class="mono">7d3558c</span></div>
+    <div>Factory · branch <span class="mono">workflow-with-testers</span></div>
     <a href="https://github.com/sangtruong-rgb/factory/tree/workflow-with-testers">github.com/sangtruong-rgb/factory</a>
   </div>
 </footer>
