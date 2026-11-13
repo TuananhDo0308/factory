@@ -83,4 +83,124 @@ window.FACTORY_RUNS = [
     "grades": {},
     "note": "End-to-end run on the current factory. It first stopped as blocked after Check because untracked __pycache__ files were not in ignoreFiles, then resumed with them ignored; 163 s is the workflow time of both parts. The session reran the check itself: 13 tests, OK."
   },
+  {
+    "id": "2026-11-13-wordstats-json-worktree",
+    "title": "Add a --json flag to wordstats (tester in a worktree)",
+    "outcome": "passed",
+    "reason": "All checks pass and every criterion is met.",
+    "phase": "Review",
+    "agents": 6,
+    "repairRounds": 0,
+    "maxRepairRounds": 2,
+    "specLine": "1 spec(s) · 1 level(s)",
+    "specs": [
+      {
+        "id": "S1",
+        "title": "Add --json output to wordstats CLI",
+        "impl": "ok",
+        "test": "ok",
+        "waitFor": "",
+        "testNote": "Self-check 1: nothing changed"
+      }
+    ],
+    "check": {
+      "text": "test: exit 0",
+      "state": "ok"
+    },
+    "review": [
+      {
+        "tag": "whole change",
+        "text": "4/4 criteria met",
+        "state": "ok"
+      }
+    ],
+    "repairs": [],
+    "criteria": [
+      {
+        "id": "C1",
+        "text": "`python3 wordstats.py --json FILE` prints exactly one JSON object on stdout with the integer keys `lines`, `words` and `chars`, holding the same counts the text format reports, and exits with 0.",
+        "status": "met"
+      },
+      {
+        "id": "C2",
+        "text": "Without `--json`, the output and exit codes are unchanged: `lines: N\\nwords: N\\nchars: N\\n` for a readable file, and exit code 1 with nothing on stdout for a missing file.",
+        "status": "met"
+      },
+      {
+        "id": "C3",
+        "text": "New tests under `tests/` exercise `--json` through `wordstats.main`, and `python3 -m unittest discover -s tests` passes with the existing tests still in place.",
+        "status": "met"
+      },
+      {
+        "id": "C4",
+        "text": "README.md documents the `--json` flag.",
+        "status": "met"
+      }
+    ],
+    "caseName": "adds-json-flag-to-cli",
+    "seconds": 155,
+    "note": "First run with the tester in its own git worktree. Graders not run."
+  },
+  {
+    "id": "2026-11-13-wordstats-json-flag",
+    "title": "Add a --json flag to wordstats",
+    "outcome": "passed",
+    "reason": "All checks pass and every criterion is met.",
+    "phase": "Review",
+    "agents": 5,
+    "repairRounds": 0,
+    "maxRepairRounds": 2,
+    "specLine": "1 spec(s) · 1 level(s)",
+    "specs": [
+      {
+        "id": "S1",
+        "title": "Add --json output flag to wordstats CLI",
+        "impl": "ok",
+        "test": "ok",
+        "waitFor": "",
+        "testNote": "Self-check 1: nothing changed"
+      }
+    ],
+    "check": {
+      "text": "test: exit 0",
+      "state": "ok"
+    },
+    "review": [
+      {
+        "tag": "whole change",
+        "text": "5/5 criteria met",
+        "state": "ok"
+      }
+    ],
+    "repairs": [],
+    "criteria": [
+      {
+        "id": "C1",
+        "text": "`python3 wordstats.py --json FILE` (and `wordstats.main([\"--json\", FILE])`) exits with 0 and prints to stdout exactly one JSON object followed by a newline, and nothing else. Parsed with `json.loads`, it equals a dict with exactly the keys `lines`, `words` and `chars`, each an integer equal to the count the text format reports for the same file (e.g. a file containing `a b\\nc\\n` gives {\"lines\": 2, \"words\": 3, \"chars\": 6}).",
+        "status": "met"
+      },
+      {
+        "id": "C2",
+        "text": "Without `--json`, output and exit codes are unchanged: for a readable file stdout is exactly `lines: N\\nwords: N\\nchars: N\\n` with exit code 0; the existing tests in tests/test_wordstats.py remain in place and pass unmodified in meaning.",
+        "status": "met"
+      },
+      {
+        "id": "C3",
+        "text": "With `--json` and a file that cannot be opened, the behavior matches the non-JSON error path: exit code 1, nothing on stdout, an `error: ...` message on stderr.",
+        "status": "met"
+      },
+      {
+        "id": "C4",
+        "text": "New unittest tests under `tests/` exercise `--json` through `wordstats.main` (successful output parsed as JSON, and the missing-file case), and `python3 -m unittest discover -s tests` passes.",
+        "status": "met"
+      },
+      {
+        "id": "C5",
+        "text": "README.md mentions the `--json` flag.",
+        "status": "met"
+      }
+    ],
+    "seconds": 284,
+    "note": "Rerun of a blocked first run: the tester could not write under .git/factory-worktrees (permission system classed the path as sensitive), so the rerun used a worktrees directory outside the repository and the same spec. Seconds cover both runs."
+  }
 ]
