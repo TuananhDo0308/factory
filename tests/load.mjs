@@ -9,7 +9,7 @@ import { fileURLToPath } from 'node:url'
 
 const NAMES = [
   'validateSpecs', 'buildLevels', 'matchesIgnore', 'filesOutsideOwnership', 'filesOutsideAssignment',
-  'worktreeOf', 'setupScript', 'readSetup', 'gatherScript', 'readGather',
+  'sharedPaths', 'worktreeOf', 'setupScript', 'readSetup', 'gatherScript', 'readGather',
   'evaluate', 'sourceFiles', 'splitFailures', 'runRecord', 'specText', 'contractText',
 ]
 
