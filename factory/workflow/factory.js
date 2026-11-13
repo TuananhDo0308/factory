@@ -4,7 +4,7 @@ export const meta = {
   whenToUse: 'Called by the factory skill after the contract is written. Not meant to be started without its args.',
   phases: [
     { title: 'Spec', detail: 'planner turns the contract into specs; code validates them' },
-    { title: 'Build', detail: 'one implementer per spec, beside a tester that writes the tests and then re-checks them in fresh sessions' },
+    { title: 'Build', detail: 'one implementer per spec, beside a tester that writes the tests in its own worktree and then re-checks them in fresh sessions' },
     { title: 'Check', detail: 'checker runs the contract checks and lists changed files' },
     { title: 'Review', detail: 'one reviewer for the whole change, plus one per spec when the work was split' },
     { title: 'Repair', detail: 'one fixer repairs the code from the combined report, a tester only on a reviewer finding; then check and review again' },
@@ -117,9 +117,10 @@ function ownedFiles(specs) {
   return set
 }
 
-// Files one agent says it changed that are not in the list it was given. This
-// is how an implementer that edits a test, or a tester that edits the code, is
-// caught: the checker's list cannot tell who changed a file.
+// Files one agent says it changed that are not in the list it was given. The
+// checker's list cannot tell who changed a file, so for the implementers and
+// the fixer this is the per-agent check. A tester is also checked against what
+// git shows in its worktree (`readGather`), which does not rely on its word.
 function filesOutsideAssignment(filesChanged, allowed) {
   const mine = new Set((allowed || []).map(normPath))
   return (filesChanged || []).map(normPath).filter(f => f && !mine.has(f))
@@ -147,6 +148,133 @@ function filesOutsideOwnership(changedFiles, specs, ignoreFiles) {
   const owned = ownedFiles(specs)
   const ignore = [...GENERATED, ...(ignoreFiles || [])]
   return (changedFiles || []).map(normPath).filter(f => f && !owned.has(f) && !ignore.some(e => matchesIgnore(f, e)))
+}
+
+// --- The tester's worktree ---------------------------------------------------
+// A tester does not work in the repository the implementers are changing. It
+// gets its own checkout of the base commit (a git worktree), so the code being
+// written is not on its disk and its tests are not on the implementers' disk
+// until the build of the level is over. A script cannot run git, so the two
+// functions below write the shell text and a helper agent runs it; what the
+// text prints is read back here, so the facts come from git and not from what
+// an agent says it did. Every line that matters starts with `FACTORY`.
+
+function shq(s) {
+  return `'${String(s).replace(/'/g, `'\\''`)}'`
+}
+
+// Where the worktree of one spec's tester lives, under `dir`.
+function worktreeOf(dir, spec, specs) {
+  return `${dir}/${specs.indexOf(spec) + 1}-${String(spec.id).replace(/[^A-Za-z0-9_-]/g, '_')}`
+}
+
+function markers(text) {
+  return String(text || '')
+    .split('\n')
+    .map(l => l.trim())
+    .filter(l => l.startsWith('FACTORY '))
+    .map(l => l.slice(8).split(' '))
+}
+
+// Creates one worktree per item at the base commit. `items` is [{ spec, tree }].
+// A test file that already holds uncommitted work in the repository (the user's
+// own, or tests from an earlier blocked run) is copied in, so the tester builds
+// on it and gathering later does not overwrite it with an older version. The
+// hash of every test file in the repository is printed, to tell at gathering
+// time whether someone changed it there during the build.
+function setupScript(items, repo, base) {
+  const R = shq(repo)
+  return items
+    .flatMap(({ spec, tree }, i) => {
+      const W = shq(tree)
+      return [
+        `git -C ${R} worktree remove --force ${W} >/dev/null 2>&1`,
+        `git -C ${R} worktree prune`,
+        `git -C ${R} worktree add --detach ${W} ${shq(base)} && echo "FACTORY worktree ${i}"`,
+        ...spec.testFiles.map(normPath).flatMap((f, j) => {
+          const inRepo = shq(`${repo}/${f}`)
+          const inTree = shq(`${tree}/${f}`)
+          return [
+            `if [ -f ${inRepo} ] && [ -n "$(git -C ${R} status --porcelain -- ${shq(f)})" ]; then mkdir -p "$(dirname ${inTree})" && cp ${inRepo} ${inTree} && echo "FACTORY seeded ${i} ${j}"; fi`,
+            `echo "FACTORY main ${i} ${j} $(git -C ${R} hash-object -- ${shq(f)} 2>/dev/null || echo none)"`,
+          ]
+        }),
+      ]
+    })
+    .join('\n')
+}
+
+// Reads what the setup printed. Returns { problems, hashes, seeded }, the last
+// two indexed like `items`: per test file its hash in the repository, and the
+// test files that were copied into the worktree.
+function readSetup(text, items) {
+  const lines = markers(text)
+  const problems = []
+  const hashes = []
+  const seeded = []
+  items.forEach(({ spec, tree }, i) => {
+    const mine = lines.filter(l => l[1] === String(i))
+    const files = spec.testFiles.map(normPath)
+    hashes.push(files.map((f, j) => (mine.find(l => l[0] === 'main' && l[2] === String(j)) || [])[3] || ''))
+    seeded.push(files.filter((f, j) => mine.some(l => l[0] === 'seeded' && l[2] === String(j))))
+    if (!mine.some(l => l[0] === 'worktree')) problems.push(`${spec.id}: the worktree for its tester could not be created at ${tree}.`)
+    else if (hashes[i].some(h => !h)) problems.push(`${spec.id}: the commands that prepare its tester's worktree did not finish.`)
+  })
+  return { problems, hashes, seeded }
+}
+
+// Lists what changed in each worktree and copies the test files back into the
+// repository. A test file whose copy in the repository no longer has the hash
+// seen at setup was changed there during the build, by someone other than its
+// tester; it is reported and left as it is.
+function gatherScript(items, repo, hashes) {
+  const R = shq(repo)
+  return items
+    .flatMap(({ spec, tree }, i) => {
+      const W = shq(tree)
+      return [
+        `git -C ${W} rev-parse --is-inside-work-tree >/dev/null 2>&1 && echo "FACTORY worktree ${i}"`,
+        `git -C ${W} -c core.quotePath=false status --porcelain --untracked-files=all | cut -c4- | sed 's/^/FACTORY changed ${i} /'`,
+        ...spec.testFiles.map(normPath).map((f, j) => {
+          const inRepo = shq(`${repo}/${f}`)
+          const inTree = shq(`${tree}/${f}`)
+          return `if [ "$(git -C ${R} hash-object -- ${shq(f)} 2>/dev/null || echo none)" != ${shq(hashes[i][j])} ]; then echo "FACTORY touched ${i} ${j}"; elif [ -f ${inTree} ]; then mkdir -p "$(dirname ${inRepo})" && cp ${inTree} ${inRepo} && echo "FACTORY copied ${i} ${j}"; else echo "FACTORY absent ${i} ${j}"; fi`
+        }),
+        `echo "FACTORY done ${i}"`,
+      ]
+    })
+    .join('\n')
+}
+
+// Reads what the gathering printed. Returns { problems, notes }: a problem
+// stops the run, a note is only logged.
+function readGather(text, items, ignoreFiles) {
+  const lines = markers(text)
+  const ignore = [...GENERATED, ...(ignoreFiles || [])]
+  const unquote = p => (p.startsWith('"') && p.endsWith('"') ? p.slice(1, -1) : p)
+  const problems = []
+  const notes = []
+  items.forEach(({ spec, tree }, i) => {
+    const mine = lines.filter(l => l[1] === String(i))
+    if (!mine.some(l => l[0] === 'worktree') || !mine.some(l => l[0] === 'done')) {
+      problems.push(`${spec.id}: its tests could not be gathered from ${tree}.`)
+      return
+    }
+    const files = spec.testFiles.map(normPath)
+    const changed = mine
+      .filter(l => l[0] === 'changed')
+      .flatMap(l => l.slice(2).join(' ').split(' -> '))
+      .map(p => normPath(unquote(p)))
+    const stray = changed.filter(f => f && !files.includes(f) && !ignore.some(e => matchesIgnore(f, e)))
+    if (stray.length > 0) problems.push(`${spec.id} tester: changed files it does not own in its worktree (${stray.join(', ')})`)
+    files.forEach((f, j) => {
+      const what = (mine.find(l => ['touched', 'copied', 'absent'].includes(l[0]) && l[2] === String(j)) || [])[0]
+      if (what === 'touched') problems.push(`${spec.id}: test file ${f} was changed in the repository during the build. Only its tester may change it, and the tester works in a worktree, so another agent did; the tester's version was not copied over it.`)
+      else if (what === 'absent') notes.push(`${spec.id}: test file ${f} is not in the tester's worktree, so nothing was gathered for it.`)
+      else if (what !== 'copied') problems.push(`${spec.id}: test file ${f} could not be copied out of the tester's worktree.`)
+    })
+  })
+  return { problems, notes }
 }
 
 // Decides pass or fail from the raw facts. An agent's own "verdict" is never
@@ -338,7 +466,7 @@ function specText(spec, contract, view) {
       : view === 'tester'
         ? [
             ...part('Test files you own (change nothing else):', bullets(spec.testFiles)),
-            ...(hasCode(spec) ? part('Source files, owned by the implementer of this spec (do not change them, and do not read the working copy):', bullets(spec.filesOwned)) : []),
+            ...(hasCode(spec) ? part('Source files, owned by the implementer of this spec (do not change them):', bullets(spec.filesOwned)) : []),
           ]
         : [
             ...part('Source files, owned by the implementer:', bullets(spec.filesOwned)),
@@ -358,13 +486,19 @@ function specText(spec, contract, view) {
   ].join('\n')
 }
 
-function header(role) {
+// `tree` is set for a tester that works in its own worktree: it is then told
+// about that directory only, not about the repository the code is built in.
+function header(role, tree) {
   return [
     `Read your role brief first: ${args.roles[role]}`,
     '',
-    `Repository: ${args.repo}`,
-    `Base commit: ${args.base}`,
-    'Work only inside that repository.',
+    ...(tree
+      ? [
+          `Worktree: ${tree}`,
+          `Base commit: ${args.base}`,
+          'This is your own checkout of the repository, as it was at the base commit. Work only inside it. Code gathers the test files you own from here when you are done.',
+        ]
+      : [`Repository: ${args.repo}`, `Base commit: ${args.base}`, 'Work only inside that repository.']),
   ].join('\n')
 }
 
@@ -580,6 +714,26 @@ function writeProgress(file, record, label, phaseTitle) {
   )
 }
 
+// Runs one of the worktree scripts. Like the recorder, this helper is not part
+// of the team and decides nothing: the script text is fixed by code and its
+// output is read by code.
+function runScript(script, label) {
+  return agent(
+    [
+      'You are a helper of a Factory run. Your only job is to run one shell script and hand back what it printed. Do not read, change or judge anything else, and do not repair or retry a command that fails.',
+      '',
+      'Run exactly this, as one command:',
+      '',
+      "bash <<'FACTORY_SCRIPT'",
+      script,
+      'FACTORY_SCRIPT',
+      '',
+      'Then reply with everything it printed, verbatim and complete, and nothing else.',
+    ].join('\n'),
+    { label, phase: 'Build', effort: 'low' },
+  )
+}
+
 function planSpecs(contract, previous, problems) {
   const redo = problems
     ? [
@@ -612,16 +766,20 @@ function buildSpec(spec, contract) {
   )
 }
 
-// Tester of one spec. It runs beside the implementer of the same spec, so the
-// tests are written from the spec and cannot be fitted to the code.
-function writeTests(spec, contract) {
+// Tester of one spec. It runs beside the implementer of the same spec and in
+// its own worktree, so the tests are written from the spec and cannot be fitted
+// to the code. `seeded` lists the test files copied into the worktree at setup.
+function writeTests(spec, contract, tree, seeded) {
   return spawn(
     [
-      header('tester'),
+      header('tester', tree),
       '',
       hasCode(spec)
-        ? 'Write the tests for this spec. It is your whole assignment. An implementer is building the code at the same time from the same spec, so the tests are expected to fail until that code is in place.'
-        : 'Write the tests for this spec. It is your whole assignment. The code under test already exists and is not being changed.',
+        ? 'Write the tests for this spec. It is your whole assignment. An implementer is building the code at the same time from the same spec, in another checkout, so the tests are expected to fail here: the new code is not in your worktree.'
+        : 'Write the tests for this spec. It is your whole assignment. No code is changed for this spec: the code under test already exists, or is being built by other specs, whose work is not in your worktree.',
+      ...(seeded.length > 0
+        ? ['', `These test files already held uncommitted changes when the run started and were copied into your worktree as they were. Build on them instead of starting over:\n${bullets(seeded)}`]
+        : []),
       '',
       specText(spec, contract, 'tester'),
     ].join('\n'),
@@ -629,12 +787,13 @@ function writeTests(spec, contract) {
   )
 }
 
-// A later session of the same tester, with fresh context: it reads the tests as
-// an outsider would, against the spec, and corrects what is wrong.
-function selfCheckTests(spec, contract, pass) {
+// A later session of the same tester, with fresh context and in the same
+// worktree: it reads the tests as an outsider would, against the spec, and
+// corrects what is wrong.
+function selfCheckTests(spec, contract, pass, tree) {
   return spawn(
     [
-      header('tester'),
+      header('tester', tree),
       '',
       `This is self-check pass ${pass} on the tests of the spec below. They were written in an earlier session of your role; you are seeing them for the first time. Check every test in the files you own against the spec, correct what is wrong, and report what you found. Change a file only to correct a fault: a pass that changes nothing is what confirms the tests, and they are then treated as the standard the code is judged by.`,
       '',
@@ -647,12 +806,12 @@ function selfCheckTests(spec, contract, pass) {
 // The tester's whole turn on one spec: write the tests, then re-check them in
 // fresh sessions until a pass leaves them untouched, at most `maxPasses` times.
 // Returns [{ result, tag }] in the order the sessions ran.
-async function testSpec(spec, contract, maxPasses) {
-  const written = await writeTests(spec, contract)
+async function testSpec(spec, contract, maxPasses, tree, seeded) {
+  const written = await writeTests(spec, contract, tree, seeded)
   const runs = [{ result: written, tag: {} }]
   if (!written || written.status !== 'done') return runs
   for (let pass = 1; pass <= maxPasses; pass++) {
-    const result = await selfCheckTests(spec, contract, pass)
+    const result = await selfCheckTests(spec, contract, pass, tree)
     runs.push({ result, tag: { selfCheck: pass } })
     if (!result || result.status !== 'done' || (result.filesChanged || []).length === 0) return runs
   }
@@ -796,6 +955,11 @@ const contract = input.contract
 const maxRepairRounds = Number.isInteger(input.maxRepairRounds) ? input.maxRepairRounds : 2
 const maxSpecRevisions = Number.isInteger(input.maxSpecRevisions) ? input.maxSpecRevisions : 2
 const maxTestChecks = Number.isInteger(input.maxTestChecks) ? input.maxTestChecks : 2
+// The testers' worktrees go inside .git by default: git does not list that
+// directory as a change, and tools that look upwards for installed
+// dependencies (node_modules) still find the repository's.
+const repo = String(input.repo || '').replace(/\/+$/, '')
+const worktrees = isBlank(input.worktrees) ? `${repo}/.git/factory-worktrees` : String(input.worktrees).replace(/\/+$/, '')
 
 const state = { outcome: 'blocked', reason: '', overview: '', risks: [], specs: [], builds: [], tests: [], repairs: [], check: null, review: null, specReviews: [], failures: [], repairRounds: 0 }
 
@@ -897,22 +1061,46 @@ if (untested.length > 0) log(`No tester for ${untested.join(', ')}: the spec nam
 
 // --- Build ------------------------------------------------------------------
 phase('Build')
-for (const level of levels) {
+for (const [n, level] of levels.entries()) {
+  for (const spec of level) progress.build[spec.id] = { impl: 'run', test: 'run' }
+  record('Build', 'running')
+
+  // Every tester of the level gets its own worktree before anyone starts, so
+  // the hashes taken at setup describe the repository before the build.
+  const trees = level.filter(hasTests).map(spec => ({ spec, tree: worktreeOf(worktrees, spec, specs) }))
+  let setup = { hashes: [], seeded: [] }
+  if (trees.length > 0) {
+    setup = readSetup(await runScript(setupScript(trees, repo, input.base), `worktrees (level ${n + 1})`), trees)
+    if (setup.problems.length > 0) {
+      return stop('blocked', `The testers' worktrees could not be prepared. ${setup.problems.join(' | ')} If the repository's .git is not a directory, pass a "worktrees" directory.`)
+    }
+  }
+
   // The implementer and the tester of a spec start together, so neither works
   // from the other's output; the tester's self-check passes run while the
   // implementer is still building. Barrier on purpose: the next level depends
   // on everything in this one.
   const jobs = level.flatMap(spec => [
     ...(hasCode(spec) ? [{ spec, role: 'implementer', allowed: spec.filesOwned }] : []),
-    ...(hasTests(spec) ? [{ spec, role: 'tester', allowed: spec.testFiles }] : []),
+    ...(hasTests(spec) ? [{ spec, role: 'tester', allowed: spec.testFiles, at: trees.findIndex(t => t.spec === spec) }] : []),
   ])
-  for (const spec of level) progress.build[spec.id] = { impl: 'run', test: 'run' }
-  record('Build', 'running')
   const results = await parallel(
-    jobs.map(j => () => (j.role === 'tester' ? testSpec(j.spec, contract, maxTestChecks) : buildSpec(j.spec, contract).then(result => [{ result, tag: {} }]))),
+    jobs.map(j => () =>
+      j.role === 'tester'
+        ? testSpec(j.spec, contract, maxTestChecks, trees[j.at].tree, setup.seeded[j.at])
+        : buildSpec(j.spec, contract).then(result => [{ result, tag: {} }]),
+    ),
   )
   const blocked = jobs.flatMap((j, i) => (results[i] || [{ result: null, tag: {} }]).map(run => settle(j, run.result, run.tag))).filter(Boolean)
   if (blocked.length > 0) return stop('blocked', `The build could not be completed. ${blocked.join(' | ')}`)
+
+  // Only now do the tests meet the code: they are copied out of the worktrees,
+  // and git says what each tester really changed there.
+  if (trees.length > 0) {
+    const gathered = readGather(await runScript(gatherScript(trees, repo, setup.hashes), `gather tests (level ${n + 1})`), trees, input.ignoreFiles)
+    for (const note of gathered.notes) log(note)
+    if (gathered.problems.length > 0) return stop('blocked', `The tests could not be gathered. ${gathered.problems.join(' | ')}`)
+  }
   for (const spec of level) progress.build[spec.id] = { impl: 'ok', test: 'ok' }
 }
 

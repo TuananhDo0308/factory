@@ -193,7 +193,7 @@ td .pill { color: var(--on-fill); border-color: var(--on-fill); font-size: 13px;
     </article>
     <article class="card fill f-check">
       <h2>Tests are the standard</h2>
-      <p>The tester writes tests from the spec without seeing the code, then re-checks them. When a test fails, the code is presumed wrong.</p>
+      <p>The tester writes tests from the spec in its own worktree, where the new code does not exist, then re-checks them. When a test fails, the code is presumed wrong.</p>
     </article>
     <article class="card fill f-build">
       <h2>Code owns the skeleton</h2>
@@ -214,7 +214,7 @@ td .pill { color: var(--on-fill); border-color: var(--on-fill); font-size: 13px;
       <div class="end fill f-plain">
         <span class="pill">chat session</span>
         <b>Contract</b>
-        <span>C1..Cn, check commands, base commit</span>
+        <span>C1..Cn, check commands, base commit, run branch</span>
       </div>
       <svg aria-hidden="true" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M13 6l6 6-6 6"></path></svg>
       <div class="script">
@@ -234,8 +234,8 @@ td .pill { color: var(--on-fill); border-color: var(--on-fill); font-size: 13px;
       <svg aria-hidden="true" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M13 6l6 6-6 6"></path></svg>
       <div class="end fill f-result">
         <span class="pill white">chat session</span>
-        <b>Report</b>
-        <span>reruns the checks itself</span>
+        <b>Merge and report</b>
+        <span>reruns the checks itself; merges only a passed run</span>
       </div>
     </div>
     <p class="note">Agents before any repair: 6 to 7 for one spec, 4N+3 to 5N+3 for N specs. A small recorder agent, not part of the team, writes this dashboard's progress file at each step. The outcome is <span class="mono">passed</span>, <span class="mono">failed</span>, or <span class="mono">blocked</span> when the run needs a decision code cannot make.</p>
@@ -246,7 +246,7 @@ td .pill { color: var(--on-fill); border-color: var(--on-fill); font-size: 13px;
     <div class="roles">
       <article class="card role fill f-spec"><span class="pill white">1 per run</span><h3>Planner</h3><p>Sees: the contract, the repo</p><span class="pill white">Read only</span></article>
       <article class="card role fill f-build"><span class="pill white">1 per spec</span><h3>Implementer</h3><p>Sees: its own spec, minus the tests to write</p><span class="pill solid">Edits source files</span></article>
-      <article class="card role fill f-build"><span class="pill white">1 per spec + self-checks</span><h3>Tester</h3><p>Sees: its own spec, minus the planned code changes. Re-checks its tests in fresh sessions, at most 2 passes</p><span class="pill solid">Edits test files</span></article>
+      <article class="card role fill f-build"><span class="pill white">1 per spec + self-checks</span><h3>Tester</h3><p>Sees: its own spec, minus the planned code changes, and a worktree at the base commit. Re-checks its tests in fresh sessions, at most 2 passes</p><span class="pill solid">Edits test files</span></article>
       <article class="card role fill f-check"><span class="pill white">1 per round</span><h3>Checker</h3><p>Sees: the check commands, the base commit</p><span class="pill white">Read only</span></article>
       <article class="card role fill f-review"><span class="pill white">1 per round</span><h3>Reviewer</h3><p>Sees: the contract, the diff, the check results, the interfaces between specs</p><span class="pill white">Read only</span></article>
       <article class="card role fill f-review"><span class="pill white">1 per spec, with 2+ specs</span><h3>Spec reviewer</h3><p>Sees: one spec and its files</p><span class="pill white">Read only</span></article>
@@ -263,6 +263,8 @@ td .pill { color: var(--on-fill); border-color: var(--on-fill); font-size: 13px;
       <li><span class="mono">maxSpecRevisions</span><span>Rejected specs go back to the planner, at most 2 times</span></li>
       <li><span class="mono">buildLevels()</span><span>Dependent specs wait; specs on one level run in parallel</span></li>
       <li><span class="mono">specText()</span><span>The implementer is not shown Tests, the tester is not shown Changes</span></li>
+      <li><span class="mono">setupScript()</span><span>Each tester works in its own git worktree at the base commit</span></li>
+      <li><span class="mono">readGather()</span><span>Git, not the tester, says what changed in the worktree. A test file changed in the repository during the build stops the run</span></li>
       <li><span class="mono">testSpec()</span><span>The tester re-checks until a pass changes nothing, at most 2 passes</span></li>
       <li><span class="mono">filesOutsideAssignment()</span><span>An agent that reports changing a file it does not own stops the run</span></li>
       <li><span class="mono">filesOutsideOwnership()</span><span>A changed file that no spec owns stops the run</span></li>

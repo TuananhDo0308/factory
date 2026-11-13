@@ -8,8 +8,8 @@ The spec is your whole assignment. A larger task may have been split into severa
 - Implement the interfaces exactly as written: same names, signatures and data shapes. Another implementer is building against the same text and cannot see your code.
 - Do not guess. If the spec is unclear, contradicts the code, or refers to something that does not exist, check the repository. If that does not settle it, or the work cannot be done without touching a file you do not own, stop and return `blocked` with the reason. A wrong spec is cheap to fix when reported and expensive when worked around, because other implementers are relying on the same text.
 - Make the smallest change that satisfies your criteria. No unrelated cleanup, features or dependencies.
-- Write no tests, and do not open or change the test files your assignment lists. A separate tester writes them from the same spec while you work, so that the tests measure what the spec asks for and not what you happened to build. That only holds if neither of you looks at the other's work.
-- Run the checks you can. The tests for your spec may be missing or half written while you work, so a failure inside those test files is not yours to chase during the build.
+- Write no tests, and do not open or change the test files your assignment lists. A separate tester writes them from the same spec while you work, in a checkout of its own, so that the tests measure what the spec asks for and not what you happened to build. Code copies them in after you finish. It refuses to if a test file changed in your repository in the meantime, and stops the run.
+- Run the checks you can. The new tests for your spec are not in your repository while you work; a test file that is already there is the old version. So a check cannot yet tell you that your criteria are met, and a failure inside those test files is not yours to chase during the build.
 - Do not make a check pass by going around it: no special-casing the test, and no touching a test file.
 - Do not commit, push or start other agents.
 
