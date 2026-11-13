@@ -129,3 +129,24 @@ test('runRecord shows the run from raw state', () => {
   const early = h.runRecord(run, contract, { specs: [] }, { phase: 'Spec', outcome: 'running', levels: 0, build: {}, repairs: [] })
   assert.deepEqual(early.criteria.map(c => c.status), ['', ''])
 })
+
+test('scratchDir gives every agent label its own directory under the worktrees dir', () => {
+  const labels = ['planner', 'build S1', 'test S1', 'self-check 1 S1', 'self-check 2 S1', 'review S1', 'review S1 (round 1)', 'fixer (round 1)', 'checker', 'checker (round 1)']
+  const dirs = labels.map(l => h.scratchDir('/w', l))
+  assert.equal(new Set(dirs).size, labels.length)
+  for (const d of dirs) assert.match(d, /^\/w\/scratch\/[a-z0-9]+(-[a-z0-9]+)*$/)
+  assert.equal(h.scratchDir('/w', 'review S1 (round 1)'), '/w/scratch/review-s1-round-1')
+})
+
+test('scratchDir never leaves the scratch folder, whatever the label', () => {
+  assert.equal(h.scratchDir('/w', '../../etc'), '/w/scratch/etc')
+  assert.equal(h.scratchDir('/w', ''), '/w/scratch/agent')
+  assert.equal(h.scratchDir('/w', '///'), '/w/scratch/agent')
+  assert.equal(h.scratchDir('/w', undefined), '/w/scratch/agent')
+})
+
+test('scratchNote names the directory and forbids links into the repository', () => {
+  const note = h.scratchNote('/w/scratch/test-s1')
+  assert.match(note, /^Scratch directory: \/w\/scratch\/test-s1\n/)
+  assert.match(note, /Never create a link/)
+})

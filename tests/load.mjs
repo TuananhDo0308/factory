@@ -11,6 +11,7 @@ const NAMES = [
   'validateSpecs', 'buildLevels', 'matchesIgnore', 'filesOutsideOwnership', 'filesOutsideAssignment',
   'sharedPaths', 'worktreeOf', 'setupScript', 'readSetup', 'gatherScript', 'readGather',
   'evaluate', 'sourceFiles', 'splitFailures', 'runRecord', 'specText', 'contractText',
+  'scratchDir', 'scratchNote',
 ]
 
 const file = fileURLToPath(new URL('../factory/workflow/factory.js', import.meta.url))

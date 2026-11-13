@@ -264,6 +264,7 @@ td .pill { color: var(--on-fill); border-color: var(--on-fill); font-size: 13px;
       <li><span class="mono">buildLevels()</span><span>Dependent specs wait; specs on one level run in parallel</span></li>
       <li><span class="mono">specText()</span><span>The implementer is not shown Tests, the tester is not shown Changes</span></li>
       <li><span class="mono">setupScript()</span><span>Each tester works in its own git worktree at the base commit, with the repository's ignored dependencies and local config (node_modules, .venv, .env) linked in so its tests can run</span></li>
+      <li><span class="mono">scratchDir()</span><span>Every agent gets a scratch folder of its own, so no agent can delete another's files or write through a link another made into the repository</span></li>
       <li><span class="mono">readGather()</span><span>Git, not the tester, says what changed in the worktree. A test file changed in the repository during the build stops the run</span></li>
       <li><span class="mono">testSpec()</span><span>The tester re-checks until a pass changes nothing, at most 2 passes</span></li>
       <li><span class="mono">filesOutsideAssignment()</span><span>An agent that reports changing a file it does not own stops the run</span></li>

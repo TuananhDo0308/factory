@@ -520,6 +520,26 @@ function specText(spec, contract, view) {
 // `tree` is set for a tester that works in its own worktree: it is then told
 // about that directory only, not about the repository the code is built in.
 // `shared` lists what code linked into that worktree from the repository.
+// The scratch directory of one agent: `<worktrees>/scratch/<label as a slug>`.
+// Agents of a run otherwise share their session's scratchpad, so two of them
+// could pick the same folder name: one would then delete the other's files, or
+// write through a link the other made, into the repository itself. Labels are
+// unique within a run, so the directories are too.
+function scratchDir(worktrees, label) {
+  const slug = String(label || 'agent')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+  return `${worktrees}/scratch/${slug || 'agent'}`
+}
+
+function scratchNote(dir) {
+  return [
+    `Scratch directory: ${dir}`,
+    'Put every temporary file you need (stubs, configs, copies, scratch repositories) in that directory, creating it if needed, and nowhere else: other agents of this run work at the same time, and a shared scratch area lets them delete or write through each other\'s files. Never create a link there to anything in the repository, its installed dependencies included: a write through such a link lands in the repository.',
+  ].join('\n')
+}
+
 function header(role, tree, shared) {
   return [
     `Read your role brief first: ${args.roles[role]}`,
@@ -723,11 +743,12 @@ const REVIEW_SCHEMA = {
 // ---------------------------------------------------------------------------
 
 // Every agent of the team is started through here, so the run can report how
-// many it used. The recorder below is not counted: it is not part of the team.
+// many it used, and each gets a scratch directory of its own. The recorder
+// below is not counted: it is not part of the team.
 let started = 0
 function spawn(prompt, opts) {
   started++
-  return agent(prompt, opts)
+  return agent(`${prompt}\n\n${scratchNote(scratchDir(worktrees, opts.label))}`, opts)
 }
 
 // A script cannot write files, so a small agent writes the dashboard's progress
