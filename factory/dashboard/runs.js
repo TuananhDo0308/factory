@@ -790,5 +790,532 @@ window.FACTORY_RUNS = [
   ],
   "seconds": 3190,
   "note": "XS Factory Bench issue #2, slice 3. First pass blocked: a separate session of the owner wrote grader/ and pnpm-workspace.yaml into the working tree during the run; resumed with those in ignoreFiles (cached agents replayed). Passed after 1 repair round. Rerun by the session: all four checks exit 0 (568 tests, grader tests included). Seconds span both passes, including the pause between them."
+},
+{
+  "id": "2026-11-14-xfb-pricing-normalize",
+  "title": "xfb #3.1: pricing and normalize",
+  "outcome": "passed",
+  "reason": "All checks pass and every criterion is met after 1 repair round(s).",
+  "phase": "Repair",
+  "agents": 17,
+  "repairRounds": 1,
+  "maxRepairRounds": 2,
+  "specLine": "2 spec(s) · 2 level(s)",
+  "specs": [
+    {
+      "id": "S1",
+      "title": "Dated price tables and the pricing function",
+      "impl": "ok",
+      "test": "ok",
+      "waitFor": "",
+      "testNote": "Self-check 1: nothing changed"
+    },
+    {
+      "id": "S2",
+      "title": "normalize: raw events to derived records, with golden cases",
+      "impl": "ok",
+      "test": "ok",
+      "waitFor": "S1",
+      "testNote": "Self-check 1: nothing changed"
+    }
+  ],
+  "check": {
+    "text": "test: exit 0 · typecheck: exit 0 · lint: exit 0",
+    "state": "ok"
+  },
+  "review": [
+    {
+      "tag": "whole change",
+      "text": "7/7 criteria met",
+      "state": "ok"
+    },
+    {
+      "tag": "S1",
+      "text": "3/3 criteria met",
+      "state": "ok"
+    },
+    {
+      "tag": "S2",
+      "text": "5/5 criteria met",
+      "state": "ok"
+    }
+  ],
+  "repairs": [
+    {
+      "round": 1,
+      "text": "5 failure(s) sent to fixer, S1 tester",
+      "state": "ok"
+    }
+  ],
+  "criteria": [
+    {
+      "id": "C1",
+      "text": "`pricing/prices/2026-11-14.json` exists and holds, per model id, USD prices per million tokens for `input`, `output`, `cache_write_5m`, `cache_write_1h` and `cache_read`, plus top-level `effective_date: \"2026-11-14\"` and a `source` string. Rows (input/output/cache_write_5m/cache_write_1h/cache_read): claude-fable-5-2 and claude-mythos-5-2 8/40/10/16/0.20; claude-fable-5-1 and claude-mythos-5-1 10/50/12.5/20/0.25; claude-fable-5 and claude-mythos-5 10/50/12.5/20/1.00; claude-opus-5-5 4/20/5/8/0.20; claude-opus-5, claude-opus-4-8, claude-opus-4-7, claude-opus-4-6 5/25/6.25/10/0.50; claude-sonnet-5-5 2/10/2.5/4/0.10; claude-sonnet-5 2/10/2.5/4/0.20; claude-sonnet-4-6 3/15/3.75/6/0.30; claude-haiku-5-5 0.10/0.50/0.125/0.20/0.01 with an optional `long_context` tier {threshold_input_tokens: 100000, input: 0.50, output: 2.50, cache_write_5m: 0.625, cache_write_1h: 1.00, cache_read: 0.05}; claude-haiku-4-5 1/5/1.25/2/0.10. The file is valid against the price-table schema exported by packages/core/pricing.ts, and a test checks that.",
+      "status": "met"
+    },
+    {
+      "id": "C2",
+      "text": "`packages/core/pricing.ts` (exported as `@xfb/core/pricing`) is pure (no files, network, env or clock; tables are passed in as arguments) and provides: a zod schema for one price table; selection of the table in effect at an event timestamp (the table with the latest `effective_date` on or before the timestamp's UTC date; none when every table is later); and pricing of one request's usage (the existing `Usage` type of @xfb/core/transcript: input, output, cacheRead, cacheWrite, optional cacheWrite5m/cacheWrite1h) for a model id at a timestamp, returning `{ costUsd, provenance, priceVersion, unpricedReason }` where provenance is `estimated` when priced from a table and `unpriced` when it cannot be priced (costUsd then undefined, never 0, and unpricedReason says why). Model ids match exactly, or after removing a trailing `-YYYYMMDD` date suffix. Cache writes are priced from cacheWrite5m and cacheWrite1h; when cacheWrite > 0 and that split is missing or does not add up to cacheWrite, the request is unpriced (reason names the missing split). The long_context tier applies to a request whose input + cacheRead + cacheWrite exceeds the threshold. Unknown model or no table in effect gives unpriced. Results are rounded to no more than 1e-9 USD error (use integer micro-dollar math or document the rounding).",
+      "status": "met"
+    },
+    {
+      "id": "C3",
+      "text": "`packages/core/normalize/` (exported as `@xfb/core/normalize`) is pure and exports a type for a stored raw event `{ seq, source, personId, spec, id, attemptId, type, ts, receivedAt, payload, rejected }` (seq: insertion order number; rejected: list of `{path, message}` field errors or null) and a function `normalize(events, { priceTables })` returning derived records: `attempts`, `agentRuns`, `usage`, `gates`, `stages`, `grades` and `rejected`. Events are deduplicated by (personId, id), keeping the lowest seq; rejected events go only into `rejected` (with personId, id, type, receivedAt and their errors) and feed no other table; accepted events are applied in order of ts, then seq. Output arrays are sorted deterministically, so the same set of events given in any order yields a deep-equal result.",
+      "status": "met"
+    },
+    {
+      "id": "C4",
+      "text": "Derived records from factorybench/v1 events: one `attempts` record per (personId, attemptId) with track (`benchmark` when the attempt has any bench.stage or bench.grade event, else `real`), startedAt (from attempt.started), finishedAt and status and reason (from attempt.finished), factoryConfigVersion and baseCommit (from attempt.started), prUrls (from pr.linked), eventCount and rejectedCount; unknown values are left undefined, not 0 or empty string. `agentRuns`: one per (personId, attemptId, agent_id) seen in activity or usage events, with parentAgentId (payload `parent_agent_id`, if given), role (payload `role`, if given), firstTs, lastTs and activityCount. `usage`: one record per usage event with attemptId, agentId (payload `agent_id`, if given), model (payload `model`), ts, the four token classes (+ optional 5m/1h split from payload `cache_creation` `{ephemeral_5m_input_tokens, ephemeral_1h_input_tokens}` if given), and cost: provenance `reported` with that cost when payload `cost_usd` is a number, otherwise the result of C2's pricing (`estimated` or `unpriced`), plus priceVersion. `gates`: name, passed, reason, ts per gate event. human.* events count toward eventCount only.",
+      "status": "met"
+    },
+    {
+      "id": "C5",
+      "text": "Derived records from xfb/v1 benchmark events: `stages`, one per (personId, attemptId, stage name) from bench.stage payloads (the existing stage.json schema of @xfb/contract): stage, status, startedAt, finishedAt, durationMs if present and errorKind/errorMessage when the record has an error; a later event (by ts, then seq) for the same stage replaces the earlier one. `grades`, one per (personId, attemptId) from bench.grade payloads: passed (boolean if present), failToPass and passToPass arrays of {name, passed} when present; a malformed field is left undefined rather than throwing. Other xfb/v1 types (factory.*, agent.transcript, git.followup) count toward eventCount but produce no records in this change.",
+      "status": "met"
+    },
+    {
+      "id": "C6",
+      "text": "Golden tests: `testdata/golden/<case>/events.json` (an array of stored raw events) and `expected.json` (the exact normalize output, with the 2026-11-14 price table passed in) for at least these cases: `duplicate-ids` (the same id sent twice by one person, and the same id by two different people, which are not duplicates), `out-of-order` (events whose seq order differs from ts order), `rejected-event` (a rejected event stored with its errors that appears only in `rejected`), `nested-subagents` (activity and usage for a parent agent and two levels of subagents linked by parent_agent_id), and `pricing` (a reported cost, an estimated cost, an unknown model, a cache write without the 5m/1h split, and a model id with a date suffix). A `node --test` file under packages/core/normalize/ runs every case directory it finds and deep-compares; a mismatch names the case. The JSON files pass `biome check`.",
+      "status": "met"
+    },
+    {
+      "id": "C7",
+      "text": "Unit tests under packages/core cover every rule of C2-C5 that the golden cases do not; packages/core/package.json exports `./pricing` and `./normalize`; docs/architecture.md (the \"Built so far\" sentence and the repository layout if it changes) and the status paragraph of CLAUDE.md say that pricing.ts, the 2026-11-14 price table, normalize and the golden cases exist; README.md (Vietnamese) is updated where it lists what exists. `pnpm test`, `pnpm typecheck` and `pnpm lint` all exit 0.",
+      "status": "met"
+    }
+  ],
+  "seconds": 1568,
+  "note": "XS Factory Bench issue #3, slice 1. Passed after 1 repair round (a tester's miscounted model-id assertion, corrected by the tester; no code change). Rerun by the session: test (753), typecheck and lint exit 0."
+},
+{
+  "id": "2026-11-14-xfb-db-replay",
+  "title": "xfb #3.2: database and replay",
+  "outcome": "failed",
+  "reason": "Repair round 1 could not be carried out. fixer: The only failure, `pnpm test` exiting 1, comes from apps/cli/bench/pipeline/run-stage.test.ts:350-363. That test requires apps/cli/package.json dependencies to be exactly {@xfb/contract, @xfb/core, @xfb/grader}. apps/cli/package.json also has '@xfb/db': 'workspace:*'. The base commit 6879ce3 added that line, so the test already failed before this change. I checked with `git show 6879ce3`: it changed apps/cli/package.json and left the test as it was. Neither file is in the map. The test file is not mine to change, and apps/cli/package.json is not among the source files I may change. Removing the dependency would also be wrong: C6 needs the CLI to import @xfb/db (apps/cli/replay.ts and apps/cli/commands/replay.ts), and the base commit added the dep for exactly that. No source file I own can fix this. One of two changes is needed. Either the expectation at lines 359-363 of apps/cli/bench/pipeline/run-stage.test.ts gains '@xfb/db': 'workspace:*' (the reviewer's recommended fix; it is a stale assertion, not a code defect), or the map gives that test file to a tester or the run's owner to correct. Then `pnpm test` should exit 0: the other 861 tests pass, and typecheck and lint already exit 0.",
+  "phase": "Repair",
+  "agents": 17,
+  "repairRounds": 1,
+  "maxRepairRounds": 2,
+  "specLine": "3 spec(s) · 2 level(s)",
+  "specs": [
+    {
+      "id": "S1",
+      "title": "normalize: dedupe among accepted events only",
+      "impl": "ok",
+      "test": "ok",
+      "waitFor": "",
+      "testNote": "Self-check 1: nothing changed"
+    },
+    {
+      "id": "S2",
+      "title": "packages/db: schema, migrations, intake and replay",
+      "impl": "ok",
+      "test": "ok",
+      "waitFor": "",
+      "testNote": "Self-check 2: tests corrected"
+    },
+    {
+      "id": "S3",
+      "title": "xfb replay command and docs",
+      "impl": "ok",
+      "test": "ok",
+      "waitFor": "S2",
+      "testNote": "Self-check 1: nothing changed"
+    }
+  ],
+  "check": {
+    "text": "test: exit 1 · typecheck: exit 0 · lint: exit 0",
+    "state": "fail"
+  },
+  "review": [
+    {
+      "tag": "whole change",
+      "text": "6/7 criteria met, 1 blocking finding(s)",
+      "state": "fail"
+    },
+    {
+      "tag": "S1",
+      "text": "1/1 criteria met",
+      "state": "ok"
+    },
+    {
+      "tag": "S2",
+      "text": "4/4 criteria met",
+      "state": "ok"
+    },
+    {
+      "tag": "S3",
+      "text": "1/2 criteria met",
+      "state": "fail"
+    }
+  ],
+  "repairs": [
+    {
+      "round": 1,
+      "text": "4 failure(s) sent to fixer",
+      "state": "run"
+    }
+  ],
+  "criteria": [
+    {
+      "id": "C1",
+      "text": "packages/core/normalize changes its dedupe rule: events are deduplicated by (personId, id) among ACCEPTED events only (lowest seq wins); every rejected event is listed in `rejected` and never hides an accepted event with the same id; an empty id is never a duplicate. A golden case `rejected-then-resent` (a rejected event followed by a corrected resend with the same id from the same person: the resend is applied and the rejected one is listed) is added, existing golden cases and unit tests are updated only where this rule changes their result, and the module's comments say the new rule.",
+      "status": "met"
+    },
+    {
+      "id": "C2",
+      "text": "packages/db (package `@xfb/db`, its package.json already exists with workspace deps on @xfb/contract and @xfb/core and must keep them; all third-party packages it uses, drizzle-orm 0.45.4, pg 8.23.1, @electric-sql/pglite 0.5.12, drizzle-kit 0.31.11, are already in the root package.json and must not be added elsewhere) has a Drizzle schema (drizzle-orm/pg-core) with: table `events` with columns seq (identity primary key, insertion order), source, person_id, spec, id, attempt_id, type, ts (text, as received), received_at (timestamptz), payload (jsonb), raw (jsonb, the whole body as received, set only for rejected events) and rejected (jsonb list of {path, message}, null when accepted); a unique index on (person_id, id) restricted to accepted events with a non-empty id; and one derived table per record type of @xfb/core/normalize (attempts, agent_runs, usage, gates, stages, grades, rejected_events) whose columns hold every field of that record (nullable where the field is optional; arrays such as prUrls, failToPass and passToPass as jsonb).",
+      "status": "met"
+    },
+    {
+      "id": "C3",
+      "text": "Migrations are SQL files generated by drizzle-kit into packages/db/migrations/ (with drizzle's meta journal) from packages/db/drizzle.config.ts, and a `migrate(db)` function applies them to a fresh database for both drivers. `openDb(url)` returns a Drizzle database for a `postgres://` or `postgresql://` url (node-postgres Pool) or for `memory:` (in-memory PGlite) or `pglite:<absolute dir>` (PGlite on disk), plus a `close()`; any other url throws an error that names the accepted forms. Nothing in packages/db reads environment variables or the clock: the caller passes urls and times in.",
+      "status": "met"
+    },
+    {
+      "id": "C4",
+      "text": "`ingestEvents(db, { personId, receivedAt, events })` takes an array of raw request bodies (unknown values), validates each with `validateEvent` of @xfb/contract, stores accepted events (a resend of an accepted (person_id, id) is not stored again and counts as a duplicate) and stores every rejected one with its field errors (id, type, ts, attempt_id stored when they are strings, else empty string; payload stored when it is a plain object, else {}; raw holds the whole body; source `contract`). It returns `{ accepted, duplicates, rejected, results }` where results has one entry per input index: `{ index, status: 'accepted' | 'duplicate' | 'rejected', errors? }`, errors naming the field path (for example `payload.status`). person_id always comes from the argument, never from the body.",
+      "status": "met"
+    },
+    {
+      "id": "C5",
+      "text": "`replay(db, { priceTables })` reads every row of `events` in seq order, maps rows to the stored-event type of @xfb/core/normalize, runs normalize and, in one transaction, empties every derived table and inserts the result, returning the number of rows written per table. `readDerived(db)` reads the derived tables back into the exact shape normalize returns (null columns become absent fields, the same deterministic order). Tests (PGlite in memory) show: for every golden case in testdata/golden, ingesting its accepted events and running replay gives `readDerived` deep-equal to `normalize` of the same stored rows; sending the same event twice stores one row; an event with a schema error is rejected with an error naming the field and appears in rejected_events; emptying the derived tables (or corrupting a row) and running replay again gives exactly the same derived data as before; replay twice in a row is idempotent.",
+      "status": "met"
+    },
+    {
+      "id": "C6",
+      "text": "`xfb replay [--db <url>] [--prices <dir>]` in apps/cli: the database url comes from --db, else env XFB_DATABASE_URL, else env DATABASE_URL, else it is a usage error (exit 2) saying so; price tables are read from every `*.json` in --prices (default: the repository's pricing/prices/ resolved from the CLI module's own location), each validated with the price-table schema of @xfb/core/pricing (an invalid file is an error naming the file); it runs migrate then replay and prints one line per derived table with its row count, exit 0. File reads go through apps/cli/adapters/files.ts; the command file in apps/cli/commands/ is glue only; USAGE in main.ts lists the command. A test runs it against a `pglite:` directory under the OS temp dir with a seeded events table and checks the output and exit code.",
+      "status": "met"
+    },
+    {
+      "id": "C7",
+      "text": "docs/architecture.md (Built so far, and the layout/data-model text if it changes), the status paragraph of CLAUDE.md and README.md (Vietnamese, where it lists what exists) say packages/db, migrations, intake, replay and `xfb replay` exist. `pnpm test`, `pnpm typecheck` and `pnpm lint` exit 0, and no test needs a running Postgres server, network access or a file outside the OS temp dir.",
+      "status": "not_met"
+    }
+  ],
+  "seconds": 1876,
+  "note": "XS Factory Bench issue #3, slice 2. Failed only on a stale assertion in apps/cli/bench/pipeline/run-stage.test.ts (exact apps/cli dependency list) that the session's own pre-run commit broke by adding @xfb/db; C1-C6 judged met. The work was committed on the run branch and finished by a follow-up run (2026-11-14-xfb-db-deps-test)."
+},
+{
+  "id": "2026-11-14-xfb-db-deps-test",
+  "title": "xfb #3.2: CLI dependency test",
+  "outcome": "passed",
+  "reason": "All checks pass and every criterion is met.",
+  "phase": "Review",
+  "agents": 4,
+  "repairRounds": 0,
+  "maxRepairRounds": 2,
+  "specLine": "1 spec(s) · 1 level(s)",
+  "specs": [
+    {
+      "id": "S1",
+      "title": "CLI package layout test expects the @xfb/db dependency",
+      "impl": "none",
+      "test": "ok",
+      "waitFor": "",
+      "testNote": "Self-check 1: nothing changed"
+    }
+  ],
+  "check": {
+    "text": "test: exit 0 · typecheck: exit 0 · lint: exit 0",
+    "state": "ok"
+  },
+  "review": [
+    {
+      "tag": "whole change",
+      "text": "2/2 criteria met",
+      "state": "ok"
+    }
+  ],
+  "repairs": [],
+  "criteria": [
+    {
+      "id": "C1",
+      "text": "The test 'apps/cli/package.json declares @xfb/cli with the xfb bin and workspace deps only' in apps/cli/bench/pipeline/run-stage.test.ts expects exactly the dependencies {@xfb/contract, @xfb/core, @xfb/db, @xfb/grader}, each 'workspace:*', and still checks the package name, the xfb bin and that there are no third-party dependencies, as it did before.",
+      "status": "met"
+    },
+    {
+      "id": "C2",
+      "text": "No other file changes; `pnpm test`, `pnpm typecheck` and `pnpm lint` exit 0.",
+      "status": "met"
+    }
+  ],
+  "seconds": 246,
+  "note": "Follow-up of 2026-11-14-xfb-db-replay: one spec written by the session (tests only), updating the stale dependency assertion. First attempt blocked because the hand-written spec lacked the tests field. Rerun by the session: test (862), typecheck and lint exit 0."
+},
+{
+  "id": "2026-11-14-xfb-api-ingest",
+  "title": "xfb #3.3: ingest API",
+  "outcome": "passed",
+  "reason": "All checks pass and every criterion is met after 1 repair round(s).",
+  "phase": "Repair",
+  "agents": 31,
+  "repairRounds": 1,
+  "maxRepairRounds": 2,
+  "specLine": "5 spec(s) · 3 level(s)",
+  "specs": [
+    {
+      "id": "S1",
+      "title": "people, api_tokens and artifacts in packages/db",
+      "impl": "ok",
+      "test": "ok",
+      "waitFor": "",
+      "testNote": "Self-check 2: nothing changed"
+    },
+    {
+      "id": "S2",
+      "title": "NUL-safe intake and normalize ignoring non-contract sources",
+      "impl": "ok",
+      "test": "ok",
+      "waitFor": "",
+      "testNote": "Self-check 1: nothing changed"
+    },
+    {
+      "id": "S3",
+      "title": "apps/api: createApp, ingest routes, artifact store and server",
+      "impl": "ok",
+      "test": "ok",
+      "waitFor": "S1, S2",
+      "testNote": "Self-check 1: nothing changed"
+    },
+    {
+      "id": "S4",
+      "title": "xfb token create",
+      "impl": "ok",
+      "test": "ok",
+      "waitFor": "S1, S3",
+      "testNote": "Self-check 1: nothing changed"
+    },
+    {
+      "id": "S5",
+      "title": "Docs: architecture, CLAUDE.md and README status",
+      "impl": "ok",
+      "test": "none",
+      "waitFor": "",
+      "testNote": ""
+    }
+  ],
+  "check": {
+    "text": "test: exit 0 · typecheck: exit 0 · lint: exit 0",
+    "state": "ok"
+  },
+  "review": [
+    {
+      "tag": "whole change",
+      "text": "8/8 criteria met",
+      "state": "ok"
+    },
+    {
+      "tag": "S1",
+      "text": "2/2 criteria met",
+      "state": "ok"
+    },
+    {
+      "tag": "S2",
+      "text": "2/2 criteria met",
+      "state": "ok"
+    },
+    {
+      "tag": "S3",
+      "text": "6/6 criteria met",
+      "state": "ok"
+    },
+    {
+      "tag": "S4",
+      "text": "2/2 criteria met",
+      "state": "ok"
+    },
+    {
+      "tag": "S5",
+      "text": "1/1 criteria met",
+      "state": "ok"
+    }
+  ],
+  "repairs": [
+    {
+      "round": 1,
+      "text": "9 failure(s) sent to fixer, S3 tester",
+      "state": "ok"
+    }
+  ],
+  "criteria": [
+    {
+      "id": "C1",
+      "text": "packages/db gains tables `people` (id text primary key, github_login text unique not null, created_at timestamptz), `api_tokens` (id text primary key, person_id references people, token_hash text unique not null, label text, created_at timestamptz, revoked_at timestamptz null, last_used_at timestamptz null) and `artifacts` (id text primary key, person_id, attempt_id text, kind text, sha256 text, size_bytes bigint/integer, location text, created_at timestamptz; unique (person_id, sha256)), in a new drizzle-kit migration added after the existing one (the existing 0000 migration file is not edited). Exported functions, which never read env, clock or randomness (ids, hashes and times are passed in): `ensurePerson(db, { id, githubLogin, createdAt })` (returns the existing person for that login, else inserts), `createToken(db, { id, personId, tokenHash, label, createdAt })`, `revokeToken(db, { id, personId, revokedAt })`, `findPersonByTokenHash(db, tokenHash, usedAt)` (returns `{ personId, tokenId }` for a non-revoked token and sets last_used_at, else undefined), `listTokens(db, personId)` (never returns hashes), and `recordArtifact(db, {...})` (returns `{ artifact, duplicate }`, duplicate true when (person_id, sha256) already exists, keeping the first row).",
+      "status": "met"
+    },
+    {
+      "id": "C2",
+      "text": "ingestEvents never throws on a body it can store: a string anywhere in a body that contains U+0000 (which Postgres text and jsonb cannot hold) makes that event rejected with an error whose path names the field and whose message says it contains a NUL character, and its raw is stored with each U+0000 replaced by U+FFFD; a rejected body that is JSON null is stored with raw as the jsonb value null, distinguishable from an accepted row (raw IS NULL). @xfb/core/normalize ignores every stored event whose source is not `contract` (it appears in no derived table and no count), with a golden case `non-contract-source` showing an otlp event next to contract events.",
+      "status": "met"
+    },
+    {
+      "id": "C3",
+      "text": "apps/api exports `createApp(deps)` returning a Hono app, where deps holds `db` (a @xfb/db Db), `priceTables`, `now(): Date`, `newId(): string`, and an artifact store `{ put(sha256, bytes): Promise<string /* location */> }`; the app itself reads no env, clock, randomness or files except through deps. Every /v1 route requires `Authorization: Bearer <token>`; the token is hashed with SHA-256 (hex) and looked up with findPersonByTokenHash; a missing, unknown or revoked token gives 401 JSON `{ error }`. `GET /healthz` gives 200 `{ ok: true }` without auth; `GET /v1/me` gives `{ personId, githubLogin }`. person_id always comes from the token, never from a body. Route handlers catch unexpected errors, log them through a `log(entry)` dep, and answer 500 JSON `{ error, errorId }`; they never answer 2xx for something that was not stored.",
+      "status": "met"
+    },
+    {
+      "id": "C4",
+      "text": "`POST /v1/events` accepts a JSON array of events or a single event object (treated as an array of one), up to 1000 events and 5 MB (larger gives 413); a body that is not JSON, or JSON that is neither an object nor an array, gives 400 with an error saying so. It calls ingestEvents with receivedAt = now(), then, when at least one event was accepted, runs replay with the price tables, and answers 200 `{ accepted, duplicates, rejected, results }` exactly as ingestEvents returned. Tests show: the same event sent twice is stored once (second response counts it as a duplicate); a factorybench/v1 event and an xfb/v1 event are both accepted; an event with a schema error is rejected with an error naming the field (for example payload.status) and is stored in events and rejected_events; derived tables reflect accepted events after the call.",
+      "status": "met"
+    },
+    {
+      "id": "C5",
+      "text": "`POST /v1/artifacts?kind=<transcript|diff|log|other>&attempt_id=<id>` takes the raw request body (any content type, up to 50 MB, larger gives 413; empty body or unknown kind gives 400), computes its SHA-256, compares it with header `x-xfb-sha256` when that header is given (mismatch gives 400 and nothing stored), stores the bytes through the artifact store and records the row; it answers 200 `{ id, sha256, sizeBytes, duplicate }`, and an upload of bytes the same person already uploaded is a duplicate that returns the first row's id without storing again. A filesystem artifact store `createFileArtifactStore(dir)` in apps/api writes content-addressed files at `<dir>/<first 2 hex>/<sha256>` (write to a temp file then rename) and returns that path relative to dir.",
+      "status": "met"
+    },
+    {
+      "id": "C6",
+      "text": "`POST /v1/logs` accepts an OTLP/HTTP JSON ExportLogsServiceRequest (`resourceLogs[].resource.attributes`, `resourceLogs[].scopeLogs[].logRecords[]` with `timeUnixNano`, `attributes`, `body`). Before anything is stored, attributes with keys `user.email`, `user.account_uuid`, `user.account_id` and `organization.id` are removed from the resource and from every log record. Each log record becomes one row in events with source `otlp`, spec `otlp`, type = the record's `event.name` attribute (else `otlp.log`), ts from timeUnixNano as ISO-8601 (else receivedAt), attempt_id = the `session.id` attribute (else empty string), id = SHA-256 hex of the scrubbed record together with its scrubbed resource attributes (so a resend is a duplicate), payload `{ resource: <scrubbed resource attributes>, record: <scrubbed record> }`, rejected null. It answers 200 with `{}` when all records were stored or duplicates, or `{ partialSuccess: { rejectedLogRecords, errorMessage } }` for records it could not take; a body that is not an object with a resourceLogs array gives 400. A test sends a record carrying all four personal attributes at both levels and shows none of them, nor their values, appear anywhere in the stored row.",
+      "status": "met"
+    },
+    {
+      "id": "C7",
+      "text": "apps/api/server.ts (the only file in apps/api that reads env, clock, randomness or files) reads PORT (default 8787), DATABASE_URL (required; exits 1 with a message naming it when missing), XFB_ARTIFACTS_DIR (required likewise) and the price tables from the repository's pricing/prices/*.json (validated with the @xfb/core/pricing schema), runs migrate, and serves createApp with @hono/node-server. `xfb token create --login <github login> [--label <text>] [--db <url>]` in apps/cli (db url from --db, else XFB_DATABASE_URL, else DATABASE_URL, else usage error exit 2) migrates, ensures the person, creates a token `xfb_` + 32 random bytes in base64url, stores only its SHA-256 hex hash, and prints the token once with a line saying it cannot be shown again; USAGE in apps/cli/main.ts lists it; a test runs it against a `pglite:` dir under the OS temp dir and then shows the printed token authenticates against createApp (GET /v1/me) and that the database holds only the hash. The root package.json gains a script `api` that starts apps/api/server.ts.",
+      "status": "met"
+    },
+    {
+      "id": "C8",
+      "text": "docs/architecture.md (Built so far; data model text for the new tables and the otlp events), the status paragraph of CLAUDE.md and README.md (Vietnamese) say apps/api, the three ingest routes, tokens and `xfb token create` exist. Existing package layout tests keep passing (apps/cli/package.json is not changed; all third-party packages, including hono 4.13.14 and @hono/node-server 2.1.5, stay declared in the root package.json only; apps/api/package.json keeps its workspace deps). `pnpm test`, `pnpm typecheck` and `pnpm lint` exit 0; no test needs a network, a Postgres server or files outside the OS temp dir.",
+      "status": "met"
+    }
+  ],
+  "seconds": 25935,
+  "note": "XS Factory Bench issue #3, slice 3. Passed after 1 repair round (test-fixture defaults fixed by the testers; no source change). Rerun by the session: test (1025), typecheck and lint exit 0."
+},
+{
+  "id": "2026-11-14-xfb-web-auth",
+  "title": "xfb #3.4: login, Settings, web shell",
+  "outcome": "passed",
+  "reason": "All checks pass and every criterion is met after 1 repair round(s).",
+  "phase": "Repair",
+  "agents": 31,
+  "repairRounds": 1,
+  "maxRepairRounds": 2,
+  "specLine": "5 spec(s) · 4 level(s)",
+  "specs": [
+    {
+      "id": "S1",
+      "title": "sessions table and db functions",
+      "impl": "ok",
+      "test": "ok",
+      "waitFor": "",
+      "testNote": "Self-check 1: nothing changed"
+    },
+    {
+      "id": "S2",
+      "title": "GitHub OAuth, cookie sessions and /api token routes in createApp",
+      "impl": "ok",
+      "test": "ok",
+      "waitFor": "S1",
+      "testNote": "Self-check 1: nothing changed"
+    },
+    {
+      "id": "S3",
+      "title": "server.ts: env, real GitHub client and web static serving",
+      "impl": "ok",
+      "test": "ok",
+      "waitFor": "S2",
+      "testNote": "Self-check 1: nothing changed"
+    },
+    {
+      "id": "S4",
+      "title": "apps/web dashboard shell with login and Settings",
+      "impl": "ok",
+      "test": "ok",
+      "waitFor": "",
+      "testNote": "Self-check 1: nothing changed"
+    },
+    {
+      "id": "S5",
+      "title": "Railway deployment files and docs",
+      "impl": "ok",
+      "test": "ok",
+      "waitFor": "S2, S3, S4",
+      "testNote": "Self-check 1: nothing changed"
+    }
+  ],
+  "check": {
+    "text": "test: exit 0 · typecheck: exit 0 · lint: exit 0 · build-web: exit 0",
+    "state": "ok"
+  },
+  "review": [
+    {
+      "tag": "whole change",
+      "text": "7/7 criteria met",
+      "state": "ok"
+    },
+    {
+      "tag": "S1",
+      "text": "1/1 criteria met",
+      "state": "ok"
+    },
+    {
+      "tag": "S2",
+      "text": "2/2 criteria met",
+      "state": "ok"
+    },
+    {
+      "tag": "S3",
+      "text": "1/1 criteria met",
+      "state": "ok"
+    },
+    {
+      "tag": "S4",
+      "text": "1/1 criteria met",
+      "state": "ok"
+    },
+    {
+      "tag": "S5",
+      "text": "2/2 criteria met",
+      "state": "ok"
+    }
+  ],
+  "repairs": [
+    {
+      "round": 1,
+      "text": "7 failure(s) sent to fixer",
+      "state": "ok"
+    }
+  ],
+  "criteria": [
+    {
+      "id": "C1",
+      "text": "packages/db gains a `sessions` table (id text primary key holding the SHA-256 hex of the session token, person_id references people, created_at timestamptz, expires_at timestamptz) in a new drizzle-kit migration after 0001 (earlier migration files unchanged), and functions that read no env, clock or randomness: `createSession(db, { id, personId, createdAt, expiresAt })`, `findSession(db, id, now)` (returns `{ personId, githubLogin }` only when not expired, else undefined) and `deleteSession(db, id)`.",
+      "status": "met"
+    },
+    {
+      "id": "C2",
+      "text": "createApp's deps gain `randomToken(): string` (a fresh unguessable token), `auth` = `{ github?: { clientId, authorizeUrl(state, redirectUri): string, exchangeCode(code, redirectUri): Promise<string /* access token */>, getLogin(accessToken): Promise<string> }, publicUrl: string, teamAllowlist: ReadonlySet<string> /* lowercase GitHub logins */ }`. `GET /auth/github/login` sets an HttpOnly SameSite=Lax cookie `xfb_oauth_state` and redirects (302) to github.authorizeUrl with redirect_uri `<publicUrl>/auth/github/callback`. `GET /auth/github/callback?code&state` rejects (400) a missing code or a state that differs from the cookie, exchanges the code, gets the login, answers 403 with a page saying the login is not on the team allowlist when its lowercase form is not in teamAllowlist (no person, no session created), otherwise ensures the person, creates a session (token from randomToken, stored hashed, 30-day expiry) and sets cookie `xfb_session` (HttpOnly, SameSite=Lax, Path=/, Secure when publicUrl is https) and redirects to `/`. `POST /auth/logout` deletes the session and clears the cookie. When `auth.github` is absent every /auth/github route answers 503 saying GitHub login is not configured. Tests use a fake github object.",
+      "status": "met"
+    },
+    {
+      "id": "C3",
+      "text": "Session routes for the dashboard, all requiring a valid, unexpired `xfb_session` cookie (else 401 JSON `{ error }`): `GET /api/session` → `{ personId, githubLogin }`; `GET /api/tokens` → the person's tokens `[{ id, label, createdAt, revokedAt, lastUsedAt }]` with no hash; `POST /api/tokens` with JSON `{ label }` → 201 `{ id, label, createdAt, token }` where token is `xfb_` + randomToken() and only its SHA-256 hex is stored, so the token is shown only in this response and then works as a Bearer token on /v1 routes; `DELETE /api/tokens/:id` → 204 and the token stops working on /v1 (401), while another person's token id gives 404 and is untouched. POST and DELETE under /api require header `x-xfb-csrf: 1` (else 403), to stop cross-site form posts. Bearer tokens are not accepted on /api routes and session cookies are not accepted on /v1 routes.",
+      "status": "met"
+    },
+    {
+      "id": "C4",
+      "text": "apps/web is a Vite + React 19 app (index.html, src/main.tsx, TanStack Router with code-based routes and TanStack Query) with: `/login` (a button that navigates to /auth/github/login, and the 403 explanation when shown after a refused login); a layout with the signed-in GitHub login, a Log out action (POST /auth/logout with the CSRF header) and navigation; `/` (Overview placeholder that says the views come in later issues); `/settings` (list of the person's tokens with label, created, last used ('?' when never used... shown as 'never'), revoked state; a form to create a token with a label that shows the new token once with a copy button and a warning that it will not be shown again; a Revoke button per active token with a confirm step). Any route redirects to /login when /api/session answers 401. Text from the server is rendered as plain text (no dangerouslySetInnerHTML). A typed client `apps/web/src/api.ts` (plain .ts, no JSX) wraps the session and token routes with an injectable fetch and throws an error carrying the HTTP status; node:test tests cover it with a fake fetch. `pnpm build:web` (root script running vite build for apps/web) writes apps/web/dist, which .gitignore ignores; `pnpm typecheck` type-checks the .tsx files too (tsconfig changes allowed) and `pnpm lint` checks them.",
+      "status": "met"
+    },
+    {
+      "id": "C5",
+      "text": "apps/api/server.ts additionally reads GITHUB_CLIENT_ID and GITHUB_CLIENT_SECRET (both or neither; when neither, auth.github is omitted and the server still serves ingest), XFB_PUBLIC_URL (required when GitHub is configured), XFB_TEAM_ALLOWLIST (comma-separated logins, trimmed, lowercased) and XFB_WEB_DIST (default: apps/web/dist in the repository); it implements the github object with fetch against github.com/login/oauth/authorize, github.com/login/oauth/access_token and api.github.com/user, uses node:crypto for randomToken, and serves the built web files with the SPA fallback (index.html for any GET outside /v1, /api, /auth and /healthz that is not a file), only when that directory exists. Server-only code paths that call GitHub are not run by tests.",
+      "status": "met"
+    },
+    {
+      "id": "C6",
+      "text": "Deployment files, not run: a `Dockerfile` (node 26 base image, pnpm through corepack, `pnpm install --frozen-lockfile`, `pnpm build:web`, starts `pnpm api`, listens on $PORT), a `.dockerignore` (node_modules, dist, .git, runs), and `railway.json` (Dockerfile builder, healthcheck path /healthz, restart on failure). `docs/deploy.md` explains, step by step, how to deploy on Railway: one service from this repository, a Postgres database (DATABASE_URL), a volume mounted with XFB_ARTIFACTS_DIR on it, the GitHub OAuth app and its callback URL `<XFB_PUBLIC_URL>/auth/github/callback`, every env var with its meaning, PR preview environments, and creating the first token with `xfb token create` against the Railway database or through Settings.",
+      "status": "met"
+    },
+    {
+      "id": "C7",
+      "text": "docs/architecture.md (Built so far, plus auth and deployment text where it changes), the status paragraph of CLAUDE.md and README.md (Vietnamese) say login, sessions, Settings, apps/web and the deployment files exist and that deployment itself is still to be done by the owner. Existing package layout tests keep passing; all third-party packages stay in the root package.json (no new ones are added; react, react-dom, @tanstack/react-router, @tanstack/react-query, vite, @vitejs/plugin-react, @types/react and @types/react-dom are already there). `pnpm test`, `pnpm typecheck`, `pnpm lint` and `pnpm build:web` exit 0; no test needs a network, a browser, a Postgres server or files outside the OS temp dir.",
+      "status": "met"
+    }
+  ],
+  "seconds": 2974,
+  "note": "XS Factory Bench issue #3, slice 4. Passed after 1 repair round (docs/deploy.md did not name xfb token create). Rerun by the session: test (1201), typecheck, lint and build:web exit 0."
 }
 ]
