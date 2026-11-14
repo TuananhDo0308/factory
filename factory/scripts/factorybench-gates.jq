@@ -10,7 +10,7 @@ def gate($name; $passed; $reason):
 | [ # spec: the planner produced specs that code accepted
     (if $at >= 1 then gate("spec"; ($at > 1 or ($stopped | not)) and (($r.specs // []) | length > 0);
        if $at == 1 then $r.reason else "" end) else empty end),
-    # build: every implementer and tester finished without breaking file ownership
+    # build: every implementer and QA agent finished without breaking file ownership
     (if $at >= 2 then gate("build"; $at > 2 or ($stopped | not); if $at == 2 then $r.reason else "" end) else empty end),
     # check: the contract's checks, as last run (after any repairs)
     (if $at >= 3 and ($r.check.state // "") != "" then gate("check"; $r.check.state == "ok"; $r.check.text // "") else empty end),
@@ -23,6 +23,6 @@ def gate($name; $passed; $reason):
        ([$r.criteria[] | select(.status == "met")] | length) as $met
        | gate("criteria"; $met == ($r.criteria | length); "\($met)/\($r.criteria | length) met")
      else empty end),
-    # first-pass: passed without needing the fixer
+    # first-pass: passed without needing a repair round
     (if $at >= 4 then gate("first-pass"; ($r.repairRounds // 0) == 0; "\($r.repairRounds) repair round(s)") else empty end)
   ]

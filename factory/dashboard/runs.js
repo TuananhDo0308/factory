@@ -17,7 +17,9 @@
 //   repairRounds, maxRepairRounds
 //   specLine         summary of the plan, e.g. '3 spec(s) · 2 level(s)'
 //   specs            [{ id, title, impl, test, implNote, testNote, waitFor }]
-//                    impl / test: 'ok' | 'run' | 'wait' | 'none' (no such agent)
+//                    impl: the implementer; test: the QA agent (the tester in
+//                    runs before the implementer-tdd branch)
+//                    impl / test: 'ok' | 'run' | 'wait' | 'fail' | 'none' (no such agent)
 //   check            { text, state }
 //   review           [{ tag, text, state, label }]  (defaults to one per reviewer)
 //   repairs          [{ round, text, state }]

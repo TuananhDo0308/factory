@@ -18,9 +18,8 @@ def after($n): split(" ") | .[$n:] | join(" ") | sub(" \\(.*\\)$"; "");
 def role:
   if test("^planner( |$)") then {role: "planner", phase: "implement"}
   elif startswith("build ") then {role: "implementer", phase: "implement", spec: after(1)}
-  elif startswith("test ") then {role: "tester", phase: "verify", spec: after(1)}
-  elif startswith("self-check ") then {role: "tester", phase: "verify", spec: after(2), pass: (split(" ")[1] | tonumber? // null)}
-  elif startswith("worktrees ") or startswith("gather tests ") then {role: "helper", phase: "verify"}
+  elif startswith("qa ") then {role: "qa", phase: "verify", spec: after(1)}
+  elif startswith("rebuild ") then {role: "implementer", phase: "implement", spec: after(2), round: (split(" ")[1] | tonumber? // null)}
   elif test("^checker( |$)") then {role: "checker", phase: "verify"}
   elif test("^reviewer( |$)") then {role: "reviewer", phase: "review"}
   elif startswith("review ") then {role: "spec-reviewer", phase: "review", spec: after(1)}
