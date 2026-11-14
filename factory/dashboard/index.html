@@ -168,7 +168,7 @@ td .pill { color: var(--on-fill); border-color: var(--on-fill); font-size: 13px;
     <div class="hero-text">
       <span class="tag">A skill for Claude Code</span>
       <h1>A team of agents, orchestrated by <span>code</span>.</h1>
-      <p>Every spec gets its own implementer and its own tester. The script decides the order, what each agent sees, and pass or fail.</p>
+      <p>Every spec gets its own test-first implementer and its own QA agent. The script decides the order, what each agent sees, and pass or fail.</p>
       <div class="cta">
         <a class="btn primary" href="#progress">See progress
           <svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M13 6l6 6-6 6"></path></svg></a>
@@ -178,10 +178,10 @@ td .pill { color: var(--on-fill); border-color: var(--on-fill); font-size: 13px;
     <div class="demo fill">
       <div class="cmd mono"><b>/factory</b> add a --json flag to wordstats</div>
       <div class="row f-spec"><b>Spec</b><span>planner writes the specs</span></div>
-      <div class="row f-build"><b>Build</b><span>implementer + tester per spec</span></div>
+      <div class="row f-build"><b>Build</b><span>test-first implementer, then QA, per spec</span></div>
       <div class="row f-check"><b>Check</b><span>checker runs the commands</span></div>
       <div class="row f-review"><b>Review</b><span>1 whole change + 1 per spec</span></div>
-      <div class="row f-repair"><b>Repair</b><span>1 fixer · at most 2 rounds</span></div>
+      <div class="row f-repair"><b>Back to Build</b><span>a spec QA or review fails is rebuilt · at most 2 times</span></div>
       <div class="row f-result" id="last-run"><b>Latest run</b><span>loading</span></div>
     </div>
   </section>
@@ -192,12 +192,12 @@ td .pill { color: var(--on-fill); border-color: var(--on-fill); font-size: 13px;
       <p>Each agent sees only its own spec, in its own session.</p>
     </article>
     <article class="card fill f-check">
-      <h2>Tests are the standard</h2>
-      <p>The tester writes tests from the spec in its own worktree, where the new code does not exist, then re-checks them. When a test fails, the code is presumed wrong.</p>
+      <h2>Red before green</h2>
+      <p>The implementer writes each test first and sees it fail. A QA agent then reads the tests against the spec, without the plan, and closes the gaps.</p>
     </article>
     <article class="card fill f-build">
       <h2>Code owns the skeleton</h2>
-      <p>Order, file ownership and the repair limit live in the script.</p>
+      <p>Order, file ownership, skills, models and the rebuild cap live in the script.</p>
     </article>
     <article class="card fill f-result">
       <h2>Passing is computed</h2>
@@ -222,13 +222,13 @@ td .pill { color: var(--on-fill); border-color: var(--on-fill); font-size: 13px;
         <div class="steps">
           <div class="step fill f-spec"><i>1</i><b>Spec</b><span>planner; code validates the specs</span></div>
           <svg aria-hidden="true" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M13 6l6 6-6 6"></path></svg>
-          <div class="step fill f-build"><i>2</i><b>Build</b><span>implementer + tester per spec; tester re-checks</span></div>
+          <div class="step fill f-build"><i>2</i><b>Build</b><span>per spec: implementer writes tests first, then code; then QA. QA fails it: back to the implementer</span></div>
           <svg aria-hidden="true" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M13 6l6 6-6 6"></path></svg>
           <div class="step fill f-check"><i>3</i><b>Check</b><span>checker runs the commands, lists changed files</span></div>
           <svg aria-hidden="true" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M13 6l6 6-6 6"></path></svg>
           <div class="step fill f-review"><i>4</i><b>Review</b><span>1 whole change + 1 per spec</span></div>
           <svg aria-hidden="true" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M4 9h13a3 3 0 0 1 0 6H4M8 5L4 9l4 4"></path></svg>
-          <div class="step fill f-repair dashed"><i>5</i><b>Repair</b><span>on failure: 1 fixer, then check and review again · at most 2 rounds</span></div>
+          <div class="step fill f-repair dashed"><i>5</i><b>Back to Build</b><span>on failure: the specs concerned are rebuilt, go through QA again, then check and review again · at most 2 times per spec</span></div>
         </div>
       </div>
       <svg aria-hidden="true" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M13 6l6 6-6 6"></path></svg>
@@ -238,39 +238,40 @@ td .pill { color: var(--on-fill); border-color: var(--on-fill); font-size: 13px;
         <span>reruns the checks itself; merges only a passed run</span>
       </div>
     </div>
-    <p class="note">Agents before any repair: 6 to 7 for one spec, 4N+3 to 5N+3 for N specs. A small recorder agent, not part of the team, writes this dashboard's progress file at each step. The outcome is <span class="mono">passed</span>, <span class="mono">failed</span>, or <span class="mono">blocked</span> when the run needs a decision code cannot make.</p>
+    <p class="note">Agents before any return to Build: 5 for one spec, 3N+3 for N specs (N implementers, N QA, N spec reviewers, plus planner, checker and reviewer). A small recorder agent, not part of the team, writes this dashboard's progress file at each step. The outcome is <span class="mono">passed</span>, <span class="mono">failed</span>, or <span class="mono">blocked</span> when the run needs a decision code cannot make.</p>
   </section>
 
   <section class="sec">
     <h2 class="h-sec">Agents</h2>
     <div class="roles">
       <article class="card role fill f-spec"><span class="pill white">1 per run</span><h3>Planner</h3><p>Sees: the contract, the repo</p><span class="pill white">Read only</span></article>
-      <article class="card role fill f-build"><span class="pill white">1 per spec</span><h3>Implementer</h3><p>Sees: its own spec, minus the tests to write</p><span class="pill solid">Edits source files</span></article>
-      <article class="card role fill f-build"><span class="pill white">1 per spec + self-checks</span><h3>Tester</h3><p>Sees: its own spec, minus the planned code changes, and a worktree at the base commit. Re-checks its tests in fresh sessions, at most 2 passes</p><span class="pill solid">Edits test files</span></article>
+      <article class="card role fill f-build"><span class="pill white">1 per spec + 1 per return</span><h3>Implementer</h3><p>Sees: its own spec. Writes each test first and sees it fail, then the code. Sent back to Build, a fresh session gets the failures for its files</p><span class="pill solid">Edits source + test files</span></article>
+      <article class="card role fill f-build"><span class="pill white">1 per spec, again after each return</span><h3>QA</h3><p>Sees: its own spec, minus the planned changes, and its files. Checks the tests for gaps, writes tests for the serious ones, runs the security pass</p><span class="pill solid">Edits test files</span></article>
       <article class="card role fill f-check"><span class="pill white">1 per round</span><h3>Checker</h3><p>Sees: the check commands, the base commit</p><span class="pill white">Read only</span></article>
       <article class="card role fill f-review"><span class="pill white">1 per round</span><h3>Reviewer</h3><p>Sees: the contract, the diff, the check results, the interfaces between specs</p><span class="pill white">Read only</span></article>
       <article class="card role fill f-review"><span class="pill white">1 per spec, with 2+ specs</span><h3>Spec reviewer</h3><p>Sees: one spec and its files</p><span class="pill white">Read only</span></article>
-      <article class="card role fill f-repair"><span class="pill white">1 per repair round</span><h3>Fixer</h3><p>Sees: the contract, the combined report, a map of the files. Not the specs</p><span class="pill solid">Edits source files</span></article>
     </div>
-    <p class="note">No reviewer sees an implementer's narrative. No file has two owners, across specs or between the implementer and the tester of one spec.</p>
+    <p class="note">No reviewer or QA agent sees an implementer's narrative. No file has two owners across specs.</p>
   </section>
 
   <section class="sec">
     <h2 class="h-sec">Rules enforced in code</h2>
     <ul class="rules">
       <li><span class="mono">validateSpecs()</span><span>Every criterion is covered by a spec</span></li>
-      <li><span class="mono">validateSpecs()</span><span>One owner per file, including between implementer and tester</span></li>
+      <li><span class="mono">validateSpecs()</span><span>One owner per file; inside a spec, a file is source or test, never both</span></li>
+      <li><span class="mono">skillsFor()</span><span>super-board's skill registry: an implementer loads its spec kind's row (bug: diagnosing-bugs + tdd; feature: tdd + codebase-design; ...) plus verification-before-completion and mp-code-review; QA always tdd, diagnosing-bugs, verification-before-completion, testing-strategy, mp-code-review, pr-security-review; reviewers mp-code-review and codebase-design. A run with one missing stops before the planner</span></li>
+      <li><span class="mono">conditionalFor()</span><span>Implementers are also offered vitest, playwright-best-practices, testing-strategy and domain-modeling, QA vitest and playwright-best-practices, each with the rule for when to load it</span></li>
+      <li><span class="mono">modelFor()</span><span>Planner on Fable (high), whole-change reviewer on Opus (high), implementers, QA and spec reviewers on Sonnet (medium), a rebuild on Opus, the checker on Sonnet (low); the models arg can change any of them</span></li>
       <li><span class="mono">maxSpecRevisions</span><span>Rejected specs go back to the planner, at most 2 times</span></li>
       <li><span class="mono">buildLevels()</span><span>Dependent specs wait; specs on one level run in parallel</span></li>
-      <li><span class="mono">specText()</span><span>The implementer is not shown Tests, the tester is not shown Changes</span></li>
-      <li><span class="mono">setupScript()</span><span>Each tester works in its own git worktree at the base commit, with the repository's ignored dependencies and local config (node_modules, .venv, .env) linked in so its tests can run</span></li>
-      <li><span class="mono">readGather()</span><span>Git, not the tester, says what changed in the worktree. A test file changed in the repository during the build stops the run</span></li>
-      <li><span class="mono">testSpec()</span><span>The tester re-checks until a pass changes nothing, at most 2 passes</span></li>
-      <li><span class="mono">filesOutsideAssignment()</span><span>An agent that reports changing a file it does not own stops the run</span></li>
+      <li><span class="mono">specText()</span><span>QA is not shown the planned Changes, so it judges the tests against what is required</span></li>
+      <li><span class="mono">scratchDir()</span><span>Every agent gets a scratch folder of its own, so no agent can delete another's files or write through a link another made into the repository</span></li>
+      <li><span class="mono">filesOutsideAssignment()</span><span>An agent that reports changing a file it may not change stops the run; QA may change test files only</span></li>
       <li><span class="mono">filesOutsideOwnership()</span><span>A changed file that no spec owns stops the run</span></li>
-      <li><span class="mono">evaluate()</span><span>Passed: every check exits 0, every criterion met by every reviewer, no blocking finding</span></li>
-      <li><span class="mono">splitFailures()</span><span>Failures go into the fixer's report. Only a finding against a test file goes back to its tester</span></li>
-      <li><span class="mono">maxRepairRounds</span><span>At most 2 repair rounds</span></li>
+      <li><span class="mono">evaluate()</span><span>Passed: every check exits 0, every criterion met by every reviewer, no blocking finding, nothing sent back by QA</span></li>
+      <li><span class="mono">routeFailures()</span><span>Each failure goes back to the implementer of the spec it concerns: the owner of the file, the specs of the criterion, or the specs named in a failing check's output</span></li>
+      <li><span class="mono">testsChanged()</span><span>Every test file an implementer changes after the first build is recorded and reported</span></li>
+      <li><span class="mono">maxRebuilds</span><span>A spec goes back to Build at most 2 times, from QA or review; past that the run fails</span></li>
       <li><span class="mono">runRecord()</span><span>What this dashboard shows is built from the raw results, not written by an agent</span></li>
     </ul>
   </section>
@@ -297,7 +298,7 @@ td .pill { color: var(--on-fill); border-color: var(--on-fill); font-size: 13px;
       <table>
         <thead><tr>
           <th scope="col">Run</th><th scope="col">Outcome</th>
-          <th scope="col" class="n">Specs</th><th scope="col" class="n">Agents</th><th scope="col" class="n">Repair rounds</th>
+          <th scope="col" class="n">Specs</th><th scope="col" class="n">Agents</th><th scope="col" class="n">Back to Build</th>
           <th scope="col" class="n">Time</th><th scope="col" class="n">Criteria</th><th scope="col" class="n">Graders</th>
         </tr></thead>
         <tbody id="runs-body"><tr><td colspan="8">Loading runs.</td></tr></tbody>
@@ -319,8 +320,8 @@ td .pill { color: var(--on-fill); border-color: var(--on-fill); font-size: 13px;
 
 <footer class="foot">
   <div class="wrap">
-    <div>Factory · branch <span class="mono">workflow-with-testers</span></div>
-    <a href="https://github.com/sangtruong-rgb/factory/tree/workflow-with-testers">github.com/sangtruong-rgb/factory</a>
+    <div>Factory · branch <span class="mono">implementer-tdd</span></div>
+    <a href="https://github.com/sangtruong-rgb/factory/tree/implementer-tdd">github.com/sangtruong-rgb/factory</a>
   </div>
 </footer>
 </div>
@@ -330,7 +331,7 @@ td .pill { color: var(--on-fill); border-color: var(--on-fill); font-size: 13px;
 (function () {
   var VIEWS = ['overview', 'factory', 'progress', 'benchmark'];
   var PHASES = ['Spec', 'Build', 'Check', 'Review', 'Repair'];
-  var HUE = { Spec: 'f-spec', Build: 'f-build', Check: 'f-check', Review: 'f-review', Repair: 'f-repair', Result: 'f-result' };
+  var HUE = { Spec: 'f-spec', Build: 'f-build', Check: 'f-check', Review: 'f-review', Repair: 'f-repair', 'Back to Build': 'f-repair', Result: 'f-result' };
   var WORD = { ok: 'done', run: 'running', wait: 'waiting', skip: 'not needed', fail: 'stopped' };
   var GRADERS = [
     { id: '01', group: 'Product', text: '--json prints the right counts' },
@@ -341,7 +342,7 @@ td .pill { color: var(--on-fill); border-color: var(--on-fill); font-size: 13px;
     { id: '06', group: 'Process', text: 'Independent review happened' },
     { id: '07', group: 'Process', text: 'Chat session reran the checks' },
     { id: '08', group: 'Process', text: 'Report lists criteria with evidence' },
-    { id: '09', group: 'Process', text: 'Tests written by a separate tester' }
+    { id: '09', group: 'Process', text: 'Tests written first by the implementer, then checked by QA' }
   ];
 
   var runs = null;      // null = loading, [] = none
@@ -428,11 +429,13 @@ td .pill { color: var(--on-fill); border-color: var(--on-fill); font-size: 13px;
     }
     cols.push(column('Review', k, reviews.map(function (r) { return item(r.tag, r.text, r.state || k, r.label); })));
 
-    k = phaseKind(run, 'Repair');
+    // Runs before implementer-tdd had a Repair phase; later ones send specs back to Build.
+    var back = arr(run.repairs);
+    k = back.length ? (back.some(function (r) { return r.state === 'run'; }) ? 'run' : 'ok') : phaseKind(run, 'Repair');
     var max = run.maxRepairRounds === undefined ? 2 : run.maxRepairRounds;
-    var repairs = arr(run.repairs).map(function (r) { return item('round ' + r.round, r.text, r.state || 'ok'); });
-    if (!repairs.length) repairs = [item('fixer', '0 / ' + max + ' rounds', k)];
-    cols.push(column('Repair', k, repairs, (run.repairRounds || 0) + ' / ' + max));
+    var repairs = back.map(function (r) { return item(r.tag || 'round ' + r.round, r.text, r.state || 'ok'); });
+    if (!repairs.length) repairs = [item('back to Build', 'none · at most ' + max + ' per spec', k)];
+    cols.push(column('Back to Build', k, repairs, back.length + (back.length === 1 ? ' time' : ' times')));
 
     var end = run.outcome === 'passed' ? 'ok' : run.outcome === 'failed' || run.outcome === 'blocked' ? 'fail' : 'wait';
     cols.push(column('Result', end, arr(run.criteria).map(function (c) {
@@ -485,7 +488,7 @@ td .pill { color: var(--on-fill); border-color: var(--on-fill); font-size: 13px;
       stat('passed', n ? done.filter(function (r) { return r.outcome === 'passed'; }).length + '/' + n : '–', 'f-result'),
       stat('seconds per run', avg('seconds'), 'f-build'),
       stat('agents per run', avg('agents'), 'f-check'),
-      stat('repair rounds per run', avg('repairRounds'), 'f-repair')
+      stat('returns to Build per run', avg('repairRounds'), 'f-repair')
     ]);
     var gradeCount = function (r) {
       var g = r.grades || {}, ids = Object.keys(g);

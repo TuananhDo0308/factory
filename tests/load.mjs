@@ -9,8 +9,8 @@ import { fileURLToPath } from 'node:url'
 
 const NAMES = [
   'validateSpecs', 'buildLevels', 'matchesIgnore', 'filesOutsideOwnership', 'filesOutsideAssignment',
-  'sharedPaths', 'worktreeOf', 'setupScript', 'readSetup', 'gatherScript', 'readGather',
-  'evaluate', 'sourceFiles', 'splitFailures', 'runRecord', 'specText', 'contractText',
+  'testsChanged', 'specFiles', 'evaluate', 'routeFailures', 'runRecord', 'specText', 'contractText',
+  'scratchDir', 'scratchNote', 'SKILLS', 'requiredSkills', 'missingSkills', 'skillsFor', 'skillsNote', 'optionalSkills', 'conditionalFor', 'MODELS', 'modelFor', 'modelProblems',
 ]
 
 const file = fileURLToPath(new URL('../factory/workflow/factory.js', import.meta.url))
