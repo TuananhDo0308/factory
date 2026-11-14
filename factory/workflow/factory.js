@@ -489,6 +489,25 @@ function contractText(contract) {
   ].join('\n')
 }
 
+// The GitHub issue a contract was written from, with its sub-issues, as shown
+// to the planner only. The sub-issues are a developer's notes on how the work
+// divides; they add context for the split but are not specs and not criteria,
+// so the planner still owns the split, code still validates it, and only the
+// contract is judged. The other roles get what they need through their spec.
+// `issue` is { number, title, body, subIssues: [{ number, title, body }] };
+// returns '' without one.
+function issueText(issue) {
+  if (!issue || (isBlank(issue.title) && isBlank(issue.body))) return ''
+  const one = (label, i) => [`${label} #${i.number}: ${i.title || ''}`, isBlank(i.body) ? '(no description)' : String(i.body).trim()].join('\n')
+  const subs = Array.isArray(issue.subIssues) ? issue.subIssues.filter(Boolean) : []
+  return [
+    `The contract above was written from GitHub issue #${issue.number}. The issue and its sub-issues follow as background. The sub-issues are a developer's notes on how the work divides and where it touches the code: use them to understand the task and as a starting point for your split, not as specs or criteria. You decide the specs; one spec per sub-issue is fine when the files allow it, but merge, split or regroup them when file ownership or dependencies call for it. Only the contract's criteria are judged. Where a note disagrees with the code, the code is right; where it disagrees with the contract, the contract is right, and say so in \`risks\`.`,
+    '',
+    one('Issue', issue),
+    ...(subs.length > 0 ? subs.flatMap(s => ['', one('Sub-issue', s)]) : ['', 'It has no sub-issues.']),
+  ].join('\n')
+}
+
 // One spec, as shown to one role. The implementer sees all of it. The QA agent
 // is not shown the planned changes or the implementer's checklist: it judges
 // the tests against what the spec requires, not against the plan the code was
@@ -846,6 +865,7 @@ function planSpecs(contract, previous, problems) {
       'Turn this contract into one or more specs.',
       '',
       contractText(contract),
+      ...(issueText(args.issue) ? ['', issueText(args.issue)] : []),
       '',
       `Skills installed for this run, which a spec may name in "skills" instead of those of its kind: ${Object.keys(args.skills || {}).join(', ') || 'none'}`,
       redo,
