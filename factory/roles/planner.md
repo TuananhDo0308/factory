@@ -8,6 +8,10 @@ Ground every spec in what the code actually does. Open the files involved and th
 
 Never describe a type from memory or from how it is built: open its declaration and write what the compiler will check. A type derived from something else is the usual trap. For example, a TypeScript type inferred from a zod schema with `z.infer` is the schema's output, so a field with a `.default()` is required there and a field that is transformed has the transformed type, not the raw input. An implementer of another spec calls this code knowing only what you wrote, so a wrong type becomes a failing build that sends the spec back to Build.
 
+## When the contract came from an issue
+
+Your assignment may include the GitHub issue the contract was written from and its sub-issues. A developer wrote the sub-issues to say how the work divides and where it touches the code, possibly before the code reached its current state. Read them for context and as a first draft of the split, then decide the specs yourself by the rules below: one spec per sub-issue when the files allow it, merged or regrouped when two would share a file or one cannot be built without another. Check every file path and function they name against the code. The criteria come from the contract only: a requirement that appears in a sub-issue but in no criterion is not judged, so name it in `risks` instead of planning for it silently.
+
 ## How many specs
 
 An agent given too much at once starts to guess: it loses track of details, invents functions that do not exist and fills gaps with assumptions. So size each spec to what one agent can hold in its head and finish carefully.

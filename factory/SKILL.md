@@ -1,6 +1,6 @@
 ---
 name: factory
-description: Run a software task through a small team of agents that work together - a planner that writes specs, one test-first implementer and one QA agent per spec, a checker and independent reviewers, with failures sent back to the implementers - orchestrated by a workflow script instead of by you. Use this whenever the user asks for a "factory", an agent team, or wants a coding task (feature, bug fix, refactor, tests) planned, built and independently reviewed by several agents rather than done in one pass, even if they do not say the word "factory".
+description: Run a software task through a small team of agents that work together - a planner that writes specs, one test-first implementer and one QA agent per spec, a checker and independent reviewers, with failures sent back to the implementers - orchestrated by a workflow script instead of by you. Use this whenever the user asks for a "factory", an agent team, or wants a coding task (feature, bug fix, refactor, tests) or a GitHub issue planned, built and independently reviewed by several agents rather than done in one pass, even if they do not say the word "factory".
 ---
 
 # Factory
@@ -34,13 +34,29 @@ Read enough of the repository to understand the request, then write:
 
 Ask the user only what you cannot find out from the code and what would change the outcome. Every agent downstream works from this text alone, so a vague criterion here becomes a guess everywhere else.
 
+### When the task is a GitHub issue
+
+One issue is one run and one pull request. When the user names an issue (a number or a URL), the contract comes from it rather than from you, because a BA and the user already agreed on it there (the `ba-ticket` skill writes issues in this shape, and `dev-subissues` adds the sub-issues):
+
+```bash
+gh issue view <n> --json number,title,body,url,state
+gh api --paginate repos/{owner}/{repo}/issues/<n>/sub_issues --jq '[.[] | {number, title, body}]'
+```
+
+- **Objective** from the issue's objective or overview; **criteria** from its acceptance criteria, in order, as `C1..Cn`, keeping their wording; **out of scope** from its out-of-scope section; **checks** from the project, as above, even when the issue lists some (run them once to be sure they exist).
+- Take no criteria from the sub-issues. They are a developer's notes on how the work divides, passed to the planner as context through the `issue` arg; the run is judged against the issue's criteria only. If a sub-issue states a requirement the issue's criteria do not cover, or the issue has no acceptance criteria an outsider could check, stop and tell the user: the issue needs correcting first (with `ba-ticket`, or by hand), and a criterion you add yourself is one nobody agreed to.
+- If the issue is closed, or says it depends on an issue that is still open, tell the user before going on.
+- Pass the issue to the workflow as `issue`: `{ "number": <n>, "title": "...", "body": "...", "subIssues": [{ "number": ..., "title": "...", "body": "..." }] }`, with the bodies exactly as GitHub returned them.
+
+An issue run ends in a pull request merged into the repository's default branch (step 5), so it must start from that branch as it is on GitHub: find it with `gh repo view --json defaultBranchRef --jq .defaultBranchRef.name`, run `git fetch origin`, and check that `HEAD` is `origin/<default>`. If it is not (another branch, local commits, or behind), tell the user and ask before going on, because the pull request would carry those differences or conflict. The target of the run is the default branch, and its id names the issue: `<date>-issue-<n>-<few words>`.
+
 Then record the starting point:
 
 - `git rev-parse HEAD` for the base commit. The workflow needs a Git repository with at least one commit; if there is none, tell the user instead of creating one.
 - `git status --short` for files that were already modified or untracked. These are the user's work in progress: list them as `ignoreFiles` so the run does not mistake them for its own changes, and leave them alone.
 - What running the checks leaves behind that the project's `.gitignore` does not cover (build output, coverage reports, logs). The agents run the checks too, so such files appear during the run and would stop it as changes that no spec owns. Add them to `ignoreFiles`. An entry is an exact path, a directory (everything beneath it), `*.ext`, or `**/name` for a name at any depth. Common caches (`__pycache__`, `*.pyc`, `.pytest_cache`, `.mypy_cache`, `.ruff_cache`, `.DS_Store`) are already ignored by the script.
 
-Last, give the run its own branch. Note the current branch (`git branch --show-current`): it is the target a passing run is merged into. Then `git switch -c factory/<run id>`, with a run id made of the date and a few words (the same id you give the dashboard below). The team works in this branch, so the target holds nothing from the run until the run has passed, and a run that fails leaves it exactly as it was. Switching does not disturb the user's uncommitted files. If `HEAD` is detached there is no target: stay where you are, skip the merge at the end and say so in the report.
+Last, give the run its own branch. Note the current branch (`git branch --show-current`): it is the target a passing run is merged into (for an issue run, the default branch, which you checked above). Then `git switch -c factory/<run id>`, with a run id made of the date and a few words (the same id you give the dashboard below). The team works in this branch, so the target holds nothing from the run until the run has passed, and a run that fails leaves it exactly as it was. Switching does not disturb the user's uncommitted files. If `HEAD` is detached there is no target: stay where you are, skip the merge at the end and say so in the report.
 
 ## 2. Check the team's skills
 
@@ -76,6 +92,7 @@ Call the Workflow tool with `scriptPath` set to the absolute path of `workflow/f
   },
   "skills": { "tdd": "/Users/you/.claude/skills/tdd/SKILL.md", "...": "the output of skills-ready.sh" },
   "ignoreFiles": [],
+  "issue": { "number": 12, "title": "...", "body": "...", "subIssues": [{ "number": 13, "title": "...", "body": "..." }] },
   "dashboard": {
     "file": "/absolute/path/to/this/skill/dashboard/live.js",
     "id": "2026-01-31-json-flag",
@@ -86,7 +103,7 @@ Call the Workflow tool with `scriptPath` set to the absolute path of `workflow/f
 
 `dashboard` makes the run show its progress on the skill's dashboard: at each step the script has a small recorder agent overwrite `file` with the state of the run. Give the run an `id` that no earlier run in `dashboard/runs.js` has (the date and a few words) and a `title` of a few words. Tell the user they can watch the run by opening `dashboard/index.html` from this skill's directory in a browser, and note the time (`date +%s`) so you can report how long the run took. Only one run can be shown in progress at a time, so leave `dashboard` out if another factory run is still going.
 
-Optional args: `maxRebuilds` (how many times one spec may be sent back to Build, by QA or by review, default 2; super-board's rebuild cap), `maxSpecRevisions` (default 2), `models` (replaces the model or effort of a role; the defaults are the planner on Fable at high effort, the reviewer of the whole change on Opus at high, implementers, QA and spec reviewers on Sonnet at medium, an implementer whose spec was sent back to Build on Opus at medium, and the checker on Sonnet at low; for example `{"implementer": {"model": "opus"}}`, and a model of `"inherit"` uses the session's), `scratch` (the directory under which every agent gets a scratch folder of its own, default `<repo>-factory-scratch` next to the repository; pass another absolute path outside the repository when that one cannot be created or written to, and never one under `.git`, where Claude Code refuses writes), and `specs` (see "When the run is blocked").
+Optional args: `issue` (only for an issue run, see step 1; the planner alone is shown it), `maxRebuilds` (how many times one spec may be sent back to Build, by QA or by review, default 2; super-board's rebuild cap), `maxSpecRevisions` (default 2), `models` (replaces the model or effort of a role; the defaults are the planner on Fable at high effort, the reviewer of the whole change on Opus at high, implementers, QA and spec reviewers on Sonnet at medium, an implementer whose spec was sent back to Build on Opus at medium, and the checker on Sonnet at low; for example `{"implementer": {"model": "opus"}}`, and a model of `"inherit"` uses the session's), `scratch` (the directory under which every agent gets a scratch folder of its own, default `<repo>-factory-scratch` next to the repository; pass another absolute path outside the repository when that one cannot be created or written to, and never one under `.git`, where Claude Code refuses writes), and `specs` (see "When the run is blocked").
 
 The workflow runs in the background and you are notified when it finishes. Do not start the agents yourself while it runs, and do not predict its result. It does this:
 
@@ -122,6 +139,18 @@ Merge only when the workflow returned `passed` and your own run of the checks ag
 
 The merge is local. Do not push or open a pull request unless the user asked for it.
 
+### An issue run: pull request, merged into the default branch
+
+An issue run ends on GitHub instead, because the issue is closed by the pull request that delivers it. The same rule holds: only a run that passed and that your own checks agree with.
+
+1. Commit on the run branch exactly as in item 1 above: only the files the specs own, by path.
+2. `git push -u origin factory/<run id>`.
+3. Open the pull request into the default branch with `gh pr create --base <default> --head factory/<run id> --title "<issue title>" --body-file <file in your scratchpad>`. The body says what changed and how the work was split into specs, lists each criterion with its evidence and each check with the result of your own run, and ends with one closing line per issue: `Closes #<issue>` and a `Closes #<sub-issue>` for every sub-issue, since GitHub does not close sub-issues when their parent closes.
+4. Merge it: `gh pr merge <number> --squash --delete-branch`, so the default branch gets one commit per issue. Then make sure you are on the default branch and `git pull --ff-only`.
+5. If the merge is refused (branch protection that wants a review or checks still running, a conflict because the branch moved), leave the pull request open and tell the user why, with its URL. Never pass `--admin` or otherwise bypass the repository's protection: those rules are the owner's decision, not the run's.
+
+A run that did not pass is not pushed: it stays on its local branch like any other.
+
 If the run did not pass, tell the user that the work is on `factory/<run id>` and that the target branch is untouched. When you rerun a blocked run with corrected specs, stay on the same run branch.
 
 ## 6. Send the run to XS Factory Bench
@@ -135,7 +164,7 @@ xfb report --skill /absolute/path/to/this/skill --run <run id> --repo /absolute/
   --base <base commit> --target <target branch> [--merged <merge commit>]
 ```
 
-Pass `--merged` only when the run was merged, with the commit the target now points at. A blocked run that you rerun with corrected specs is sent once, after the rerun, like its entry in `runs.js`.
+Pass `--merged` only when the run was merged, with the commit the target now points at (for an issue run, after `git pull`). A blocked run that you rerun with corrected specs is sent once, after the rerun, like its entry in `runs.js`.
 
 Reporting must never change the run: `xfb` keeps anything it cannot deliver and sends it later. If the command fails, say so in one line of the report and carry on; never retry the run, edit its record or touch the repository because of it.
 
@@ -166,4 +195,4 @@ Finish with a short report to the user:
 - **Checks**: each command and the real result from your own run, including any not run.
 - **Review**: findings left open from any reviewer, and anything a reviewer could not review.
 - **Back to Build**: which specs QA or review sent back, how many times, and what the implementer fixed.
-- **Merge**: the commit and the branch it was merged into, or the branch the unmerged work is on and why it was not merged.
+- **Merge**: the commit and the branch it was merged into (for an issue run, the pull request URL and the issues it closed), or the branch the unmerged work is on and why it was not merged.

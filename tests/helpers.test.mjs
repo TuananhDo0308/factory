@@ -262,3 +262,19 @@ test('modelProblems rejects unknown roles, models and efforts', () => {
   has({ planner: { effort: 'huge' } }, /effort" must be one of/)
   has({ planner: 'opus' }, /must be an object with/)
 })
+
+test('issueText shows the planner the issue and its sub-issues as background, not as criteria', () => {
+  assert.equal(h.issueText(undefined), '')
+  assert.equal(h.issueText({ number: 7, title: '', body: '' }), '')
+  const text = h.issueText({
+    number: 7, title: 'Send messages', body: 'Users send text.\n',
+    subIssues: [{ number: 8, title: 'Message store', body: 'Lives in src/store.ts' }, { number: 9, title: 'Chat UI', body: '' }],
+  })
+  assert.match(text, /issue #7/)
+  assert.match(text, /Issue #7: Send messages\nUsers send text\./)
+  assert.match(text, /Sub-issue #8: Message store\nLives in src\/store\.ts/)
+  assert.match(text, /Sub-issue #9: Chat UI\n\(no description\)/)
+  assert.match(text, /not as specs or criteria/)
+  assert.match(text, /Only the contract's criteria are judged/)
+  assert.match(h.issueText({ number: 3, title: 'Fix', body: 'b' }), /It has no sub-issues\./)
+})
