@@ -85,21 +85,37 @@ factory/
 
 ## Cài đặt
 
-Sao chép thư mục `factory/` vào thư mục skill của Claude Code:
+### Cách nhanh: dán prompt này vào Claude Code
 
-```sh
-cp -r factory ~/.claude/skills/factory
+Mở Claude Code ở thư mục bất kỳ và dán nguyên đoạn dưới đây. Claude sẽ tự tải Factory, cài các skill mà nhóm agent dùng và kiểm tra lại.
+
+```text
+Cài skill Factory cho Claude Code từ https://github.com/sangtruong-rgb/factory, theo đúng các bước sau:
+
+1. Clone repo (git clone --depth 1) vào một thư mục tạm.
+2. Nếu ~/.claude/skills/factory đã tồn tại, dừng lại, cho tôi biết nó là gì (thư mục hay symlink, trỏ đi đâu) và hỏi tôi trước khi thay. Không ghi đè khi chưa được tôi đồng ý.
+3. Sao chép thư mục factory/ trong repo thành ~/.claude/skills/factory.
+4. Chạy: bash ~/.claude/skills/factory/scripts/install-skills.sh
+   Script này tải các skill mà nhóm agent dùng (mattpocock/skills, obra/superpowers, super-board, antfu/skills, anthropics/knowledge-work-plugins, currents-dev) ở commit đã ghim vào ~/.claude/skills, và giữ nguyên skill nào đã có.
+5. Chạy: bash ~/.claude/skills/factory/scripts/skills-ready.sh "$HOME"
+   Lệnh này phải thoát với mã 0. Nếu thoát với mã 10, nó in tên các skill còn thiếu: báo cho tôi.
+6. Xóa thư mục tạm.
+7. Báo lại cho tôi: skill nào vừa được cài, skill nào giữ nguyên vì đã có, skills-ready có đạt không, và nhắc tôi mở phiên Claude Code mới để dùng /factory.
 ```
 
-Lưu ý: nếu `~/.claude/skills/factory` đã tồn tại (ví dụ bộ Factory cũ), lệnh trên sẽ ghi lẫn vào bản cũ. Hãy sao lưu hoặc xóa bản cũ trước.
-
-Rồi cài các skill mà nhóm agent dùng (cần `git` và mạng; skill đã có sẵn thì giữ nguyên, không ghi đè):
+### Cài bằng tay
 
 ```sh
-bash ~/.claude/skills/factory/scripts/install-skills.sh   # mặc định cài vào ~/.claude/skills
+git clone --depth 1 https://github.com/sangtruong-rgb/factory.git /tmp/factory-src
+cp -r /tmp/factory-src/factory ~/.claude/skills/factory      # sao lưu hoặc xóa bản cũ trước nếu đã có
+bash ~/.claude/skills/factory/scripts/install-skills.sh      # cài skill của nhóm vào ~/.claude/skills, không ghi đè
+bash ~/.claude/skills/factory/scripts/skills-ready.sh "$HOME" # phải thoát với mã 0
+rm -rf /tmp/factory-src
 ```
 
-Không cần cài agent riêng: mỗi agent được yêu cầu đọc bản mô tả vai trò của mình trong `roles/`.
+Lưu ý: nếu `~/.claude/skills/factory` đã tồn tại (ví dụ bản Factory cũ), `cp -r` sẽ ghi lẫn vào bản cũ. Hãy sao lưu hoặc xóa bản cũ trước. Skill `code-review` của mattpocock được cài dưới tên `mp-code-review` để không che lệnh `/code-review` có sẵn của Claude Code.
+
+Không cần cài agent riêng: mỗi agent được yêu cầu đọc bản mô tả vai trò của mình trong `roles/`. Cài xong, mở một phiên Claude Code mới để skill được nạp.
 
 ## Cách dùng
 
