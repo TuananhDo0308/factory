@@ -114,6 +114,7 @@ It works best with the [Impeccable](https://github.com/pbakaus/impeccable) skill
 5. **Review** *(reviewers)*: a fresh reviewer judges the whole change against the contract. When the work was split, each spec also gets its own reviewer. A criterion is met only if every reviewer responsible for it says so.
 6. **Back to Build**: there is no separate repair phase. Each failure is routed to the spec whose files it concerns; that spec gets a new implementer session (on Opus) and QA again, then the whole change is checked and reviewed again. A spec may go back at most `maxRebuilds` times (default 2) before the run fails.
 7. **Verify and merge** *(your chat session)*: reruns the checks itself. Only if the workflow returns `passed` and the rerun passes does it commit the specs' files and fast-forward the branch it started from. A failed run stays on `factory/<id>` and your branch is untouched.
+8. **Lessons** *(your chat session)*: every failure that sent a spec back to Build is filed with the run in its failure log. After each run the session reads the logs of the last 10 runs, and a mistake the team made in 3 or more of them (implementers skipping lint, two specs naming one interface differently, the planner leaving a file out) becomes a proposal in the report: a rule in `factory.js` or one sentence in a role brief. You accept or reject it; the fix is made later as an ordinary change to the skill, with tests, never by an agent during a run.
 
 <p align="center">
   <img src="docs/images/routing.png" alt="routeFailures() sends a blocking finding in report.py to S2, the spec that owns report.py" width="100%">
@@ -152,13 +153,13 @@ Differences from super-board: mattpocock's `implement` and `ask-matt` are blocke
 
 ## Dashboard
 
-The skill ships with a static dashboard. Open `factory/dashboard/index.html` in a browser to see the team, the run in progress (refreshed every few seconds), past runs and the benchmark.
+The skill ships with a static dashboard. Open `factory/dashboard/index.html` in a browser to see the team, the run in progress (refreshed every few seconds), past runs with their failure logs, the lessons proposed from recurring failures and the benchmark.
 
 <p align="center">
   <img src="docs/images/dashboard.jpg" alt="The Factory dashboard's Progress view: past runs and the Spec, Build, Check, Review, Back to Build and Result columns of one run" width="100%">
 </p>
 
-After each run the session can also report it to XS Factory Bench with `xfb report`, if `xfb` is installed. This never changes the run.
+After each run the session can also report it to XS Factory Bench with `xfb report`, if `xfb` is installed, failure log included (files and problem text only when you turn sharing on), so recurring failures can be followed across everyone's runs. This never changes the run.
 
 ## Repository layout
 
@@ -175,7 +176,7 @@ factory/
 ├── workflow/factory.js    the Workflow script that orchestrates the team
 ├── roles/                 one brief per role (planner, implementer, qa, checker, reviewer, spec-reviewer)
 ├── scripts/               install-skills.sh, skills-ready.sh, FactoryBench reporting
-├── dashboard/             index.html, runs.js (finished runs), live.js (run in progress, not committed)
+├── dashboard/             index.html, runs.js (finished runs), lessons.js (recurring failures and decisions), live.js (run in progress, not committed)
 └── evals/                 skill test cases
 tests/                     node --test tests for factory.js's helpers and for ui-refine-loop
 docs/images/               screenshots for this README

@@ -273,7 +273,17 @@ td .pill { color: var(--on-fill); border-color: var(--on-fill); font-size: 13px;
       <li><span class="mono">testsChanged()</span><span>Every test file an implementer changes after the first build is recorded and reported</span></li>
       <li><span class="mono">maxRebuilds</span><span>A spec goes back to Build at most 2 times, from QA or review; past that the run fails</span></li>
       <li><span class="mono">runRecord()</span><span>What this dashboard shows is built from the raw results, not written by an agent</span></li>
+      <li><span class="mono">failureEntries()</span><span>Every failure that sent a spec back to Build, or ended the run, is filed with the run in its failure log: what it was, where it pointed, which specs answered for it</span></li>
     </ul>
+  </section>
+
+  <section class="sec">
+    <div class="sec-head">
+      <h2 class="h-sec">Lessons</h2>
+      <span class="mono" style="font-size: 14px">lessons.js</span>
+    </div>
+    <p class="note">After each run the chat session reads the failure logs of recent runs. A mistake the team made in 3 or more runs becomes a proposal: a rule in factory.js, or one sentence in a role brief. You decide; the fix is made later as an ordinary change to the skill, with tests, never by an agent during a run.</p>
+    <ul class="items" id="lessons"><li class="item">Loading lessons.</li></ul>
   </section>
 </div>
 
@@ -286,6 +296,10 @@ td .pill { color: var(--on-fill); border-color: var(--on-fill); font-size: 13px;
   <p class="note" id="run-note" hidden></p>
   <section class="cols" id="cols" aria-label="Phases"></section>
   <p class="empty" id="runs-empty">Loading runs.</p>
+  <section class="sec" id="flog-sec" hidden>
+    <h2 class="h-sec">Failure log</h2>
+    <ul class="items" id="flog"></ul>
+  </section>
 </div>
 
 <!-- Benchmark -->
@@ -327,6 +341,7 @@ td .pill { color: var(--on-fill); border-color: var(--on-fill); font-size: 13px;
 </div>
 
 <script src="runs.js"></script>
+<script src="lessons.js"></script>
 <script>
 (function () {
   var VIEWS = ['overview', 'factory', 'progress', 'benchmark'];
@@ -445,12 +460,29 @@ td .pill { color: var(--on-fill); border-color: var(--on-fill); font-size: 13px;
     }), run.outcome === 'running' ? 'not judged' : run.outcome));
     return cols;
   }
+  // One line per failure that sent a spec back to Build (or ended the run).
+  // Runs filed before the failure log existed have none.
+  function failureItems(run) {
+    return arr(run.failureLog).map(function (f) {
+      var where = f.file ? f.file + (f.line !== undefined ? ':' + f.line : '') : f.criterion || f.check || '';
+      var tag = (f.stage === 'qa' ? 'QA' + (f.round > 0 ? ' after rebuild ' + f.round : '') : 'review ' + f.round + ' · ' + f.kind) + (arr(f.specs).length ? ' · ' + arr(f.specs).join(', ') : '');
+      return item(tag, [where, f.problem].filter(Boolean).join(' · '), f.sentBack ? 'ok' : 'fail', f.sentBack ? 'sent back' : 'ended the run');
+    });
+  }
+  var LESSON = { proposed: 'run', accepted: 'ok', done: 'ok', rejected: 'skip' };
+  function renderLessons() {
+    var list = arr(window.FACTORY_LESSONS).slice().reverse();
+    fill($('lessons'), list.length ? list.map(function (l) {
+      var text = [l.pattern, l.proposal ? 'Fix: ' + l.proposal + (l.target ? ' (' + l.target + ')' : '') : '', arr(l.runs).length ? arr(l.runs).length + ' run(s): ' + arr(l.runs).join(', ') : ''].filter(Boolean).join(' · ');
+      return item(l.id || 'lesson', text, LESSON[l.status] || 'wait', l.status || '');
+    }) : [h('li', { class: 'item' }, 'No recurring failures yet.')]);
+  }
   function statusText(r) { return r.outcome + (r.live ? ' · live' : '') + (r.sample ? ' · sample' : ''); }
 
   function renderTracker() {
     var empty = $('runs-empty'), note = $('run-note');
     if (!runs || !runs.length) {
-      fill($('picker'), []); fill($('cols'), []); note.hidden = true;
+      fill($('picker'), []); fill($('cols'), []); note.hidden = true; $('flog-sec').hidden = true;
       empty.hidden = false;
       empty.textContent = problem || (runs ? 'No runs yet. Start one with /factory and it will appear here.' : 'Loading runs.');
       return;
@@ -466,6 +498,9 @@ td .pill { color: var(--on-fill); border-color: var(--on-fill); font-size: 13px;
     var text = [run.outcome === 'blocked' || run.outcome === 'failed' ? run.reason : '', run.note].filter(Boolean).join(' ');
     note.hidden = !text; note.textContent = text;
     fill($('cols'), columns(run));
+    var flog = failureItems(run);
+    $('flog-sec').hidden = !flog.length;
+    fill($('flog'), flog);
   }
 
   // --- overview and benchmark ----------------------------------------------
@@ -522,7 +557,7 @@ td .pill { color: var(--on-fill); border-color: var(--on-fill); font-size: 13px;
     };
     fill($('groups'), [group('Product', 'f-result'), group('Process', 'f-review')]);
   }
-  function renderAll() { renderTracker(); renderLast(); renderBench(); }
+  function renderAll() { renderTracker(); renderLast(); renderBench(); renderLessons(); }
   renderAll();
 
   // --- data: runs.js (window.FACTORY_RUNS) and live.js (window.FACTORY_LIVE) ---
@@ -534,7 +569,7 @@ td .pill { color: var(--on-fill); border-color: var(--on-fill); font-size: 13px;
   function merge() {
     var history = arr(window.FACTORY_RUNS).slice().reverse();
     var live = window.FACTORY_LIVE || null;
-    var text = JSON.stringify([history, live]);
+    var text = JSON.stringify([history, live, window.FACTORY_LESSONS || null]);
     if (text === seen) return;
     seen = text;
     var known = live && history.some(function (r) { return r.id === live.id; });
@@ -547,7 +582,7 @@ td .pill { color: var(--on-fill); border-color: var(--on-fill); font-size: 13px;
     s.onload = s.onerror = function () { s.remove(); then(); };
     document.head.appendChild(s);
   }
-  function poll() { load('runs.js', function () { load('live.js', merge); }); }
+  function poll() { load('runs.js', function () { load('lessons.js', function () { load('live.js', merge); }); }); }
   merge();
   poll();
   setInterval(poll, 3000);

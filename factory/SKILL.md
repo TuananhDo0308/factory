@@ -103,6 +103,15 @@ Call the Workflow tool with `scriptPath` set to the absolute path of `workflow/f
 
 `dashboard` makes the run show its progress on the skill's dashboard: at each step the script has a small recorder agent overwrite `file` with the state of the run. Give the run an `id` that no earlier run in `dashboard/runs.js` has (the date and a few words) and a `title` of a few words. Tell the user they can watch the run by opening `dashboard/index.html` from this skill's directory in a browser, and note the time (`date +%s`) so you can report how long the run took. Only one run can be shown in progress at a time, so leave `dashboard` out if another factory run is still going.
 
+Just before you call the Workflow tool, tell XS Factory Bench that the run has begun, so that it is recorded even if it never reaches step 6 (the session ends, the machine stops, the run is given up). Do this only if `command -v xfb` finds it, and otherwise skip it without mentioning it:
+
+```bash
+xfb start --skill /absolute/path/to/this/skill --run <run id> --repo /absolute/path/to/repository \
+  --base <base commit> --target <target branch> --title "<dashboard title>"
+```
+
+Use the same run id, base commit and target branch you will later pass to `xfb report`. It returns within seconds and keeps anything it cannot deliver. If it prints an error or exits non-zero, say so in one line of the report and start the workflow anyway: reporting never holds up or changes a run. A blocked run that you rerun with corrected specs keeps its run id, so do not call it again.
+
 Optional args: `issue` (only for an issue run, see step 1; the planner alone is shown it), `maxRebuilds` (how many times one spec may be sent back to Build, by QA or by review, default 2; super-board's rebuild cap), `maxSpecRevisions` (default 2), `models` (replaces the model or effort of a role; the defaults are the planner on Fable at high effort, the reviewer of the whole change on Opus at high, implementers, QA and spec reviewers on Sonnet at medium, an implementer whose spec was sent back to Build on Opus at medium, and the checker on Sonnet at low; for example `{"implementer": {"model": "opus"}}`, and a model of `"inherit"` uses the session's), `scratch` (the directory under which every agent gets a scratch folder of its own, default `<repo>-factory-scratch` next to the repository; pass another absolute path outside the repository when that one cannot be created or written to, and never one under `.git`, where Claude Code refuses writes), and `specs` (see "When the run is blocked").
 
 The workflow runs in the background and you are notified when it finishes. Do not start the agents yourself while it runs, and do not predict its result. It does this:
@@ -117,7 +126,7 @@ If the Workflow tool is not available in this session, tell the user that the fa
 
 ## 4. Read the result
 
-The workflow returns an object with `outcome`, `reason`, `specs`, `builds` (implementers, each with its `tdd` entries), `qa` (every QA session, the later ones tagged `rebuild`: its `ledger`, `gaps` and the `failures` it sent back), `rebuilds` (implementer sessions after a spec was sent back, each tagged `rebuild` with the `fixes` it made), `sentBack` (per spec, how many times it went back to Build), `testsChangedInRebuild` (test files changed after the first build, per spec), `check`, `review`, `specReviews`, `failures` and `repairRounds` (how many times review sent work back to Build).
+The workflow returns an object with `outcome`, `reason`, `specs`, `builds` (implementers, each with its `tdd` entries), `qa` (every QA session, the later ones tagged `rebuild`: its `ledger`, `gaps` and the `failures` it sent back), `rebuilds` (implementer sessions after a spec was sent back, each tagged `rebuild` with the `fixes` it made), `sentBack` (per spec, how many times it went back to Build), `testsChangedInRebuild` (test files changed after the first build, per spec), `check`, `review`, `specReviews`, `failures`, `failureLog` (every failure that sent a spec back to Build, or ended the run, in the order found: its stage, kind, the specs that answered for it and a short problem) and `repairRounds` (how many times review sent work back to Build).
 
 - **`passed`**: every check exited with 0, every criterion was judged met, and no blocking finding remains.
 - **`failed`**: a spec still fails QA or review after being sent back to Build `maxRebuilds` times. What remains is in `failures` (review) or `reason` (QA).
@@ -127,7 +136,7 @@ Whatever the outcome, confirm it yourself before reporting. Run each of the cont
 
 Then delete the `scratch` directory (default `<repo>-factory-scratch`): it holds only the agents' temporary files, one folder per agent. Look at it first, and keep it while you still need it for a blocked run.
 
-Then file the run in the dashboard's history, so it stays there after the next run overwrites `live.js`. Read `dashboard/live.js`: it holds one object, the last state the workflow recorded. Append that object to the array in `dashboard/runs.js`, adding `seconds` (the time since you started the workflow). Keep what the workflow recorded; if your own checks disagreed with it, set `outcome` to `failed` and say why in `note`. If `live.js` is missing or belongs to another run, build the object from the workflow's result using the field list at the top of `runs.js`. A run that ended `blocked` and that you are about to rerun with corrected specs is filed once, after the rerun.
+Then file the run in the dashboard's history, so it stays there after the next run overwrites `live.js`. Read `dashboard/live.js`: it holds one object, the last state the workflow recorded. Append that object to the array in `dashboard/runs.js`, adding `seconds` (the time since you started the workflow). Keep what the workflow recorded, `workflowOutcome` included; if your own checks disagreed with it, set `outcome` to `failed` and say why in `note`, and leave `workflowOutcome` as the workflow wrote it, so the disagreement stays visible. If `live.js` is missing or belongs to another run, build the object from the workflow's result using the field list at the top of `runs.js`, with `workflowOutcome` set to the `outcome` the workflow returned and `failureLog` copied from the result unchanged. Never edit or shorten a filed `failureLog`: step 7 reads it across runs, and a log tidied by hand hides the pattern it is there to show. A run that ended `blocked` and that you are about to rerun with corrected specs is filed once, after the rerun.
 
 ## 5. Merge a passing run
 
@@ -168,6 +177,20 @@ Pass `--merged` only when the run was merged, with the commit the target now poi
 
 Reporting must never change the run: `xfb` keeps anything it cannot deliver and sends it later. If the command fails, say so in one line of the report and carry on; never retry the run, edit its record or touch the repository because of it.
 
+## 7. Look for recurring failures
+
+A failure fixed inside one run is gone; a mistake the team keeps making comes back in the next run, in another project. Find those, so they can be fixed once in the skill. Do this after step 6, whatever the outcome.
+
+1. Read `dashboard/runs.js`: the `failureLog` of the last 10 runs that are not `sample`, and the `reason` of those that ended `blocked` (the newest run included). Runs filed before the failure log existed have none; use their `reason` only.
+2. Group what shares a cause, by judgment: the same role or step making the same kind of mistake, not the same bug in the same code. For example: implementers not running the lint check before reporting; two specs using different names for one interface; the planner leaving a needed file out of every spec, so the run stops on a file no spec owns; a check leaving an output file that stops the run; a QA failure the implementer's brief should have prevented. A failure that only says the task was hard is not a pattern.
+3. A pattern counts when it occurred in at least 3 different runs. Read `dashboard/lessons.js` first: leave out a pattern already there, unless it is `rejected` or `done` and has occurred in 3 more runs since its `decided` date, which is worth raising again with the new runs as evidence.
+4. For each new pattern, append an entry to `dashboard/lessons.js` with `status` `proposed` and today's date (the fields are listed at the top of that file), and put the proposal in the report: the pattern, the runs, two or three problems from their logs, and one fix. Propose a rule in `workflow/factory.js` when code can decide it mechanically (as the script already ignores common caches), otherwise one sentence, with its reason, in the brief of the role that makes the mistake. Name the file.
+5. If the user decides in this session, record it: `status` `accepted` or `rejected`, `decided` with the date, and their reason in `note`.
+
+Do not make the fix yourself, not even an accepted one. You are working in another project; the skill is shared by every Claude Code session on this machine (often through a symlink), so a change made now would alter runs that are going on elsewhere; and changing the team's rules is the user's decision, made as an ordinary change to the skill's own repository with its tests. Whoever makes that change sets the entry to `done`.
+
+`runs.js` holds only the runs filed on this machine. XS Factory Bench receives every run's failure log, of every user, with step 6 (where each failure was found, its kind and the specs it concerned; the file and the problem only from people who turned sharing on); where the user has it, the same patterns can be followed there across a team.
+
 ## When the run is blocked
 
 Read `reason` and decide, with the user if the choice is theirs:
@@ -196,3 +219,4 @@ Finish with a short report to the user:
 - **Review**: findings left open from any reviewer, and anything a reviewer could not review.
 - **Back to Build**: which specs QA or review sent back, how many times, and what the implementer fixed.
 - **Merge**: the commit and the branch it was merged into (for an issue run, the pull request URL and the issues it closed), or the branch the unmerged work is on and why it was not merged.
+- **Lessons**: any pattern step 7 proposed, with its runs, evidence and fix, and the question for the user: accept or reject. Leave this out when there was none.

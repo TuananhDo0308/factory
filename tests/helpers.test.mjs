@@ -131,6 +131,35 @@ test('routeFailures: a failing check goes to the specs named in its output, else
   assert.deepEqual(stray.map(g => g.spec.id), ['S1', 'S2'])
 })
 
+test('failureEntries logs each routed failure once, with the specs that had to answer for it', () => {
+  const failures = [
+    { kind: 'check', name: 'test', problem: 'Check "test" (run-tests) exited with 1.', outputTail: 'segfault' },
+    { kind: 'criterion', id: 'C2', problem: 'Criterion C2 is not_met: e' },
+    { kind: 'finding', file: './b.py', line: 3, spec: 'S2', problem: 'p' },
+  ]
+  const log = h.failureEntries(h.routeFailures(failures, two), { stage: 'review', round: 1, sentBack: true })
+  assert.equal(log.length, 3)
+  assert.deepEqual(log.map(e => e.kind), ['check', 'criterion', 'finding'])
+  const check = log.find(e => e.kind === 'check')
+  assert.deepEqual(check.specs, ['S1', 'S2'])
+  assert.equal(check.check, 'test')
+  assert.equal(check.outputTail, undefined, 'the check output stays out of the log')
+  assert.equal(log.find(e => e.kind === 'criterion').criterion, 'C2')
+  assert.deepEqual(log.find(e => e.kind === 'finding'), { stage: 'review', round: 1, kind: 'finding', specs: ['S2'], file: 'b.py', line: 3, problem: 'p', sentBack: true })
+})
+
+test('failureEntries marks a failure that ended the run, logs QA rounds and cuts long problems', () => {
+  const s = spec()
+  const long = 'x'.repeat(1000)
+  const [e] = h.failureEntries([{ spec: s, failures: [{ kind: 'qa', file: 'tests/test_a.py', line: 1, spec: 'S1', problem: long }] }], { stage: 'qa', round: 2, sentBack: false })
+  assert.equal(e.stage, 'qa')
+  assert.equal(e.round, 2)
+  assert.equal(e.sentBack, false)
+  assert.equal(e.problem.length, 300)
+  assert.ok(e.problem.endsWith('…'))
+  assert.deepEqual(h.failureEntries([], { stage: 'qa', round: 0, sentBack: true }), [])
+})
+
 test('specText shows the implementer everything and hides the plan from QA', () => {
   const s = spec({ changes: 'CHANGES-TEXT', tests: 'TESTS-TEXT', doneWhen: ['DONE-TEXT'] })
   const impl = h.specText(s, contract, 'implementer')
@@ -156,6 +185,13 @@ test('runRecord shows the run from raw state', () => {
   assert.deepEqual(rec.criteria.map(c => c.status), ['met', 'not_met'])
   const early = h.runRecord(run, contract, { specs: [] }, { phase: 'Spec', outcome: 'running', levels: 0, build: {}, repairs: [] })
   assert.deepEqual(early.criteria.map(c => c.status), ['', ''])
+  assert.equal(rec.workflowOutcome, 'running')
+  const done = h.runRecord(run, contract, state, { phase: 'Review', outcome: 'passed', levels: 1, build: {}, repairs: [] })
+  assert.equal(done.outcome, 'passed')
+  assert.equal(done.workflowOutcome, 'passed')
+  assert.deepEqual(rec.failureLog, [], 'a run with no failure log files an empty one')
+  const entry = { stage: 'qa', round: 0, kind: 'qa', specs: ['S1'], file: 'tests/test_a.py', line: 1, problem: 'p', sentBack: true }
+  assert.deepEqual(h.runRecord(run, contract, { ...state, failureLog: [entry] }, { phase: 'Build', outcome: 'running', levels: 1, build: {}, repairs: [] }).failureLog, [entry])
 })
 
 test('scratchDir gives every agent label its own directory under the scratch root', () => {

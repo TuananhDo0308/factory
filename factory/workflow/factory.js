@@ -397,6 +397,41 @@ function routeFailures(failures, specs) {
   return specs.map(s => ({ spec: s, failures: bySpec.get(s.id) })).filter(g => g.failures.length > 0)
 }
 
+// The failure log: every failure that sent a spec back to Build, or that ended
+// the run because its spec had already gone back `maxRebuilds` times, in the
+// order found. After each run the invoking session reads the logs of recent
+// runs for the mistakes the team keeps making (SKILL.md, step 7), so an entry
+// keeps what the failure was, where it pointed and which specs had to answer
+// for it, and nothing of any agent's account. The problem is cut short: the log
+// is filed with every run in runs.js, and a pattern shows in a few lines.
+// `groups` is the routing, [{ spec, failures }]; `at` is { stage, round,
+// sentBack }: stage 'qa' with round = how many times the spec had been sent back
+// before this QA (0 after its first build), or stage 'review' with round = the
+// check-and-review pass (1 for the first). A failure routed to several specs is
+// one entry naming all of them.
+const PROBLEM_CHARS = 300
+function failureEntries(groups, at) {
+  const entries = new Map()
+  for (const g of groups || []) {
+    for (const f of g.failures || []) {
+      let e = entries.get(f)
+      if (!e) {
+        const problem = String(f.problem || '').trim()
+        e = { stage: at.stage, round: at.round, kind: f.kind, specs: [] }
+        if (!isBlank(f.file)) e.file = normPath(f.file)
+        if (f.line !== undefined && f.line !== null && f.line !== '') e.line = f.line
+        if (f.kind === 'criterion') e.criterion = f.id
+        if (f.kind === 'check') e.check = f.name
+        e.problem = problem.length > PROBLEM_CHARS ? `${problem.slice(0, PROBLEM_CHARS - 1)}…` : problem
+        e.sentBack = Boolean(at.sentBack)
+        entries.set(f, e)
+      }
+      if (!e.specs.includes(g.spec.id)) e.specs.push(g.spec.id)
+    }
+  }
+  return [...entries.values()]
+}
+
 // One reviewer's result in a few words, for the dashboard.
 function reviewLine(review) {
   const criteria = review.criteria || []
@@ -431,6 +466,9 @@ function runRecord(run, contract, state, progress) {
     id: run.id,
     title: run.title,
     outcome: progress.outcome,
+    // What the workflow itself decided. The invoking session may later change `outcome` when its
+    // own run of the checks disagrees; this field keeps the workflow's verdict next to it.
+    workflowOutcome: progress.outcome,
     reason: state.reason,
     phase: progress.phase,
     agents: run.agents,
@@ -463,6 +501,7 @@ function runRecord(run, contract, state, progress) {
       : [],
     repairs: progress.repairs,
     criteria: contract.criteria.map(c => ({ id: c.id, text: c.text, status: state.review ? (failed.has(c.id) ? 'not_met' : 'met') : '' })),
+    failureLog: state.failureLog || [],
   }
 }
 
@@ -1030,7 +1069,7 @@ const maxSpecRevisions = Number.isInteger(input.maxSpecRevisions) ? input.maxSpe
 const repo = String(input.repo || '').replace(/\/+$/, '')
 const scratch = isBlank(input.scratch) ? `${repo}-factory-scratch` : String(input.scratch).replace(/\/+$/, '')
 
-const state = { outcome: 'blocked', reason: '', overview: '', risks: [], specs: [], builds: [], qa: [], rebuilds: [], sentBack: {}, testsChangedInRebuild: [], check: null, review: null, specReviews: [], failures: [], repairRounds: 0 }
+const state = { outcome: 'blocked', reason: '', overview: '', risks: [], specs: [], builds: [], qa: [], rebuilds: [], sentBack: {}, testsChangedInRebuild: [], check: null, review: null, specReviews: [], failures: [], failureLog: [], repairRounds: 0 }
 
 // Progress for the dashboard, only when the caller passed `dashboard.file`.
 // Records are written one after another and without holding the team up; only
@@ -1179,6 +1218,7 @@ async function chain(spec, failures, source) {
       progress.build[spec.id] = { impl: 'ok', test: 'ok' }
       return { ok: true }
     }
+    state.failureLog.push(...failureEntries([{ spec, failures: found }], { stage: 'qa', round: n, sentBack: n < maxRebuilds }))
     if (n >= maxRebuilds) {
       progress.build[spec.id] = { impl: 'ok', test: 'fail' }
       return { stop: 'failed', reason: `${spec.id}: QA still sends back ${found.length} failure(s) after ${n} rebuild(s).` }
@@ -1247,6 +1287,7 @@ while (true) {
   // its implementer and then to QA again, as a card goes back to Ready.
   const groups = routeFailures(state.failures, specs)
   const spent = groups.filter(g => (state.sentBack[g.spec.id] || 0) >= maxRebuilds).map(g => g.spec.id)
+  state.failureLog.push(...failureEntries(groups, { stage: 'review', round: round + 1, sentBack: spent.length === 0 }))
   if (spent.length > 0) {
     return stop('failed', `${state.failures.length} failure(s) remain, and ${spent.join(', ')} ha${spent.length === 1 ? 's' : 've'} already been sent back to Build ${maxRebuilds} time(s).`)
   }

@@ -73,10 +73,10 @@ stream="$runs/$att.jsonl"
 
 # everything that could change results: the skill's commit (and whether it has local edits), Claude Code, the model
 skill_rev=$(git -C "$skill" rev-parse --short HEAD 2>/dev/null || echo unknown)
-# local edits, untracked files included, but not the run history the factory itself appends to
-dirty_paths=$(git -C "$skill" status --porcelain --untracked-files=all -- . ':!dashboard/runs.js' 2>/dev/null)
+# local edits, untracked files included, but not the run history and lessons the factory itself appends to
+dirty_paths=$(git -C "$skill" status --porcelain --untracked-files=all -- . ':!dashboard/runs.js' ':!dashboard/lessons.js' 2>/dev/null)
 if [ -n "$dirty_paths" ]; then
-  skill_rev="$skill_rev.dirty-$( { git -C "$skill" diff HEAD -- . ':!dashboard/runs.js'
+  skill_rev="$skill_rev.dirty-$( { git -C "$skill" diff HEAD -- . ':!dashboard/runs.js' ':!dashboard/lessons.js'
     git -C "$skill" ls-files --others --exclude-standard -z -- . | (cd "$(git -C "$skill" rev-parse --show-toplevel)" && xargs -0 cat 2>/dev/null)
   } | shasum | cut -c1-7)"
 fi
