@@ -25,7 +25,7 @@ One agent asked to do everything at once tends to guess and invent details. Fact
 
 ## Install
 
-**Requirements:** Claude Code with the **Workflow** tool, and a git repository with at least one commit. Issue runs also need [`gh`](https://cli.github.com/), logged in.
+**Requirements:** Claude Code with the **Workflow** tool, and a git repository with at least one commit. Issue runs also need [`gh`](https://cli.github.com/), logged in. `ui-refine-loop` also needs `node`, `gh`, and Playwright resolvable from the project it polishes.
 
 ### Option 1: paste a prompt into Claude Code
 
@@ -35,14 +35,14 @@ Open Claude Code in any directory and paste this. Claude downloads Factory, inst
 Install the Factory skill for Claude Code from https://github.com/sangtruong-rgb/factory, following these steps exactly:
 
 1. Clone the repository (git clone --depth 1) into a temporary directory.
-2. If ~/.claude/skills/factory, ~/.claude/skills/ba-ticket or ~/.claude/skills/dev-subissues already exists, stop, tell me what it is (directory or symlink, and where it points) and ask me before replacing it. Never overwrite without my consent.
-3. Copy the factory/, ba-ticket/ and dev-subissues/ folders of the repository to ~/.claude/skills/factory, ~/.claude/skills/ba-ticket and ~/.claude/skills/dev-subissues (step 2 applies to all three).
+2. If ~/.claude/skills/factory, ~/.claude/skills/ba-ticket, ~/.claude/skills/dev-subissues or ~/.claude/skills/ui-refine-loop already exists, stop, tell me what it is (directory or symlink, and where it points) and ask me before replacing it. Never overwrite without my consent.
+3. Copy the factory/, ba-ticket/, dev-subissues/ and ui-refine-loop/ folders of the repository to ~/.claude/skills/factory, ~/.claude/skills/ba-ticket, ~/.claude/skills/dev-subissues and ~/.claude/skills/ui-refine-loop (step 2 applies to all four).
 4. Run: bash ~/.claude/skills/factory/scripts/install-skills.sh
    It installs the skills the agent team loads (mattpocock/skills, obra/superpowers, super-board, antfu/skills, anthropics/knowledge-work-plugins, currents-dev) at pinned commits into ~/.claude/skills, and leaves any skill that is already there untouched.
 5. Run: bash ~/.claude/skills/factory/scripts/skills-ready.sh "$HOME"
    It must exit 0. If it exits 10, it prints the names of the missing skills: tell me.
 6. Delete the temporary directory.
-7. Report: which skills were installed (including factory, ba-ticket and dev-subissues), which were kept because they already existed, whether skills-ready passed, and remind me to open a new Claude Code session to use /factory.
+7. Report: which skills were installed (including factory, ba-ticket, dev-subissues and ui-refine-loop), which were kept because they already existed, whether skills-ready passed, and remind me to open a new Claude Code session to use /factory.
 ```
 
 ### Option 2: install by hand
@@ -52,6 +52,7 @@ git clone --depth 1 https://github.com/sangtruong-rgb/factory.git /tmp/factory-s
 cp -r /tmp/factory-src/factory       ~/.claude/skills/factory
 cp -r /tmp/factory-src/ba-ticket     ~/.claude/skills/ba-ticket
 cp -r /tmp/factory-src/dev-subissues ~/.claude/skills/dev-subissues
+cp -r /tmp/factory-src/ui-refine-loop ~/.claude/skills/ui-refine-loop
 bash ~/.claude/skills/factory/scripts/install-skills.sh        # team skills, pinned commits, never overwrites
 bash ~/.claude/skills/factory/scripts/skills-ready.sh "$HOME"  # must exit 0
 rm -rf /tmp/factory-src
@@ -92,6 +93,17 @@ The skill also triggers when you ask for a "factory" or for a team of agents to 
 
 > [!NOTE]
 > Only the issue's criteria are graded. A requirement that lives only in a sub-issue is not checked, so `dev-subissues` proposes it as a new criterion on the issue instead.
+
+**Polishing a page afterwards**, when it works but looks off:
+
+```text
+/ui-refine-loop /dashboard/reports "the summary strip feels cramped"
+/ui-refine-loop src/components/ReceiptViewer.tsx "mobile layout breaks under 400px" --rounds 3
+```
+
+`ui-refine-loop` is a separate, standalone skill: you start it, and the Factory team never runs it. It reads the page's code, asks you at most 10 questions about goal and direction, then runs bounded check → fix rounds in its own worktree and branch (`refine/<slug>`). Each round a design reviewer and a detector judge the page in isolation, a checker ranks the problems, and a fixer lands one commit with the checks green, or reverts. It ends in a **draft** pull request with a Before | After table (light and dark, 1440 and 390 wide) and a grade for every fix. It never merges: whether a page looks better is your call.
+
+It works best with the [Impeccable](https://github.com/pbakaus/impeccable) skill installed (`.claude/skills/impeccable` or `.agents/skills/impeccable`, in the project or your home directory); without it the loop warns loudly and scores with a built-in rubric. Per-project settings (dev command, checks, sign-in script, data states) go in `.claude/ui-refine-loop.json`; see [`ui-refine-loop/references/config.md`](ui-refine-loop/references/config.md). Adapted from [super-board](https://github.com/EricTechPro/super-board)'s `ui-refine-loop` (MIT, see [`ui-refine-loop/NOTICE.md`](ui-refine-loop/NOTICE.md)).
 
 ## How it works
 
@@ -153,6 +165,11 @@ After each run the session can also report it to XS Factory Bench with `xfb repo
 ```text
 ba-ticket/                 BA skill: task → issues with criteria C1..Cn
 dev-subissues/             Dev skill: issue → sub-issues as planner context
+ui-refine-loop/            standalone skill: check → fix loop that polishes one page, ends in a draft PR
+├── SKILL.md               instructions for the chat session: read, grill, set up, run, open the PR
+├── workflow/              ui-refine-loop.js, the Workflow script that runs the rounds
+├── references/            briefs for the loop's agents, the taste file, the rubric, the config keys
+└── scripts/               refine-setup.sh, shoot.mjs (screenshots), pr-shots.sh
 factory/
 ├── SKILL.md               instructions for the chat session: contract, run, verify, merge, report
 ├── workflow/factory.js    the Workflow script that orchestrates the team
@@ -160,7 +177,7 @@ factory/
 ├── scripts/               install-skills.sh, skills-ready.sh, FactoryBench reporting
 ├── dashboard/             index.html, runs.js (finished runs), live.js (run in progress, not committed)
 └── evals/                 skill test cases
-tests/                     node --test tests for the pure helpers in factory.js
+tests/                     node --test tests for factory.js's helpers and for ui-refine-loop
 docs/images/               screenshots for this README
 ```
 
@@ -180,7 +197,7 @@ Factory is a deliberately small baseline. These rules are still enforced by prom
 ## Development
 
 ```sh
-node --test          # tests for the pure helpers in factory/workflow/factory.js
+node --test          # the pure helpers in factory/workflow/factory.js, and ui-refine-loop's script and workflow
 ```
 
 See [CLAUDE.md](CLAUDE.md) for how the script, the role briefs and the tests fit together.
