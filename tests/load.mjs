@@ -9,7 +9,7 @@ import { fileURLToPath } from 'node:url'
 
 const NAMES = [
   'validateSpecs', 'buildLevels', 'matchesIgnore', 'filesOutsideOwnership', 'filesOutsideAssignment',
-  'testsChanged', 'specFiles', 'evaluate', 'routeFailures', 'failureEntries', 'runRecord', 'specText', 'contractText', 'issueText',
+  'testsChanged', 'specFiles', 'evaluate', 'resultFor', 'routeFailures', 'isolationText', 'MAX_ISOLATION_RUNS', 'failureEntries', 'runRecord', 'specText', 'contractText', 'issueText',
   'scratchDir', 'scratchNote', 'SKILLS', 'requiredSkills', 'missingSkills', 'skillsFor', 'skillsNote', 'optionalSkills', 'conditionalFor', 'MODELS', 'modelFor', 'modelProblems',
 ]
 
