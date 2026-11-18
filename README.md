@@ -25,7 +25,7 @@ One agent asked to do everything at once tends to guess and invent details. Fact
 
 ## Install
 
-**Requirements:** Claude Code with the **Workflow** tool, and a git repository with at least one commit. Issue runs also need [`gh`](https://cli.github.com/), logged in. `ui-refine-loop` also needs `node`, `gh`, and Playwright resolvable from the project it polishes.
+**Requirements:** Claude Code with the **Workflow** tool, and a git repository with at least one commit. Issue runs also need [`gh`](https://cli.github.com/), logged in. `ui-refine-loop` also needs `node`, `gh`, and Playwright resolvable from the project it polishes. `pr-judge` needs `node` and `gh`, logged in.
 
 ### Option 1: paste a prompt into Claude Code
 
@@ -35,14 +35,14 @@ Open Claude Code in any directory and paste this. Claude downloads Factory, inst
 Install the Factory skill for Claude Code from https://github.com/sangtruong-rgb/factory, following these steps exactly:
 
 1. Clone the repository (git clone --depth 1) into a temporary directory.
-2. If ~/.claude/skills/factory, ~/.claude/skills/ba-ticket, ~/.claude/skills/dev-subissues or ~/.claude/skills/ui-refine-loop already exists, stop, tell me what it is (directory or symlink, and where it points) and ask me before replacing it. Never overwrite without my consent.
-3. Copy the factory/, ba-ticket/, dev-subissues/ and ui-refine-loop/ folders of the repository to ~/.claude/skills/factory, ~/.claude/skills/ba-ticket, ~/.claude/skills/dev-subissues and ~/.claude/skills/ui-refine-loop (step 2 applies to all four).
+2. If ~/.claude/skills/factory, ~/.claude/skills/ba-ticket, ~/.claude/skills/dev-subissues, ~/.claude/skills/ui-refine-loop or ~/.claude/skills/pr-judge already exists, stop, tell me what it is (directory or symlink, and where it points) and ask me before replacing it. Never overwrite without my consent.
+3. Copy the factory/, ba-ticket/, dev-subissues/, ui-refine-loop/ and pr-judge/ folders of the repository to ~/.claude/skills/factory, ~/.claude/skills/ba-ticket, ~/.claude/skills/dev-subissues, ~/.claude/skills/ui-refine-loop and ~/.claude/skills/pr-judge (step 2 applies to all five).
 4. Run: bash ~/.claude/skills/factory/scripts/install-skills.sh
    It installs the skills the agent team loads (mattpocock/skills, obra/superpowers, super-board, antfu/skills, anthropics/knowledge-work-plugins, currents-dev) at pinned commits into ~/.claude/skills, and leaves any skill that is already there untouched.
 5. Run: bash ~/.claude/skills/factory/scripts/skills-ready.sh "$HOME"
    It must exit 0. If it exits 10, it prints the names of the missing skills: tell me.
 6. Delete the temporary directory.
-7. Report: which skills were installed (including factory, ba-ticket, dev-subissues and ui-refine-loop), which were kept because they already existed, whether skills-ready passed, and remind me to open a new Claude Code session to use /factory.
+7. Report: which skills were installed (including factory, ba-ticket, dev-subissues, ui-refine-loop and pr-judge), which were kept because they already existed, whether skills-ready passed, and remind me to open a new Claude Code session to use /factory.
 ```
 
 ### Option 2: install by hand
@@ -53,6 +53,7 @@ cp -r /tmp/factory-src/factory       ~/.claude/skills/factory
 cp -r /tmp/factory-src/ba-ticket     ~/.claude/skills/ba-ticket
 cp -r /tmp/factory-src/dev-subissues ~/.claude/skills/dev-subissues
 cp -r /tmp/factory-src/ui-refine-loop ~/.claude/skills/ui-refine-loop
+cp -r /tmp/factory-src/pr-judge      ~/.claude/skills/pr-judge
 bash ~/.claude/skills/factory/scripts/install-skills.sh        # team skills, pinned commits, never overwrites
 bash ~/.claude/skills/factory/scripts/skills-ready.sh "$HOME"  # must exit 0
 rm -rf /tmp/factory-src
@@ -104,6 +105,15 @@ The skill also triggers when you ask for a "factory" or for a team of agents to 
 `ui-refine-loop` is a separate, standalone skill: you start it, and the Factory team never runs it. It reads the page's code, asks you at most 10 questions about goal and direction, then runs bounded check → fix rounds in its own worktree and branch (`refine/<slug>`). Each round a design reviewer and a detector judge the page in isolation, a checker ranks the problems, and a fixer lands one commit with the checks green, or reverts. It ends in a **draft** pull request with a Before | After table (light and dark, 1440 and 390 wide) and a grade for every fix. It never merges: whether a page looks better is your call.
 
 It works best with the [Impeccable](https://github.com/pbakaus/impeccable) skill installed (`.claude/skills/impeccable` or `.agents/skills/impeccable`, in the project or your home directory); without it the loop warns loudly and scores with a built-in rubric. Per-project settings (dev command, checks, sign-in script, data states) go in `.claude/ui-refine-loop.json`; see [`ui-refine-loop/references/config.md`](ui-refine-loop/references/config.md). Adapted from [super-board](https://github.com/EricTechPro/super-board)'s `ui-refine-loop` (MIT, see [`ui-refine-loop/NOTICE.md`](ui-refine-loop/NOTICE.md)).
+
+**Judging a pull request**, from a clone of its repository:
+
+```text
+/pr-judge 42
+/pr-judge 42 --issue 17 --no-send
+```
+
+`pr-judge` is another standalone skill, and the one place the team's output is graded from outside the team. It loads none of the skills the team loads (`mp-code-review`, `pr-security-review`, `tdd` and the rest), so the team never grades itself. It checks the pull request and the merge base out in worktrees and runs measured checks: build, type check, lint, format and tests with the base's commands, on the head and, when the head fails, on the base; dependencies added; code changed without a test; shortcuts around the checks such as `@ts-ignore`, `.skip` or a deleted assertion; and SonarQube when it is set up. Then one isolated judge per criterion of [`pr-judge/rubric.md`](pr-judge/rubric.md) reads the change: the issue's acceptance criteria `C1..Cn`, readability, fit with the repository, simplicity, failure handling, tests, security and merge readiness. It writes `report.md` and `report.json` under `~/.xfb/judge/` with a pass / fail / unknown verdict decided by code, not by a judge, and, when [XS Factory Bench](https://github.com/sangtruong-rgb/xs-factory-bench)'s `xfb` is installed, sends it to the run the pull request came from (branch `factory/<run id>`). It refuses a pull request from a fork unless you pass `--allow-fork`, since the checks run its code. The rubric is a draft and the judges are uncalibrated: read the verdict beside the report, not instead of it.
 
 ## How it works
 

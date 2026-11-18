@@ -2857,5 +2857,1037 @@ window.FACTORY_RUNS = [
     ],
     "seconds": 2502,
     "note": "Own checks agree: 2210/2210 tests, typecheck, lint (57 warnings, same as base) and build:web exit 0. Script run from an unchanged copy of factory.js in the session scratchpad."
+  },
+  {
+    "id": "2026-11-17-price-trial-b",
+    "title": "Price trial B: booking page",
+    "outcome": "passed",
+    "workflowOutcome": "passed",
+    "reason": "All checks pass and every criterion is met.",
+    "phase": "Review",
+    "agents": 9,
+    "repairRounds": 0,
+    "maxRepairRounds": 2,
+    "specLine": "2 spec(s) · 2 level(s)",
+    "specs": [
+      {
+        "id": "S1",
+        "title": "Booking rules module",
+        "impl": "ok",
+        "test": "ok",
+        "implNote": "done · 2 file(s)",
+        "testNote": "done · 4 gap(s), 3 written",
+        "waitFor": []
+      },
+      {
+        "id": "S2",
+        "title": "Booking page UI and flow",
+        "impl": "ok",
+        "test": "ok",
+        "implNote": "done · 6 file(s)",
+        "testNote": "done · 6 gap(s), 4 written",
+        "waitFor": [
+          "S1"
+        ]
+      }
+    ],
+    "check": {
+      "text": "pnpm typecheck: exit 0 · pnpm test: exit 0 · pnpm build: exit 0",
+      "state": "ok"
+    },
+    "review": [
+      {
+        "tag": "whole",
+        "label": "reviewer",
+        "state": "ok",
+        "text": "4 finding(s): minor, minor, minor, minor"
+      },
+      {
+        "tag": "S1",
+        "label": "review S1",
+        "state": "ok",
+        "text": "0 finding(s)"
+      },
+      {
+        "tag": "S2",
+        "label": "review S2",
+        "state": "ok",
+        "text": "3 finding(s)"
+      }
+    ],
+    "repairs": [],
+    "criteria": [
+      {
+        "id": "C1",
+        "text": "The page shows the restaurant name \"Lumen Bistro\" as its main heading, a one-line introduction, and the opening hours (Tuesday to Sunday, 17:00 to 22:00; closed on Mondays).",
+        "status": "met"
+      },
+      {
+        "id": "C2",
+        "text": "The booking form has: a native date input (input type=\"date\") labelled \"Date\"; a select labelled \"Number of people\" with the options \"1\" to \"8\" and \"9 or more\", defaulting to \"2\"; a text input labelled \"Name\"; an input type=\"tel\" labelled \"Phone\"; and a button named \"Confirm booking\". Labels are real <label> elements tied to their controls.",
+        "status": "met"
+      },
+      {
+        "id": "C3",
+        "text": "The date input defaults to today's date (the browser's local date) and its min and max are today and 30 days after today. If a date outside that range is entered, the page shows an error that names the allowed range and shows no time slots.",
+        "status": "met"
+      },
+      {
+        "id": "C4",
+        "text": "On an open day (Tuesday to Sunday) the page shows 10 time slots, 17:00 to 21:30 every 30 minutes, each a <button> whose accessible name starts with the time as HH:MM in 24-hour form. On a Monday no slots are shown and the page says the restaurant is closed on Mondays.",
+        "status": "met"
+      },
+      {
+        "id": "C5",
+        "text": "Availability, fixed in code: on Fridays and Saturdays the 19:00 and 19:30 slots are fully booked; for parties of 7 or 8, only 17:00, 17:30 and 18:00 are available on any open day. An unavailable slot is still shown, as a disabled button whose accessible name contains the word \"Full\".",
+        "status": "met"
+      },
+      {
+        "id": "C6",
+        "text": "Choosing \"9 or more\" shows no slots, and instead a message asking the guest to call +1 555 0100 to book for groups of 9 or more.",
+        "status": "met"
+      },
+      {
+        "id": "C7",
+        "text": "Clicking an available slot selects it: it gets aria-pressed=\"true\" and every other slot aria-pressed=\"false\"; only one slot is selected at a time. Changing the date or the number of people clears the selection.",
+        "status": "met"
+      },
+      {
+        "id": "C8",
+        "text": "Clicking \"Confirm booking\" with no slot selected, an empty Name, or a Phone that does not contain 8 to 15 digits (spaces, \"+\", \"-\" and parentheses are allowed besides digits; nothing else) shows, for each problem, an error message next to the field that says what is wrong, and marks a faulty Name or Phone input with aria-invalid=\"true\". No confirmation is shown while any error remains.",
+        "status": "met"
+      },
+      {
+        "id": "C9",
+        "text": "With valid input, \"Confirm booking\" replaces the form with a confirmation whose heading is \"Booking confirmed\" and which repeats the date, the time, the number of people and the name. It has a button \"Make another booking\" that brings back an empty form (date reset to today, 2 people, no slot, empty name and phone).",
+        "status": "met"
+      },
+      {
+        "id": "C10",
+        "text": "The page works at 390 px and at 1440 px wide with no horizontal scrolling, and every control can be reached and used with the keyboard alone, with a visible focus indicator.",
+        "status": "met"
+      },
+      {
+        "id": "C11",
+        "text": "The page has a deliberate, coherent visual design of its own (colour palette, typography, spacing) that suits a restaurant, rather than browser defaults; body text and controls meet WCAG AA contrast.",
+        "status": "met"
+      },
+      {
+        "id": "C12",
+        "text": "The availability rules (C3 to C6) and the phone and name validation (C8) have unit tests, and the whole booking flow, from choosing a slot to the confirmation and back, has a component test with Testing Library.",
+        "status": "met"
+      }
+    ],
+    "failureLog": [],
+    "seconds": 517,
+    "note": "Price trial B (planner on Opus, rest Factory defaults), run in parallel with A and C on the same base. Own checks agree: typecheck, 52/52 tests, build exit 0; hidden acceptance test 23/23. Script run from an unchanged copy of factory.js in the session scratchpad."
+  },
+  {
+    "id": "2026-11-17-price-trial-c",
+    "title": "Price trial C: booking page",
+    "outcome": "passed",
+    "workflowOutcome": "passed",
+    "reason": "All checks pass and every criterion is met after 2 return(s) to Build from review.",
+    "phase": "Review",
+    "agents": 26,
+    "repairRounds": 2,
+    "maxRepairRounds": 2,
+    "specLine": "3 spec(s) · 3 level(s)",
+    "specs": [
+      {
+        "id": "S1",
+        "title": "Booking rules module",
+        "impl": "ok",
+        "test": "ok",
+        "implNote": "done · 2 file(s)",
+        "testNote": "done · 4 gap(s), 2 written",
+        "waitFor": []
+      },
+      {
+        "id": "S2",
+        "title": "Booking page behaviour and flow test",
+        "impl": "ok",
+        "test": "ok",
+        "implNote": "done · 2 file(s)",
+        "testNote": "done · 4 gap(s), 1 written",
+        "waitFor": [
+          "S1"
+        ]
+      },
+      {
+        "id": "S3",
+        "title": "Visual design, focus and responsive layout",
+        "impl": "ok",
+        "test": "ok",
+        "implNote": "done · 2 file(s)",
+        "testNote": "done · 4 gap(s), 0 written",
+        "waitFor": [
+          "S2"
+        ]
+      }
+    ],
+    "check": {
+      "text": "pnpm typecheck: exit 0 · pnpm test: exit 0 · pnpm build: exit 0",
+      "state": "ok"
+    },
+    "review": [
+      {
+        "tag": "whole",
+        "label": "reviewer",
+        "state": "ok",
+        "text": "3 finding(s): minor, minor, minor"
+      },
+      {
+        "tag": "S1",
+        "label": "review S1",
+        "state": "ok",
+        "text": "1 finding(s)"
+      },
+      {
+        "tag": "S2",
+        "label": "review S2",
+        "state": "ok",
+        "text": "1 finding(s)"
+      },
+      {
+        "tag": "S3",
+        "label": "review S3",
+        "state": "ok",
+        "text": "3 finding(s)"
+      }
+    ],
+    "repairs": [],
+    "criteria": [
+      {
+        "id": "C1",
+        "text": "The page shows the restaurant name \"Lumen Bistro\" as its main heading, a one-line introduction, and the opening hours (Tuesday to Sunday, 17:00 to 22:00; closed on Mondays).",
+        "status": "met"
+      },
+      {
+        "id": "C2",
+        "text": "The booking form has: a native date input (input type=\"date\") labelled \"Date\"; a select labelled \"Number of people\" with the options \"1\" to \"8\" and \"9 or more\", defaulting to \"2\"; a text input labelled \"Name\"; an input type=\"tel\" labelled \"Phone\"; and a button named \"Confirm booking\". Labels are real <label> elements tied to their controls.",
+        "status": "met"
+      },
+      {
+        "id": "C3",
+        "text": "The date input defaults to today's date (the browser's local date) and its min and max are today and 30 days after today. If a date outside that range is entered, the page shows an error that names the allowed range and shows no time slots.",
+        "status": "met"
+      },
+      {
+        "id": "C4",
+        "text": "On an open day (Tuesday to Sunday) the page shows 10 time slots, 17:00 to 21:30 every 30 minutes, each a <button> whose accessible name starts with the time as HH:MM in 24-hour form. On a Monday no slots are shown and the page says the restaurant is closed on Mondays.",
+        "status": "met"
+      },
+      {
+        "id": "C5",
+        "text": "Availability, fixed in code: on Fridays and Saturdays the 19:00 and 19:30 slots are fully booked; for parties of 7 or 8, only 17:00, 17:30 and 18:00 are available on any open day. An unavailable slot is still shown, as a disabled button whose accessible name contains the word \"Full\".",
+        "status": "met"
+      },
+      {
+        "id": "C6",
+        "text": "Choosing \"9 or more\" shows no slots, and instead a message asking the guest to call +1 555 0100 to book for groups of 9 or more.",
+        "status": "met"
+      },
+      {
+        "id": "C7",
+        "text": "Clicking an available slot selects it: it gets aria-pressed=\"true\" and every other slot aria-pressed=\"false\"; only one slot is selected at a time. Changing the date or the number of people clears the selection.",
+        "status": "met"
+      },
+      {
+        "id": "C8",
+        "text": "Clicking \"Confirm booking\" with no slot selected, an empty Name, or a Phone that does not contain 8 to 15 digits (spaces, \"+\", \"-\" and parentheses are allowed besides digits; nothing else) shows, for each problem, an error message next to the field that says what is wrong, and marks a faulty Name or Phone input with aria-invalid=\"true\". No confirmation is shown while any error remains.",
+        "status": "met"
+      },
+      {
+        "id": "C9",
+        "text": "With valid input, \"Confirm booking\" replaces the form with a confirmation whose heading is \"Booking confirmed\" and which repeats the date, the time, the number of people and the name. It has a button \"Make another booking\" that brings back an empty form (date reset to today, 2 people, no slot, empty name and phone).",
+        "status": "met"
+      },
+      {
+        "id": "C10",
+        "text": "The page works at 390 px and at 1440 px wide with no horizontal scrolling, and every control can be reached and used with the keyboard alone, with a visible focus indicator.",
+        "status": "met"
+      },
+      {
+        "id": "C11",
+        "text": "The page has a deliberate, coherent visual design of its own (colour palette, typography, spacing) that suits a restaurant, rather than browser defaults; body text and controls meet WCAG AA contrast.",
+        "status": "met"
+      },
+      {
+        "id": "C12",
+        "text": "The availability rules (C3 to C6) and the phone and name validation (C8) have unit tests, and the whole booking flow, from choosing a slot to the confirmation and back, has a component test with Testing Library.",
+        "status": "met"
+      }
+    ],
+    "failureLog": [
+      {
+        "stage": "review",
+        "round": 1,
+        "kind": "criterion",
+        "specs": [
+          "S2"
+        ],
+        "criterion": "C8",
+        "problem": "Criterion C8 is unknown in S2: For an open day with slots, the slot, name and phone errors render next to their fields and aria-invalid is set on Name and Phone (App.tsx:181-226); tested at App.test.tsx:115-148. When availability.kind is closed, group or out-of-range, validateBooking still returns …",
+        "sentBack": true
+      },
+      {
+        "stage": "review",
+        "round": 1,
+        "kind": "finding",
+        "specs": [
+          "S2"
+        ],
+        "file": "src/App.tsx",
+        "line": 181,
+        "problem": "The slot error paragraph (errors.slot) is rendered only inside the availability.kind === 'slots' branch. On a Monday, a group (9 or more) booking or an out-of-range date, pressing 'Confirm booking' sets errors.slot (validateBooking requires a slot) but shows nothing for it, so C8's 'for each proble…",
+        "sentBack": true
+      },
+      {
+        "stage": "review",
+        "round": 2,
+        "kind": "criterion",
+        "specs": [
+          "S3"
+        ],
+        "criterion": "C11",
+        "problem": "Criterion C11 is not_met in S3: The palette, type and spacing are coherent, and my own WCAG calculation gives text/bg 13.8, muted/bg 5.9, white/accent 11.4, error/bg 6.8 and focus/bg 6.2. But a selected slot that is hovered becomes white text on the cream background (about 1.1:1). The rule .slot:ho…",
+        "sentBack": true
+      },
+      {
+        "stage": "review",
+        "round": 2,
+        "kind": "finding",
+        "specs": [
+          "S3"
+        ],
+        "file": "src/styles.css",
+        "line": 206,
+        "problem": "The rule `.slot:hover:not(:disabled)` has specificity (0,3,0). It beats `.slot[aria-pressed='true']` at (0,2,0), so hovering the selected slot sets background to var(--color-bg) while color stays var(--color-on-accent) (white). The result is white text on cream, about 1.1:1, which fails the WCAG AA…",
+        "sentBack": true
+      }
+    ],
+    "seconds": 850,
+    "note": "Price trial C (every role on Sonnet), run in parallel with A and B on the same base. Own checks agree: typecheck, 106/106 tests, build exit 0. Script run from an unchanged copy of factory.js in the session scratchpad."
+  },
+  {
+    "id": "2026-11-17-price-trial-a",
+    "title": "Price trial A: booking page",
+    "outcome": "passed",
+    "workflowOutcome": "passed",
+    "reason": "All checks pass and every criterion is met after 1 return(s) to Build from review.",
+    "phase": "Review",
+    "agents": 15,
+    "repairRounds": 1,
+    "maxRepairRounds": 2,
+    "specLine": "2 spec(s) · 2 level(s)",
+    "specs": [
+      {
+        "id": "S1",
+        "title": "Booking rules module (pure) with unit tests",
+        "impl": "ok",
+        "test": "ok",
+        "implNote": "done · 2 file(s)",
+        "testNote": "done · 5 gap(s), 0 written",
+        "waitFor": []
+      },
+      {
+        "id": "S2",
+        "title": "Booking page: form, slots, validation, confirmation and visual design",
+        "impl": "ok",
+        "test": "ok",
+        "implNote": "done · 0 file(s)",
+        "testNote": "done · 3 gap(s), 0 written",
+        "waitFor": [
+          "S1"
+        ]
+      }
+    ],
+    "check": {
+      "text": "pnpm typecheck: exit 0 · pnpm test: exit 0 · pnpm build: exit 0",
+      "state": "ok"
+    },
+    "review": [
+      {
+        "tag": "whole",
+        "label": "reviewer",
+        "state": "ok",
+        "text": "0 finding(s): none"
+      },
+      {
+        "tag": "S1",
+        "label": "review S1",
+        "state": "ok",
+        "text": "0 finding(s)"
+      },
+      {
+        "tag": "S2",
+        "label": "review S2",
+        "state": "ok",
+        "text": "2 finding(s)"
+      }
+    ],
+    "repairs": [],
+    "criteria": [
+      {
+        "id": "C1",
+        "text": "The page shows the restaurant name \"Lumen Bistro\" as its main heading, a one-line introduction, and the opening hours (Tuesday to Sunday, 17:00 to 22:00; closed on Mondays).",
+        "status": "met"
+      },
+      {
+        "id": "C2",
+        "text": "The booking form has: a native date input (input type=\"date\") labelled \"Date\"; a select labelled \"Number of people\" with the options \"1\" to \"8\" and \"9 or more\", defaulting to \"2\"; a text input labelled \"Name\"; an input type=\"tel\" labelled \"Phone\"; and a button named \"Confirm booking\". Labels are real <label> elements tied to their controls.",
+        "status": "met"
+      },
+      {
+        "id": "C3",
+        "text": "The date input defaults to today's date (the browser's local date) and its min and max are today and 30 days after today. If a date outside that range is entered, the page shows an error that names the allowed range and shows no time slots.",
+        "status": "met"
+      },
+      {
+        "id": "C4",
+        "text": "On an open day (Tuesday to Sunday) the page shows 10 time slots, 17:00 to 21:30 every 30 minutes, each a <button> whose accessible name starts with the time as HH:MM in 24-hour form. On a Monday no slots are shown and the page says the restaurant is closed on Mondays.",
+        "status": "met"
+      },
+      {
+        "id": "C5",
+        "text": "Availability, fixed in code: on Fridays and Saturdays the 19:00 and 19:30 slots are fully booked; for parties of 7 or 8, only 17:00, 17:30 and 18:00 are available on any open day. An unavailable slot is still shown, as a disabled button whose accessible name contains the word \"Full\".",
+        "status": "met"
+      },
+      {
+        "id": "C6",
+        "text": "Choosing \"9 or more\" shows no slots, and instead a message asking the guest to call +1 555 0100 to book for groups of 9 or more.",
+        "status": "met"
+      },
+      {
+        "id": "C7",
+        "text": "Clicking an available slot selects it: it gets aria-pressed=\"true\" and every other slot aria-pressed=\"false\"; only one slot is selected at a time. Changing the date or the number of people clears the selection.",
+        "status": "met"
+      },
+      {
+        "id": "C8",
+        "text": "Clicking \"Confirm booking\" with no slot selected, an empty Name, or a Phone that does not contain 8 to 15 digits (spaces, \"+\", \"-\" and parentheses are allowed besides digits; nothing else) shows, for each problem, an error message next to the field that says what is wrong, and marks a faulty Name or Phone input with aria-invalid=\"true\". No confirmation is shown while any error remains.",
+        "status": "met"
+      },
+      {
+        "id": "C9",
+        "text": "With valid input, \"Confirm booking\" replaces the form with a confirmation whose heading is \"Booking confirmed\" and which repeats the date, the time, the number of people and the name. It has a button \"Make another booking\" that brings back an empty form (date reset to today, 2 people, no slot, empty name and phone).",
+        "status": "met"
+      },
+      {
+        "id": "C10",
+        "text": "The page works at 390 px and at 1440 px wide with no horizontal scrolling, and every control can be reached and used with the keyboard alone, with a visible focus indicator.",
+        "status": "met"
+      },
+      {
+        "id": "C11",
+        "text": "The page has a deliberate, coherent visual design of its own (colour palette, typography, spacing) that suits a restaurant, rather than browser defaults; body text and controls meet WCAG AA contrast.",
+        "status": "met"
+      },
+      {
+        "id": "C12",
+        "text": "The availability rules (C3 to C6) and the phone and name validation (C8) have unit tests, and the whole booking flow, from choosing a slot to the confirmation and back, has a component test with Testing Library.",
+        "status": "met"
+      }
+    ],
+    "failureLog": [
+      {
+        "stage": "review",
+        "round": 1,
+        "kind": "criterion",
+        "specs": [
+          "S2"
+        ],
+        "criterion": "C10",
+        "problem": "Criterion C10 is unknown in S2: Keyboard order and operation are tested and pass. The no-horizontal-scroll rules are present in styles.css (minmax(0,..), fieldset reset, min-width 0, no 100vw). No browser was run, so 390 px and 1440 px and the visible focus ring are unverified.",
+        "sentBack": true
+      }
+    ],
+    "seconds": 1345,
+    "note": "Price trial A (Factory default models), run in parallel with B and C on the same base. Own checks agree: typecheck, tests, build exit 0. Script run from an unchanged copy of factory.js in the session scratchpad."
+  },
+  {
+    "id": "2026-11-17-compare-c3-all-sonnet",
+    "title": "Compare page (c3-all-sonnet)",
+    "outcome": "passed",
+    "workflowOutcome": "passed",
+    "reason": "All checks pass and every criterion is met after 1 return(s) to Build from review.",
+    "phase": "Review",
+    "agents": 23,
+    "repairRounds": 1,
+    "maxRepairRounds": 2,
+    "specLine": "4 spec(s) · 3 level(s)",
+    "specs": [
+      {
+        "id": "S1",
+        "title": "Compare read API: sent-back total, config runs, GET /api/compare",
+        "impl": "ok",
+        "test": "ok",
+        "implNote": "done · 9 file(s)",
+        "testNote": "done · 4 gap(s), 0 written",
+        "waitFor": []
+      },
+      {
+        "id": "S2",
+        "title": "Web client method and pure Compare model",
+        "impl": "ok",
+        "test": "ok",
+        "implNote": "done · 4 file(s)",
+        "testNote": "done · 5 gap(s), 4 written",
+        "waitFor": []
+      },
+      {
+        "id": "S3",
+        "title": "Compare page, route and navigation",
+        "impl": "ok",
+        "test": "ok",
+        "implNote": "done · 1 file(s)",
+        "testNote": "done · 3 gap(s), 1 written",
+        "waitFor": [
+          "S2"
+        ]
+      },
+      {
+        "id": "S4",
+        "title": "Document the Compare page",
+        "impl": "ok",
+        "test": "ok",
+        "implNote": "done · 2 file(s)",
+        "testNote": "done · 2 gap(s), 0 written",
+        "waitFor": [
+          "S1",
+          "S3"
+        ]
+      }
+    ],
+    "check": {
+      "text": "pnpm typecheck: exit 0 · pnpm lint: exit 0 · pnpm test: exit 0 · pnpm build:web: exit 0",
+      "state": "ok"
+    },
+    "review": [
+      {
+        "tag": "whole",
+        "label": "reviewer",
+        "state": "ok",
+        "text": "3 finding(s)"
+      },
+      {
+        "tag": "S1",
+        "label": "review S1",
+        "state": "ok",
+        "text": "1 finding(s)"
+      },
+      {
+        "tag": "S2",
+        "label": "review S2",
+        "state": "ok",
+        "text": "1 finding(s)"
+      },
+      {
+        "tag": "S3",
+        "label": "review S3",
+        "state": "ok",
+        "text": "2 finding(s)"
+      },
+      {
+        "tag": "S4",
+        "label": "review S4",
+        "state": "ok",
+        "text": "0 finding(s)"
+      }
+    ],
+    "repairs": [{"tag": "review 1", "text": "3 failure(s), back to Build: S3", "state": "ok"}],
+    "criteria": [
+      {
+        "id": "C1",
+        "text": "The dashboard has a Compare page, reachable from its navigation, where the user picks two Factory configs from the configs the runs have.",
+        "status": "met"
+      },
+      {
+        "id": "C2",
+        "text": "For the two picked configs the page shows their runs side by side: number of runs, pass rate, cost, cost per passed run, duration, times sent back to Build, and cost by role.",
+        "status": "met"
+      },
+      {
+        "id": "C3",
+        "text": "In each row the better of the two values is marked.",
+        "status": "met"
+      },
+      {
+        "id": "C4",
+        "text": "The page follows the repository's display rules: an unknown value shows ?, n/a or +? and is never counted as zero, and every rate shows its counts.",
+        "status": "met"
+      },
+      {
+        "id": "C5",
+        "text": "docs/architecture.md and README.md describe the Compare page as built.",
+        "status": "met"
+      }
+    ],
+    "failureLog": [
+      {
+        "stage": "review",
+        "round": 1,
+        "kind": "check",
+        "specs": [
+          "S3"
+        ],
+        "check": "lint",
+        "problem": "Check \"lint\" (pnpm lint) exited with 1.",
+        "sentBack": true
+      },
+      {
+        "stage": "review",
+        "round": 1,
+        "kind": "finding",
+        "specs": [
+          "S3"
+        ],
+        "file": "apps/web/compare-screen.test.ts",
+        "line": 188,
+        "problem": "`pnpm lint` exits 1 on this file. Biome's formatter wants the long `assert.match(css, /@media \\(max-width: 760px\\).../)` call at line 188 split across several lines: `assert.match(` on its own line, then `css,`, the regex and `);` each on their own line. This is the only error; the 65 warnings were…",
+        "sentBack": true
+      },
+      {
+        "stage": "review",
+        "round": 1,
+        "kind": "finding",
+        "specs": [
+          "S3"
+        ],
+        "file": "apps/web/compare-screen.test.ts",
+        "line": 188,
+        "problem": "pnpm lint fails with a Biome format error in this file. The long assert.match(css, /@media ... grid-template-columns: minmax\\(0, 1fr\\)/) call on line 188 must be wrapped over several lines (assert.match( css, regex, );). The spec's Done-when requires pnpm lint to pass, so run biome format --write o…",
+        "sentBack": true
+      }
+    ],
+    "seconds": 1821,
+    "note": "Model trial c3: every role on Sonnet (planner, reviewer and rebuild overridden), run in parallel with c1 (default) and c2 (Opus planner) on the same base 42ed605 and contract. Own checks agree: typecheck, lint, test (2359/2359), build exit 0. Not merged: the owner compares the three branches. Script run from an unchanged copy of factory.js in the job scratchpad."
+  },
+  {
+    "id": "2026-11-17-compare-c1-default",
+    "title": "Compare page (c1-default)",
+    "outcome": "passed",
+    "workflowOutcome": "passed",
+    "reason": "All checks pass and every criterion is met.",
+    "phase": "Review",
+    "agents": 14,
+    "repairRounds": 0,
+    "maxRepairRounds": 2,
+    "specLine": "3 spec(s) · 2 level(s)",
+    "specs": [
+      {
+        "id": "S1",
+        "title": "Compare read API: config keys and each config's runs with times sent back to Build",
+        "impl": "ok",
+        "test": "ok",
+        "waitFor": "",
+        "implNote": "Test-first: 3/3 criteria",
+        "testNote": "QA: 5 gap(s), 1 test(s) added"
+      },
+      {
+        "id": "S2",
+        "title": "Compare page in the dashboard: pick two Factory configs, rows side by side, the better value marked",
+        "impl": "ok",
+        "test": "ok",
+        "waitFor": "",
+        "implNote": "Test-first: 4/4 criteria",
+        "testNote": "QA: 3 gap(s), 0 test(s) added"
+      },
+      {
+        "id": "S3",
+        "title": "Docs: describe the Compare page as built in docs/architecture.md and README.md",
+        "impl": "ok",
+        "test": "ok",
+        "waitFor": "S1, S2",
+        "implNote": "",
+        "testNote": "QA: 2 gap(s), 0 test(s) added"
+      }
+    ],
+    "check": {
+      "text": "typecheck: exit 0 · lint: exit 0 · test: exit 0 · build: exit 0",
+      "state": "ok"
+    },
+    "review": [
+      {
+        "tag": "whole change",
+        "text": "5/5 criteria met",
+        "state": "ok"
+      },
+      {
+        "tag": "S1",
+        "text": "3/3 criteria met",
+        "state": "ok"
+      },
+      {
+        "tag": "S2",
+        "text": "4/4 criteria met",
+        "state": "ok"
+      },
+      {
+        "tag": "S3",
+        "text": "1/1 criteria met",
+        "state": "ok"
+      }
+    ],
+    "repairs": [
+      {
+        "tag": "S2 from QA",
+        "text": "1 failure(s), back to Build (1/2)",
+        "state": "ok"
+      }
+    ],
+    "criteria": [
+      {
+        "id": "C1",
+        "text": "The dashboard has a Compare page, reachable from its navigation, where the user picks two Factory configs from the configs the runs have.",
+        "status": "met"
+      },
+      {
+        "id": "C2",
+        "text": "For the two picked configs the page shows their runs side by side: number of runs, pass rate, cost, cost per passed run, duration, times sent back to Build, and cost by role.",
+        "status": "met"
+      },
+      {
+        "id": "C3",
+        "text": "In each row the better of the two values is marked.",
+        "status": "met"
+      },
+      {
+        "id": "C4",
+        "text": "The page follows the repository's display rules: an unknown value shows ?, n/a or +? and is never counted as zero, and every rate shows its counts.",
+        "status": "met"
+      },
+      {
+        "id": "C5",
+        "text": "docs/architecture.md and README.md describe the Compare page as built.",
+        "status": "met"
+      }
+    ],
+    "failureLog": [
+      {
+        "stage": "qa",
+        "round": 0,
+        "kind": "qa",
+        "specs": [
+          "S2"
+        ],
+        "file": "apps/web/src/compare.tsx",
+        "line": 103,
+        "problem": "With placeholderData: keepPreviousData, the table is built from data.a and data.b whenever search.a and search.b are set, with no check that data.a.configKey === search.a and data.b.configKey === search.b. After a select change, the new config key shows in the column head and the 'See its runs' lin…",
+        "sentBack": true
+      }
+    ],
+    "seconds": 7596,
+    "note": "Model trial c1: Factory default models (planner Fable, reviewer and rebuild Opus, the rest Sonnet), run in parallel with c2 (Opus planner) and c3 (all Sonnet) on the same base 42ed605 and contract. Own checks agree: typecheck, lint, test (2331/2331), build exit 0. Not merged: the owner compares the three branches. Script run from an unchanged copy of factory.js in the job scratchpad."
+  },
+  {
+    "id": "2026-11-17-compare-c2-opus-plan",
+    "title": "Compare page (c2-opus-plan)",
+    "outcome": "passed",
+    "workflowOutcome": "passed",
+    "reason": "All checks pass and every criterion is met.",
+    "phase": "Review",
+    "agents": 12,
+    "repairRounds": 0,
+    "maxRepairRounds": 2,
+    "specLine": "3 spec(s) · 2 level(s)",
+    "specs": [
+      {
+        "id": "S1",
+        "title": "Times sent back to Build per run, and the Compare read API",
+        "impl": "ok",
+        "test": "ok",
+        "implNote": "done · 19 file(s)",
+        "testNote": "done · 6 gap(s), 2 written",
+        "waitFor": []
+      },
+      {
+        "id": "S2",
+        "title": "The Compare page in the dashboard",
+        "impl": "ok",
+        "test": "ok",
+        "implNote": "done · 10 file(s)",
+        "testNote": "done · 4 gap(s), 1 written",
+        "waitFor": []
+      },
+      {
+        "id": "S3",
+        "title": "Document the Compare page as built",
+        "impl": "ok",
+        "test": "ok",
+        "implNote": "done · 2 file(s)",
+        "testNote": "done · 2 gap(s), 0 written",
+        "waitFor": [
+          "S1",
+          "S2"
+        ]
+      }
+    ],
+    "check": {
+      "text": "pnpm typecheck: exit 0 · pnpm lint: exit 0 · pnpm test: exit 0 · pnpm build:web: exit 0",
+      "state": "ok"
+    },
+    "review": [
+      {
+        "tag": "whole",
+        "label": "reviewer",
+        "state": "ok",
+        "text": "3 finding(s)"
+      },
+      {
+        "tag": "S1",
+        "label": "review S1",
+        "state": "ok",
+        "text": "2 finding(s)"
+      },
+      {
+        "tag": "S2",
+        "label": "review S2",
+        "state": "ok",
+        "text": "3 finding(s)"
+      },
+      {
+        "tag": "S3",
+        "label": "review S3",
+        "state": "ok",
+        "text": "1 finding(s)"
+      }
+    ],
+    "repairs": [],
+    "criteria": [
+      {
+        "id": "C1",
+        "text": "The dashboard has a Compare page, reachable from its navigation, where the user picks two Factory configs from the configs the runs have.",
+        "status": "met"
+      },
+      {
+        "id": "C2",
+        "text": "For the two picked configs the page shows their runs side by side: number of runs, pass rate, cost, cost per passed run, duration, times sent back to Build, and cost by role.",
+        "status": "met"
+      },
+      {
+        "id": "C3",
+        "text": "In each row the better of the two values is marked.",
+        "status": "met"
+      },
+      {
+        "id": "C4",
+        "text": "The page follows the repository's display rules: an unknown value shows ?, n/a or +? and is never counted as zero, and every rate shows its counts.",
+        "status": "met"
+      },
+      {
+        "id": "C5",
+        "text": "docs/architecture.md and README.md describe the Compare page as built.",
+        "status": "met"
+      }
+    ],
+    "failureLog": [],
+    "seconds": 7682,
+    "note": "Model trial c2: planner on Opus, every other role on Factory's default, run in parallel with c1 (default) and c3 (all Sonnet) on the same base 42ed605 and contract. Own checks agree: typecheck, lint, test (2339/2339), build exit 0. Not merged: the owner compares the three branches. Script run from an unchanged copy of factory.js in the job scratchpad."
+  },
+{"id": "2026-11-17-issue-125-opus-plan", "title": "Issue 125 GitHub integration (Opus planner)", "outcome": "passed", "workflowOutcome": "passed", "reason": "All checks pass and every criterion is met.", "phase": "Review", "agents": 24, "repairRounds": 0, "maxRepairRounds": 2, "specLine": "7 spec(s)", "specs": [{"id": "S1", "title": "GitHub columns, split schema, shared types, repo validation, GitHub OAuth", "impl": "ok", "test": "ok", "implNote": "", "testNote": "sent back 0x", "waitFor": ""}, {"id": "S2", "title": "GithubAuthService and GithubIntegrationService", "impl": "ok", "test": "ok", "implNote": "", "testNote": "sent back 0x", "waitFor": "S1"}, {"id": "S3", "title": "GithubSyncService, GithubRepoService and their routes", "impl": "ok", "test": "ok", "implNote": "", "testNote": "sent back 0x", "waitFor": "S2"}, {"id": "S4", "title": "Repo linking in project creation, Project Settings page and Team Members", "impl": "ok", "test": "ok", "implNote": "", "testNote": "sent back 0x", "waitFor": "S1,S2,S3"}, {"id": "S5", "title": "Task backend: assignee GitHub rule, push sync, comment sync, GitHub actions", "impl": "ok", "test": "ok", "implNote": "", "testNote": "sent back 0x", "waitFor": "S1,S2"}, {"id": "S6", "title": "Markdown editor and viewer, AssigneeSearchPicker, GitHub in Connected Accounts", "impl": "ok", "test": "ok", "implNote": "", "testNote": "sent back 0x", "waitFor": "S1"}, {"id": "S7", "title": "Development card, GitHub comments, Kanban and Dashboard badges", "impl": "ok", "test": "ok", "implNote": "", "testNote": "sent back 0x", "waitFor": "S3,S5,S6"}], "check": {"text": "see failures", "state": "ok"}, "review": [{"tag": "whole", "text": "All checks pass and every criterion is met.", "state": "ok"}], "repairs": [], "criteria": [{"id": "C2.1", "text": "Columns: src/db/schema-workspace.ts:81 (project.githubRepo), :120-126 (seven task columns), :139 (task_github_issue_idx), :156 (task_comment.githubCommentId); schema.ts re-exports every name the base exported (export lists of base and split files compared, no missing names). Scopes: src/lib/auth.ts ", "status": "met"}, {"id": "C2.2", "text": "GithubRepoSelector (src/components/projects/github-repo-selector.tsx) validates through getGithubRepoSelectionError (github-repo-selection.ts). It is wired into CreateProjectDialog (create-project-dialog.tsx:198-205; submit disabled while the selection has an error) -> useProjects.createProject -> P", "status": "met"}, {"id": "C2.3", "text": "Pure rule src/services/task/task-rules.ts checkAssigneeGithubRule. assertAssigneeGithubRule (task-assignee-rules.ts) is applied in TaskService.createTask (task-service.ts:154) and updateTask (task-service.ts:209-222, only when the assignee or project changes), and is mapped to 400 in api/tasks route", "status": "met"}, {"id": "C2.4", "text": "Push: TaskService.updateTask -> pushTaskChangesToGithub (task-github-hooks.ts) -> syncTaskToGitHub, with labels merged. Kanban drag (updateTaskStatusAction), PATCH /api/tasks/[id] and MCP all go through updateTask. Pull: GithubSyncService.syncProjectIssues, started by useProjectGithubAutoSync on Tas", "status": "met"}, {"id": "C3", "text": "Independent checker: typecheck exit 0 ('$ tsc --noEmit'), lint exit 0 ('$ eslint'), format exit 0 ('All matched files use Prettier code style!'), test exit 0 ('925 pass 0 fail ... Ran 925 tests across 94 files'). No existing test lines were removed or loosened: the only '-' lines in the diff of modi", "status": "met"}, {"id": "C4", "text": "wc -l over every changed or new file under src/: the largest are src/db/schema-relations.ts (300), src/services/task/task-service.ts (298) and src/components/tasks/task-utils.ts (271). None is over 300.", "status": "met"}], "failureLog": [], "seconds": 3318, "note": "Arm 2 of a 3-arm comparison on Scylla #125 (planner on Opus/high, rest default). Ran in parallel with the other arms, without the live dashboard. Session checks agree: typecheck, lint, format exit 0; 925 tests pass; no changed src module over 300 lines."},
+{"id": "2026-11-17-issue-125-all-sonnet", "title": "Issue 125 GitHub integration (All Sonnet)", "outcome": "failed", "workflowOutcome": "failed", "reason": "7 failure(s) remain, and S3, S4, S7, S11 have already been sent back to Build 2 time(s).", "phase": "Review", "agents": 87, "repairRounds": 2, "maxRepairRounds": 2, "specLine": "11 spec(s)", "specs": [{"id": "S1", "title": "Foundation: schema columns, GitHub OAuth scopes, repo validation, proxy, shared client types, project githubRepo in the project service", "impl": "ok", "test": "ok", "implNote": "", "testNote": "sent back 0x", "waitFor": ""}, {"id": "S2", "title": "Task and project domain modules: GitHub input fields, assignee GitHub rule, project githubRepo", "impl": "ok", "test": "ok", "implNote": "", "testNote": "sent back 1x", "waitFor": "S1"}, {"id": "S3", "title": "Core GitHub services: auth, repos, user resolution, collaborators, project issue sync", "impl": "ok", "test": "ok", "implNote": "", "testNote": "sent back 2x", "waitFor": "S1,S2"}, {"id": "S4", "title": "GitHub issue, branch, PR and comment services plus the integration facade", "impl": "ok", "test": "ok", "implNote": "", "testNote": "sent back 2x", "waitFor": "S1,S2,S3"}, {"id": "S5", "title": "TaskService wiring, workspace data and GitHub comment sync", "impl": "ok", "test": "ok", "implNote": "", "testNote": "sent back 1x", "waitFor": "S2,S4"}, {"id": "S6", "title": "Server actions: GitHub-aware task and project actions", "impl": "ok", "test": "ok", "implNote": "", "testNote": "sent back 1x", "waitFor": "S1,S2,S4,S5"}, {"id": "S7", "title": "API routes: GitHub repos, task development routes, project repo linking and sync", "impl": "ok", "test": "ok", "implNote": "", "testNote": "sent back 2x", "waitFor": "S1,S2,S3,S4,S5"}, {"id": "S8", "title": "Markdown editor and viewer with code highlighting; GitHub in Connected Accounts", "impl": "ok", "test": "ok", "implNote": "", "testNote": "sent back 0x", "waitFor": "S1"}, {"id": "S9", "title": "Project repo linking and Project Settings page", "impl": "ok", "test": "ok", "implNote": "", "testNote": "sent back 0x", "waitFor": "S1,S7"}, {"id": "S10", "title": "Task Drawer: assignee GitHub badge and tooltip, Markdown description, Development card, synced comments", "impl": "fail", "test": "ok", "implNote": "", "testNote": "sent back 1x", "waitFor": "S1,S4,S6,S7,S8"}, {"id": "S11", "title": "Kanban and Task Dashboard GitHub badges, column chip, auto-sync", "impl": "fail", "test": "ok", "implNote": "", "testNote": "sent back 2x", "waitFor": "S1,S7,S10"}], "check": {"text": "see failures", "state": "fail"}, "review": [{"tag": "whole", "text": "7 failure(s) remain, and S3, S4, S7, S11 have already been sent back to Build 2 time(s).", "state": "fail"}], "repairs": [], "criteria": [{"id": "C2.1", "text": "Schema columns in src/db/schema.ts (project.githubRepo; task.githubIssueNumber/Url/Branch/PrNumber/PrUrl/PrStatus; taskComment.githubCommentId). auth.ts adds github provider with scope [repo, read:user, user:email] and trusts github. GithubAuthService (resolveToken with env fallback, fetchWithAuth),", "status": "met"}, {"id": "C2.2", "text": "GitHubRepoSelector with validateGithubRepoName/isValidGithubRepoFullName, create-project-dialog passes githubRepo/createNewRepo, /projects/[id]/settings page with ProjectGithubCard (read-only repo, View on GitHub link, Sync Now) and ProjectMembersCard (Add Member dialog, remove); use-project-setting", "status": "met"}, {"id": "C2.3", "text": "assertAssigneeGithubLinked in src/services/task/task-rules.ts is wired into TaskService.createTask and updateTask (task-service.ts, only on assignee/project change); AssigneeSearchPicker shows 'No GitHub' badge and tooltip using TaskUser.githubConnected filled by task-workspace-users.ts; MarkdownEdi", "status": "met"}, {"id": "C2.4", "text": "Two-way sync: syncTaskToGithubBestEffort in src/actions/task-actions.ts calls GithubIssueService.syncTaskToGitHub; syncProjectIssues pulls GitHub changes. Development card + branch/PR sections create branch and copy checkout command; PR linking via isPrLinkedToIssue plus timeline/search checks in gi", "status": "met"}, {"id": "C3", "text": "Checker output: `bun run lint` exited 1: tests/ui/kanban-github.test.tsx 289:7 error react-hooks/rules-of-hooks (useProjectGithubAutoSync called inside function `run`). I re-ran bun run lint and got the same error. typecheck, format:check and test exited 0.", "status": "not_met"}, {"id": "C4", "text": "No new or changed src/ file exceeds 300 lines except src/db/schema.ts (1181 lines, was 1173 at the base commit, +8 lines of column definitions that must live there); largest others: task-service.ts 295, github-repo-service.ts 279, github-sync-service.ts 280.", "status": "met"}], "failureLog": [{"stage": "review", "round": 1, "kind": "criterion", "specs": ["S3", "S4", "S5", "S6", "S7", "S10", "S11"], "criterion": "C2.4", "problem": "Criterion C2.4 is not_met: The two-way sync of description is not correct end to end. Description round-trips through GitHub with an accumulating footer, and every drawer save pushes all fields rather than only the changed ones; see the two blocking findings. The rest is present: Development card (…", "sentBack": true}, {"stage": "review", "round": 1, "kind": "finding", "specs": ["S4"], "file": "src/services/github/github-issue-service.ts", "line": 198, "problem": "The Scylla issue footer round-trips into the description and stacks up. createIssueForTask (line 77) and patchLinkedIssue (line 198) send the issue body as `${description}\\n\\n---\\n*Created via Scylla Task Board*`. GithubSyncService.syncIssue (github-sync-service.ts lines 228-229) copies issue.body …", "sentBack": true}, {"stage": "review", "round": 1, "kind": "finding", "specs": ["S6"], "file": "src/actions/task-action-helpers.ts", "line": 18, "problem": "pickGithubUpdates returns every synced field present in the payload, not only the changed ones. The drawer's saveTask (use-task-editor.ts, via buildTaskSavePayload) sends the whole task item to updateTaskAction, so every save sends title, description, status, priority and assigneeId to syncTaskToGi…", "sentBack": true}, {"stage": "review", "round": 2, "kind": "criterion", "specs": ["S2"], "criterion": "C3", "problem": "Criterion C3 is unknown in S2: typecheck, lint and format:check exit 0. The whole-change test run exited 1 with one failure, tests/client/api-client.test.ts:157 (a booking with a foreign-key eventTypeId), which looks unrelated to S2 files. The 27 tests in S2's own two test files pass when run alone…", "sentBack": true}, {"stage": "review", "round": 2, "kind": "check", "specs": ["S3"], "check": "test", "problem": "Check \"test\" (bunx drizzle-kit push --force && bun test) exited with 1.", "sentBack": true}, {"stage": "review", "round": 2, "kind": "criterion", "specs": ["S4"], "criterion": "C3", "problem": "Criterion C3 is unknown in S4: typecheck, lint and format:check exit 0. The full test run exited 1 with one failure, tests/client/api-client.test.ts:157 (event type booking, foreign key eventTypeId), plus an 'Invalid URL' log from github-sync.test.ts. A local full run reproduced only the api-client…", "sentBack": true}, {"stage": "review", "round": 2, "kind": "criterion", "specs": ["S7"], "criterion": "C3", "problem": "Criterion C3 is unknown in S7: Checker reported one failure in the full run (tests/client/api-client.test.ts:157 eventTypes booking). Re-run alone it passes, so it is probably order-dependent or flaky, and it is outside this spec's files. Both S7 test files pass (40 pass, 0 fail). typecheck, lint a…", "sentBack": true}, {"stage": "review", "round": 2, "kind": "criterion", "specs": ["S11"], "criterion": "C3", "problem": "Criterion C3 is not_met in S11: The independent checker reports typecheck, lint and format passing, but `bunx drizzle-kit push --force && bun test` exited 1 with 958 pass and 1 fail. The failure is tests/client/api-client.test.ts:157 (an event-type template booking), outside S11's files. tests/ui/k…", "sentBack": true}, {"stage": "review", "round": 3, "kind": "criterion", "specs": ["S1", "S2", "S3", "S4", "S5", "S6", "S7", "S8", "S9", "S10", "S11"], "criterion": "C3", "problem": "Criterion C3 is not_met: Checker output: `bun run lint` exited 1: tests/ui/kanban-github.test.tsx 289:7 error react-hooks/rules-of-hooks (useProjectGithubAutoSync called inside function `run`). I re-ran bun run lint and got the same error. typecheck, format:check and test exited 0.", "sentBack": false}, {"stage": "review", "round": 3, "kind": "finding", "specs": ["S3"], "file": "src/services/github/github-sync-service.ts", "line": 231, "problem": "Seam between the collaborator matcher (S3) and the assignee GitHub rule (S5): GithubCollaboratorMatcher.syncCollaborators maps a GitHub login to a team member when the user's email is `<login>@users.noreply.github.com`, or when the user's name equals the login, even if that user has no `account` ro…", "sentBack": false}, {"stage": "review", "round": 3, "kind": "criterion", "specs": ["S10"], "criterion": "C3", "problem": "Criterion C3 is unknown in S10: Checker shows lint exit 1, but the only error is tests/ui/kanban-github.test.tsx:289 (another spec's file). eslint on all of this spec's files is clean; typecheck, format and bun test pass (965 pass); bun test tests/ui passes.", "sentBack": false}, {"stage": "review", "round": 3, "kind": "check", "specs": ["S11"], "check": "lint", "problem": "Check \"lint\" (bun run lint) exited with 1.", "sentBack": false}, {"stage": "review", "round": 3, "kind": "finding", "specs": ["S11"], "file": "tests/ui/kanban-github.test.tsx", "line": 289, "problem": "`bun run lint` fails (C3): the helper `async function run(...)` inside describe('useProjectGithubAutoSync (effects run inline)') calls the hook `useProjectGithubAutoSync(...)` directly, which eslint react-hooks/rules-of-hooks rejects (not a component or hook). The test also forces effects to run by…", "sentBack": false}, {"stage": "review", "round": 3, "kind": "criterion", "specs": ["S11"], "criterion": "C3", "problem": "Criterion C3 is not_met in S11: `bun run lint` exits 1: tests/ui/kanban-github.test.tsx:289 reports react-hooks/rules-of-hooks, because useProjectGithubAutoSync is called inside the plain function `run`. Typecheck, format:check and bun test pass.", "sentBack": false}, {"stage": "review", "round": 3, "kind": "finding", "specs": ["S11"], "file": "tests/ui/kanban-github.test.tsx", "line": 289, "problem": "The describe block 'useProjectGithubAutoSync (effects run inline)' calls the hook directly inside a plain async function `run`. ESLint fails with react-hooks/rules-of-hooks, so `bun run lint` exits 1 and C3 breaks. It also works by mocking React.useEffect. Rewrite the test so the hook is called fro…", "sentBack": false}], "seconds": 4361, "note": "Arm 3 of a 3-arm comparison on Scylla #125 (every role on Sonnet). Three workflow invocations of one run: (1) wf_f8984b48-d97 blocked, S1 needed src/services/project/project-service.ts owned by S2 (typecheck broke after the new column); (2) wf_02fe6e9d-0f6 crashed in 8 ms before any agent (session error embedding args); (3) wf_592ffe5a-840 with corrected specs (project-service.ts, project-types.ts and tests/services/project.test.ts moved S2 -> S1), ended failed. failureLog is from invocation 3; invocation 1 ended blocked with reason only. Session checks agree it fails: lint exits 1 (tests/ui/kanban-github.test.tsx:289 rules-of-hooks); src/db/schema.ts 1181 lines. Agents: 2 (invocation 1) + 85."},
+{"id": "2026-11-17-issue-125-default", "title": "Issue 125 GitHub integration (Default)", "outcome": "passed", "workflowOutcome": "passed", "reason": "All checks pass and every criterion is met after 1 return(s) to Build from review.", "phase": "Review", "agents": 97, "repairRounds": 1, "maxRepairRounds": 2, "specLine": "15 spec(s) · 5 level(s)", "specs": [{"id": "S1", "title": "Data model, GitHub OAuth scopes and project repo field", "impl": "ok", "test": "ok", "waitFor": "", "implNote": "Test-first: 4/4 criteria", "testNote": "QA: 4 gap(s), 1 test(s) added"}, {"id": "S2", "title": "GitHub core: auth service, user resolution and pure helpers", "impl": "ok", "test": "ok", "waitFor": "S1", "implNote": "Test-first: 4/3 criteria", "testNote": "QA: 4 gap(s), 0 test(s) added"}, {"id": "S3", "title": "GitHub issue push service", "impl": "ok", "test": "ok", "waitFor": "S1, S2", "implNote": "Test-first: 2/4 criteria", "testNote": "QA: 6 gap(s), 5 test(s) added"}, {"id": "S4", "title": "GitHub branch creation and strict pull-request lookup", "impl": "ok", "test": "ok", "waitFor": "S1, S2", "implNote": "Test-first: 2/4 criteria", "testNote": "QA: 4 gap(s), 0 test(s) added"}, {"id": "S5", "title": "GithubSyncService: pull issues into tasks, in the background", "impl": "ok", "test": "ok", "waitFor": "S1, S2", "implNote": "Test-first: 2/4 criteria", "testNote": "QA: 4 gap(s), 0 test(s) added"}, {"id": "S6", "title": "Repository listing/creation and project GitHub routes", "impl": "ok", "test": "ok", "waitFor": "S1, S2, S5", "implNote": "Test-first: 2/3 criteria", "testNote": "QA: 4 gap(s), 0 test(s) added"}, {"id": "S7", "title": "Assignee GitHub rule in TaskService", "impl": "ok", "test": "ok", "waitFor": "S1, S2", "implNote": "Test-first: 2/3 criteria", "testNote": "QA: 2 gap(s), 0 test(s) added"}, {"id": "S8", "title": "Workspace GitHub flags and comment sync", "impl": "ok", "test": "ok", "waitFor": "S1, S2", "implNote": "Test-first: 4/4 criteria", "testNote": "QA: 4 gap(s), 0 test(s) added"}, {"id": "S9", "title": "GithubIntegrationService facade, task GitHub routes and server-action wiring", "impl": "ok", "test": "ok", "waitFor": "S3, S4, S8", "implNote": "Test-first: 3/4 criteria", "testNote": "QA: 3 gap(s), 0 test(s) added"}, {"id": "S10", "title": "MarkdownEditor and MarkdownViewer components", "impl": "ok", "test": "ok", "waitFor": "", "implNote": "Test-first: 1/3 criteria", "testNote": "QA: 4 gap(s), 0 test(s) added"}, {"id": "S11", "title": "GithubRepoSelector and repo choice in project creation", "impl": "ok", "test": "ok", "waitFor": "S1", "implNote": "Test-first: 3/3 criteria", "testNote": "QA: 3 gap(s), 0 test(s) added"}, {"id": "S12", "title": "Project Settings page", "impl": "ok", "test": "ok", "waitFor": "S1", "implNote": "Test-first: 1/3 criteria", "testNote": "QA: 5 gap(s), 2 test(s) added"}, {"id": "S13", "title": "AssigneeSearchPicker, Markdown description field and GitHub in account settings", "impl": "ok", "test": "ok", "waitFor": "S1, S8, S10", "implNote": "Test-first: 1/3 criteria", "testNote": "QA: 4 gap(s), 1 test(s) added"}, {"id": "S14", "title": "Task Drawer: Development card and synced comments", "impl": "ok", "test": "ok", "waitFor": "S8, S9, S10, S13, S15", "implNote": "Test-first: 1/3 criteria", "testNote": "QA: 6 gap(s), 1 test(s) added"}, {"id": "S15", "title": "GitHub badges on Kanban cards, columns and the task list, plus the auto-sync hook", "impl": "ok", "test": "ok", "waitFor": "S1", "implNote": "Test-first: 1/3 criteria", "testNote": "QA: 5 gap(s), 0 test(s) added"}], "check": {"text": "typecheck: exit 0 · lint: exit 0 · format: exit 0 · test: exit 0", "state": "ok"}, "review": [{"tag": "whole change", "text": "6/6 criteria met", "state": "ok"}, {"tag": "S1", "text": "4/4 criteria met", "state": "ok"}, {"tag": "S2", "text": "3/3 criteria met", "state": "ok"}, {"tag": "S3", "text": "4/4 criteria met", "state": "ok"}, {"tag": "S4", "text": "4/4 criteria met", "state": "ok"}, {"tag": "S5", "text": "4/4 criteria met", "state": "ok"}, {"tag": "S6", "text": "3/3 criteria met", "state": "ok"}, {"tag": "S7", "text": "3/3 criteria met", "state": "ok"}, {"tag": "S8", "text": "4/4 criteria met", "state": "ok"}, {"tag": "S9", "text": "4/4 criteria met", "state": "ok"}, {"tag": "S10", "text": "3/3 criteria met", "state": "ok"}, {"tag": "S11", "text": "3/3 criteria met", "state": "ok"}, {"tag": "S12", "text": "3/3 criteria met", "state": "ok"}, {"tag": "S13", "text": "3/3 criteria met", "state": "ok"}, {"tag": "S14", "text": "3/3 criteria met", "state": "ok"}, {"tag": "S15", "text": "3/3 criteria met", "state": "ok"}], "repairs": [{"tag": "S6 from QA", "text": "1 failure(s), back to Build (1/2)", "state": "ok"}, {"tag": "review 1", "text": "16 failure(s), back to Build: S1, S2, S3, S4, S5, S6, S7, S8, S9, S10, S11, S12, S13, S14, S15", "state": "ok"}], "criteria": [{"id": "C2.1", "text": "Every checkbox in section 1 (Core GitHub services, OAuth and DB schema) is done: add `githubRepo`, `githubIssueNumber`, `githubIssueUrl`, `githubBranch`, `githubPrNumber`, `githubPrUrl` and `githubPrStatus` columns to the `task` and `project` tables; add the `repo`, `read:user` and `user:email` scopes to GitHub OAuth in `src/lib/auth.ts`; `GithubAuthService`: resolve the token and send authorized API requests, with a fallback when no token is available; `GithubIntegrationService`: create issues and branches, invite collaborators, look up PRs; `GithubSyncService`: sync issues in the background; unit tests for the auth, integration and sync services.", "status": "met"}, {"id": "C2.2", "text": "Every checkbox in section 2 (Repo linking and Project Settings page) is done: `GithubRepoSelector` component that checks the repository format; pick an existing GitHub repo or create a new one during project creation; Project Settings page at `/projects/[id]/settings` showing the linked repo (read-only), a sync button and a link to GitHub; Team Members list in Project Settings, with an Add Member dialog and remove actions; unit tests for the project service and settings.", "status": "met"}, {"id": "C2.3", "text": "Every checkbox in section 3 (Assignee GitHub rule and Markdown editor) is done: backend rule in `TaskService` / `task-rules.ts`: on a project linked to GitHub, a task cannot be assigned to a member who has not connected GitHub; `AssigneeSearchPicker` shows a status badge and an explanatory tooltip for members without a GitHub connection; `MarkdownEditor` and `MarkdownViewer` components supporting GFM, tables, checklists and code highlighting; unit tests for task rules, account settings and the Markdown components.", "status": "met"}, {"id": "C2.4", "text": "Every checkbox in section 4 (Task sync, branch and PR workflow, Kanban) is done: two-way sync of task status, priority, title and description with GitHub issues and labels; \"Development\" card in the Task Drawer that creates a branch and copies the `git checkout` command; automatic PR linking with strict branch and timeline checks, so unrelated PRs are not attached to a task; comment sync between the Task Drawer and GitHub issue comments; GitHub badges, branch badges and PR status chips on Kanban cards and columns and on the Task Dashboard; unit tests for task actions, the task workspace service and the Kanban board.", "status": "met"}, {"id": "C3", "text": "`bun run typecheck`, `bun run lint`, `bun run format:check` and `bun test` pass on the branch of this change.", "status": "met"}, {"id": "C4", "text": "Changed or new modules in `src/` stay at 300 lines or fewer (the standard stated in #78).", "status": "met"}], "failureLog": [{"stage": "qa", "round": 0, "kind": "qa", "specs": ["S6"], "file": "src/app/api/projects/route.ts", "line": 215, "problem": "Spec says the existing 409 slug-conflict answer is decided before any GitHub request. resolveRepoToLink runs createRepository first and ProjectService.createProject (which raises the unique violation) runs after, so a duplicate slug with createNewRepo {name:'orphan'} still sends POST https://api.gi…", "sentBack": true}, {"stage": "review", "round": 1, "kind": "check", "specs": ["S1"], "check": "test", "problem": "Check \"test\" (bunx drizzle-kit push --force && bun test) exited with 1.", "sentBack": true}, {"stage": "review", "round": 1, "kind": "criterion", "specs": ["S1", "S2", "S3", "S4", "S5", "S6", "S7", "S8", "S9", "S10", "S11", "S12", "S13", "S14", "S15"], "criterion": "C3", "problem": "Criterion C3 is not_met: The checker's run of `bunx drizzle-kit push --force && bun test` exited 1 with \"934 pass / 137 fail\" (\"TypeError: ProjectService.createProject is not a function\"). I reproduced it: tests/ui/project-settings.test.tsx followed by tests/services/project.test.ts gives 4 fails, …", "sentBack": true}, {"stage": "review", "round": 1, "kind": "criterion", "specs": ["S1"], "criterion": "C3", "problem": "Criterion C3 is not_met in S1: The checker's `drizzle-kit push && bun test` exited 1 with 137 failures, among them tests/services/project.test.ts ('ProjectService.createProject is not a function'). Run alone, the S1 test files pass (74 pass, 0 fail across project, lib, github-schema and task-routin…", "sentBack": true}, {"stage": "review", "round": 1, "kind": "finding", "specs": ["S1"], "file": "src/lib/github-validation.ts", "line": 79, "problem": "parseGithubRepo accepts \"owner/ repo\" (a space after the slash) and returns {repo:\" repo\", fullName:\"owner/ repo\"}. I confirmed this by running it. validateGithubRepoName trims its input internally, so the leading-space repo part passes. The spec requires null for spaces or any other shape other th…", "sentBack": true}, {"stage": "review", "round": 1, "kind": "criterion", "specs": ["S3"], "criterion": "C3", "problem": "Criterion C3 is not_met in S3: typecheck, lint and format pass. The full `bun test` run fails with 137 failures. 35 of them are this spec's tests, with ProjectService.createProject undefined in the full run. tests/services/github-issue-service.test.ts alone passes 31/31. The cause is tests/ui/proje…", "sentBack": true}, {"stage": "review", "round": 1, "kind": "criterion", "specs": ["S4"], "criterion": "C3", "problem": "Criterion C3 is unknown in S4: typecheck, lint and format_check exit 0. The full `bun test` exits 1 with 137 failures, e.g. ProjectService.createProject is not a function. Cause: tests/ui/project-settings.test.tsx mock.module-replaces @/services/project/project-service and leaks into other files. T…", "sentBack": true}, {"stage": "review", "round": 1, "kind": "finding", "specs": ["S5"], "file": "tests/services/github-sync.test.ts", "line": 82, "problem": "setup() names each team `T ${Date.now()}`, and TeamService.createTeam derives the unique team slug from that name. When two setups run in the same millisecond, the insert fails with `duplicate key value violates unique constraint \"team_slug_unique\"`. This happened in about half of my full-suite run…", "sentBack": true}, {"stage": "review", "round": 1, "kind": "criterion", "specs": ["S5"], "criterion": "C3", "problem": "Criterion C3 is not_met in S5: The check output shows bun test exiting 1 with 137 failures. The full run also fails 26 tests in tests/services/github-sync.test.ts, although all 29 pass when that file runs alone. Cause: tests/ui/project-settings.test.tsx:187 mock.module replaces ProjectService with …", "sentBack": true}, {"stage": "review", "round": 1, "kind": "criterion", "specs": ["S6"], "criterion": "C3", "problem": "Criterion C3 is not_met in S6: The checker reports `bun test` exit 1 with 137 failures, e.g. 'ProjectService.createProject is not a function' in tests/services/project.test.ts. The two test files owned here pass in isolation (40 pass). tests/services/project.test.ts passes alone but fails when run …", "sentBack": true}, {"stage": "review", "round": 1, "kind": "criterion", "specs": ["S7"], "criterion": "C3", "problem": "Criterion C3 is not_met in S7: The checker reports typecheck, lint and format at exit 0, but `bunx drizzle-kit push --force && bun test` exited 1 (137 fail, with 'ProjectService.createProject is not a function'). I ran the files of this spec in isolation. task-rules, task, task-permissions, task-st…", "sentBack": true}, {"stage": "review", "round": 1, "kind": "criterion", "specs": ["S8"], "criterion": "C3", "problem": "Criterion C3 is unknown in S8: typecheck, lint and format pass. The whole-suite `bun test` exits 1 with 137 failures, e.g. `ProjectService.createProject is not a function` at tests/services/project.test.ts:82. This looks like module-mock pollution from a test outside S8. The S8 test files pass when…", "sentBack": true}, {"stage": "review", "round": 1, "kind": "criterion", "specs": ["S9"], "criterion": "C3", "problem": "Criterion C3 is not_met in S9: Typecheck, lint and format exit 0. The full bun test run exits 1 with 138 failures. They are TypeErrors 'ProjectService.createProject is not a function' in tests/services/project.test.ts and tests/security/issue-99-*.test.ts. tests/services/project.test.ts passes when…", "sentBack": true}, {"stage": "review", "round": 1, "kind": "finding", "specs": ["S12"], "file": "tests/ui/project-settings.test.tsx", "line": 173, "problem": "`const realProjectService = await import(\"@/services/project/project-service\")` holds the live module namespace, not a copy. Bun's mock.module at line 187 replaces that namespace's exports in place, so the afterAll at line 193 'restores' the mocked module, where ProjectService has only getProjectBy…", "sentBack": true}, {"stage": "review", "round": 1, "kind": "criterion", "specs": ["S12"], "criterion": "C3", "problem": "Criterion C3 is not_met in S12: The checker's `bun test` exit code is 1 (137 fail). The test file in this spec causes most of the failures. Running every test file except tests/ui/project-settings.test.tsx gives 1069 pass and 2 fail. Running the whole suite gives 933 pass and 137 fail, for example …", "sentBack": true}, {"stage": "review", "round": 1, "kind": "finding", "specs": ["S12"], "file": "tests/ui/project-settings.test.tsx", "line": 179, "problem": "The file uses mock.module on '@/lib/team-pages' and '@/services/project/project-service', and the mocks leak into other test files in the same `bun test` run. The ProjectService mock is `{ getProjectById }` only, and the afterAll at lines 191-194 does not undo it, because realProjectService is a li…", "sentBack": true}, {"stage": "review", "round": 1, "kind": "criterion", "specs": ["S15"], "criterion": "C3", "problem": "Criterion C3 is unknown in S15: Typecheck, lint and format pass. The full `bun test` run fails with 137 failures, e.g. `ProjectService.createProject is not a function` in tests/services/project.test.ts. That file passes when run alone (4 pass), so the failure looks like cross-file mock leakage from…", "sentBack": true}], "seconds": 5011, "note": "Arm 1 of a 3-arm comparison on Scylla #125 (default models). Session checks agree: typecheck, lint, format exit 0; 1135 tests pass (one known flaky api-client test fails intermittently, as on main); no changed src module over 300 lines. Not merged: PR #127 (branch factory/issue-125-run-a), pushed with --no-verify because Next.js 16.4.3 (unchanged from main) stops next build with SecurityFatalError."},
+  {
+    "id": "2026-11-18-smoke-json-flag",
+    "title": "Smoke test: --json flag for wordstats",
+    "outcome": "failed",
+    "workflowOutcome": "failed",
+    "reason": "2 failure(s) remain, and S1 has already been sent back to Build 2 time(s).",
+    "phase": "Review",
+    "agents": 13,
+    "repairRounds": 2,
+    "maxRepairRounds": 2,
+    "specLine": "1 spec(s) · 1 level(s)",
+    "specs": [
+      {
+        "id": "S1",
+        "title": "--json output flag for wordstats.py",
+        "impl": "ok",
+        "test": "ok",
+        "waitFor": "",
+        "implNote": "Test-first: 4/4 criteria",
+        "testNote": "QA: 3 gap(s), 1 test(s) added"
+      }
+    ],
+    "check": {
+      "text": "ci-tests: exit 0",
+      "state": "ok"
+    },
+    "review": [
+      {
+        "tag": "whole change",
+        "text": "4/4 criteria met, 1 blocking finding(s)",
+        "state": "fail"
+      }
+    ],
+    "repairs": [
+      {
+        "tag": "review 1",
+        "text": "2 failure(s), back to Build: S1",
+        "state": "ok"
+      },
+      {
+        "tag": "review 2",
+        "text": "2 failure(s), back to Build: S1",
+        "state": "ok"
+      }
+    ],
+    "criteria": [
+      {
+        "id": "C1",
+        "text": "`python3 wordstats.py --json FILE` prints exactly one JSON object on stdout with the keys lines, words and chars, whose values are the integers stats() returns for that file's text (for a file containing \"a b\\nc\\n\": lines 2, words 3, chars 6), and exits with code 0.",
+        "status": "met"
+      },
+      {
+        "id": "C2",
+        "text": "Without --json the output and exit code are unchanged: `python3 wordstats.py FILE` still prints \"lines: N\\nwords: N\\nchars: N\" and exits 0, and the existing tests in tests/test_wordstats.py pass without being changed.",
+        "status": "met"
+      },
+      {
+        "id": "C3",
+        "text": "With --json and a file that cannot be read, the program behaves as in text mode: an error message on stderr, nothing on stdout, exit code 1.",
+        "status": "met"
+      },
+      {
+        "id": "C4",
+        "text": "tests/test_wordstats.py has tests that run main() with --json and parse its stdout as JSON to check the three counts, and a test for the --json error case of C3.",
+        "status": "met"
+      }
+    ],
+    "failureLog": [
+      {
+        "stage": "review",
+        "round": 1,
+        "kind": "check",
+        "specs": [
+          "S1"
+        ],
+        "check": "ci-tests: Run unit tests",
+        "problem": "Check \"ci-tests: Run unit tests\" (python3 -m unittest discover -s tests -v) was not run.",
+        "sentBack": true
+      },
+      {
+        "stage": "review",
+        "round": 1,
+        "kind": "finding",
+        "specs": [
+          "S1"
+        ],
+        "file": "tests/test_wordstats.py",
+        "line": 66,
+        "problem": "test_json_output asserts the exact stdout string '{\"lines\": 2, \"words\": 3, \"chars\": 6}\\n'. That pins key order, json.dumps's default separators and single-line layout, and the contract does not require any of these. C1 only asks for exactly one JSON object with the keys lines, words and chars holdi…",
+        "sentBack": true
+      },
+      {
+        "stage": "review",
+        "round": 2,
+        "kind": "check",
+        "specs": [
+          "S1"
+        ],
+        "check": "ci-tests: Run unit tests",
+        "problem": "Check \"ci-tests: Run unit tests\" (python3 -m unittest discover -s tests -v) was not run.",
+        "sentBack": true
+      },
+      {
+        "stage": "review",
+        "round": 2,
+        "kind": "finding",
+        "specs": [
+          "S1"
+        ],
+        "file": "tests/test_wordstats.py",
+        "line": 105,
+        "problem": "test_json_exact_line_and_key_order (line 108) and test_json_empty_file_exact_line (line 113) compare stdout to exact strings such as '{\"lines\": 2, \"words\": 3, \"chars\": 6}\\n'. test_json_output requires a single newline (line 67: out.count(\"\\n\") == 1). Together these pin the key order, json.dumps's d…",
+        "sentBack": true
+      },
+      {
+        "stage": "review",
+        "round": 3,
+        "kind": "check",
+        "specs": [
+          "S1"
+        ],
+        "check": "ci-tests: Run unit tests",
+        "problem": "Check \"ci-tests: Run unit tests\" (python3 -m unittest discover -s tests -v) was not run.",
+        "sentBack": false
+      },
+      {
+        "stage": "review",
+        "round": 3,
+        "kind": "finding",
+        "specs": [
+          "S1"
+        ],
+        "file": "tests/test_wordstats.py",
+        "line": 117,
+        "problem": "test_json_stdout_is_exactly_one_default_formatted_line asserts the exact bytes `'{\"lines\": 2, \"words\": 3, \"chars\": 6}\\n'` (and the same for the empty file at line 124), which pins json.dumps' default separators, key order and single-line layout. The contract (C1) only requires exactly one JSON obje…",
+        "sentBack": false
+      }
+    ],
+    "seconds": 803,
+    "note": "Smoke test of Factory ffc90f1 on the adds-json-flag-to-cli case plus a CI file. The session's own checks agree with the workflow: 13 tests pass locally and in a python:3.12 Linux container (CI parity re-check), but the run failed for two process reasons: (1) the session named the check 'ci-tests: Run unit tests'; the checker prompt lists checks as '- name: command', the checker returned name 'ci-tests', so evaluate() reported the check as not run in every round; (2) the planner pinned json.dumps' exact default line in the spec, QA kept adding exact-string tests from it, and the whole-change reviewer kept flagging them as asking for more than the contract. Not merged; work left on factory/2026-11-18-smoke-json-flag."
+  },
+  {
+    "id": "2026-11-18-smoke-json-flag-2",
+    "title": "Smoke test 2: --json flag for wordstats",
+    "outcome": "passed",
+    "workflowOutcome": "passed",
+    "reason": "All checks pass and every criterion is met.",
+    "phase": "Review",
+    "agents": 5,
+    "repairRounds": 0,
+    "maxRepairRounds": 2,
+    "specLine": "1 spec(s) · 1 level(s)",
+    "specs": [
+      {
+        "id": "S1",
+        "title": "--json flag for wordstats.py",
+        "impl": "ok",
+        "test": "ok",
+        "waitFor": "",
+        "implNote": "Test-first: 4/4 criteria",
+        "testNote": "QA: 3 gap(s), 0 test(s) added"
+      }
+    ],
+    "check": {
+      "text": "ci-tests: Run unit tests: exit 0",
+      "state": "ok"
+    },
+    "review": [
+      {
+        "tag": "whole change",
+        "text": "4/4 criteria met",
+        "state": "ok"
+      }
+    ],
+    "repairs": [],
+    "criteria": [
+      {
+        "id": "C1",
+        "text": "`python3 wordstats.py --json FILE` prints exactly one JSON object on stdout with the keys lines, words and chars, whose values are the integers stats() returns for that file's text (for a file containing \"a b\\nc\\n\": lines 2, words 3, chars 6), and exits with code 0.",
+        "status": "met"
+      },
+      {
+        "id": "C2",
+        "text": "Without --json the output and exit code are unchanged: `python3 wordstats.py FILE` still prints \"lines: N\\nwords: N\\nchars: N\" and exits 0, and the existing tests in tests/test_wordstats.py pass without being changed.",
+        "status": "met"
+      },
+      {
+        "id": "C3",
+        "text": "With --json and a file that cannot be read, the program behaves as in text mode: an error message on stderr, nothing on stdout, exit code 1.",
+        "status": "met"
+      },
+      {
+        "id": "C4",
+        "text": "tests/test_wordstats.py has tests that run main() with --json and parse its stdout as JSON to check the three counts, and a test for the --json error case of C3.",
+        "status": "met"
+      }
+    ],
+    "failureLog": [],
+    "seconds": 276,
+    "note": "Rerun of 2026-11-18-smoke-json-flag on Factory c514a81, same contract and the same check name with a colon. The checker returned the full quoted name; the planner left the JSON formatting free; no spec sent back. The session's own checks agree: 7 tests pass locally and in a python:3.12 Linux container (CI parity re-check). Merged into main as 8cb289e."
   }
 ];
