@@ -1,12 +1,12 @@
 export const meta = {
   name: 'factory',
-  description: 'Run a coding contract through a planner, one test-first implementer and one QA agent per spec, a checker and fresh reviewers; a spec that fails QA or review goes back to Build, a bounded number of times',
+  description: 'Run a coding contract through a planner, one test-first implementer and one QA agent per spec, a checker, fresh reviewers and a QC agent that uses the product; a spec that fails QA, review or QC goes back to Build, a bounded number of times',
   whenToUse: 'Called by the factory skill after the contract is written. Not meant to be started without its args.',
   phases: [
     { title: 'Spec', detail: 'planner turns the contract into specs; code validates them' },
     { title: 'Build', detail: 'per spec: the implementer writes the tests first, then the code; then QA. A spec QA sends back is rebuilt and checked again' },
     { title: 'Check', detail: 'checker runs the contract checks and lists changed files' },
-    { title: 'Review', detail: 'one reviewer for the whole change, plus one per spec when the work was split; the specs a failure concerns go back to Build' },
+    { title: 'Review', detail: 'one reviewer for the whole change, plus one per spec when the work was split, and, once the checks pass, a QC agent that runs the product; the specs a failure concerns go back to Build' },
   ],
 }
 
@@ -57,6 +57,7 @@ const MODELS = {
   checker: { model: 'sonnet', effort: 'low' },
   reviewer: { model: 'opus', effort: 'high' },
   specReviewer: { model: 'sonnet', effort: 'medium' },
+  qc: { model: 'sonnet', effort: 'medium' },
 }
 const MODEL_NAMES = ['haiku', 'sonnet', 'opus', 'fable', 'inherit']
 const EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max']
@@ -132,6 +133,11 @@ const SKILLS = {
     qa: {
       vitest: 'when the tests run on Vitest (the repository\'s package.json or config says so)',
       'playwright-best-practices': 'when a gap can only be shown through a browser, or the repository tests with Playwright',
+    },
+    // QC loads no fixed skill on purpose: the review skills would make it read
+    // the code the way the reviewers already do, and share their blind spots.
+    qc: {
+      'playwright-best-practices': 'when a criterion is seen in a browser',
     },
   },
   // Skills that wait on a person. Nobody is there to answer during a run.
@@ -327,18 +333,9 @@ function resultFor(results, check) {
     || list.find(r => squash(r.command) === squash(check.command))
 }
 
-// Decides pass or fail from the raw facts. An agent's own "verdict" is never
-// consulted: the result is passing only if this list is empty.
-//
-// `review` is the reviewer of the whole change, judged against the contract.
-// `specReviews` is [{ spec, review }], one per spec when the work was split
-// (empty for a single spec). A criterion passes only if the whole-change
-// reviewer and every spec reviewer responsible for it all say `met`.
-// What QA sends back never reaches this point: a spec QA fails goes back to
-// Build before the change is checked or reviewed.
-function evaluate(contract, check, review, specReviews) {
+// The failures of the contract's checks alone: a check not run, or not exiting 0.
+function checkFailures(contract, check) {
   const failures = []
-
   for (const c of contract.checks) {
     const r = resultFor(check.results, c)
     if (!r) failures.push({ kind: 'check', name: c.name, problem: `Check "${c.name}" (${c.command}) was not run.` })
@@ -353,6 +350,39 @@ function evaluate(contract, check, review, specReviews) {
       failures.push(f)
     }
   }
+  return failures
+}
+
+// What the QC agent found, as failures: a criterion it saw fail when it used
+// the product, or one it did not judge. `not_observable` (the criterion is
+// about the code, not about what a user sees) passes, as no run could show it.
+function qcFailures(contract, qc) {
+  const failures = []
+  const judged = new Map((qc.criteria || []).map(c => [c.id, c]))
+  for (const c of contract.criteria) {
+    const j = judged.get(c.id)
+    if (!j) failures.push({ kind: 'qc', id: c.id, problem: `Criterion ${c.id} was not judged by QC.` })
+    else if (j.status !== 'pass' && j.status !== 'not_observable') {
+      failures.push({ kind: 'qc', id: c.id, problem: `Criterion ${c.id} fails when the product is used. Scenario: ${j.scenario} Expected: ${j.expected} Observed: ${j.observed}` })
+    }
+  }
+  return failures
+}
+
+// Decides pass or fail from the raw facts. An agent's own "verdict" is never
+// consulted: the result is passing only if this list is empty.
+//
+// `qc` is the QC agent's result, or null when it did not run: QC is off, or a
+// check failed, so the change goes back to Build anyway and QC runs next round.
+//
+// `review` is the reviewer of the whole change, judged against the contract.
+// `specReviews` is [{ spec, review }], one per spec when the work was split
+// (empty for a single spec). A criterion passes only if the whole-change
+// reviewer and every spec reviewer responsible for it all say `met`.
+// What QA sends back never reaches this point: a spec QA fails goes back to
+// Build before the change is checked or reviewed.
+function evaluate(contract, check, review, specReviews, qc) {
+  const failures = checkFailures(contract, check)
 
   const judged = new Map((review.criteria || []).map(c => [c.id, c]))
   for (const c of contract.criteria) {
@@ -384,6 +414,7 @@ function evaluate(contract, check, review, specReviews) {
       }
     }
   }
+  if (qc) failures.push(...qcFailures(contract, qc))
   return failures
 }
 
@@ -392,7 +423,7 @@ function evaluate(contract, check, review, specReviews) {
 // failures that concern its own files, so no agent is handed another spec's work:
 //   - a finding that names a file goes to the spec owning it;
 //   - a criterion judged for one spec goes to that spec, one judged for the
-//     whole change to every spec responsible for it;
+//     whole change, or failed by QC, to every spec responsible for it;
 //   - a failing check whose failing tests pass alone, and for which the
 //     checker found the test file(s) that break them (`culprits`), goes to
 //     the specs owning those files only: a mock or global leaked by one test
@@ -410,7 +441,7 @@ function routeFailures(failures, specs) {
     let ids = []
     if (f.kind === 'finding' && owner.has(normPath(f.file))) ids = [owner.get(normPath(f.file))]
     else if (f.spec && bySpec.has(f.spec)) ids = [f.spec]
-    else if (f.kind === 'criterion') ids = specs.filter(s => (s.criteria || []).includes(f.id)).map(s => s.id)
+    else if (f.kind === 'criterion' || f.kind === 'qc') ids = specs.filter(s => (s.criteria || []).includes(f.id)).map(s => s.id)
     else if (f.kind === 'check') {
       const culprits = new Set((f.culprits || []).map(repoPath).filter(c => owner.has(c)).map(c => owner.get(c)))
       if (culprits.size > 0) ids = specs.filter(s => culprits.has(s.id)).map(s => s.id)
@@ -448,7 +479,7 @@ function failureEntries(groups, at) {
         e = { stage: at.stage, round: at.round, kind: f.kind, specs: [] }
         if (!isBlank(f.file)) e.file = normPath(f.file)
         if (f.line !== undefined && f.line !== null && f.line !== '') e.line = f.line
-        if (f.kind === 'criterion') e.criterion = f.id
+        if (f.kind === 'criterion' || f.kind === 'qc') e.criterion = f.id
         if (f.kind === 'check') e.check = f.name
         e.problem = problem.length > PROBLEM_CHARS ? `${problem.slice(0, PROBLEM_CHARS - 1)}…` : problem
         e.sentBack = Boolean(at.sentBack)
@@ -480,6 +511,17 @@ function qaLine(report) {
   return `QA: ${gaps.length} gap(s), ${written} test(s) added${failing > 0 ? `, ${failing} sent back` : ''}`
 }
 
+// What the QC agent of one round found, in a few words, for the dashboard.
+function qcLine(qc) {
+  const criteria = qc.criteria || []
+  const count = s => criteria.filter(c => c.status === s).length
+  const failing = criteria.length - count('pass') - count('not_observable')
+  return {
+    text: `${count('pass')}/${criteria.length} criteria pass when used${count('not_observable') > 0 ? `, ${count('not_observable')} not observable` : ''}${failing > 0 ? `, ${failing} fail` : ''}`,
+    state: failing === 0 && criteria.length > 0 ? 'ok' : 'fail',
+  }
+}
+
 // The run as the dashboard shows it, built from the raw state so that what is
 // displayed is decided here and not by the agent that writes the file.
 // `run` is { id, title, agents, maxRepairRounds }; `progress` is { phase,
@@ -488,7 +530,8 @@ function qaLine(report) {
 // work went back to Build, as { tag, text, state }.
 function runRecord(run, contract, state, progress) {
   const specs = state.specs || []
-  const failed = new Set((state.failures || []).filter(f => f.kind === 'criterion').map(f => f.id))
+  const failed = new Set((state.failures || []).filter(f => f.kind === 'criterion' || f.kind === 'qc').map(f => f.id))
+  const qc = (state.qc || []).slice(-1)[0]
   const results = state.check ? state.check.results || [] : []
   return {
     id: run.id,
@@ -525,7 +568,11 @@ function runRecord(run, contract, state, progress) {
         }
       : { text: contract.checks.map(c => c.command).join(' · ') },
     review: state.review
-      ? [{ tag: 'whole change', ...reviewLine(state.review) }, ...(state.specReviews || []).map(r => ({ tag: r.spec, ...reviewLine(r) }))]
+      ? [
+          { tag: 'whole change', ...reviewLine(state.review) },
+          ...(state.specReviews || []).map(r => ({ tag: r.spec, ...reviewLine(r) })),
+          ...(qc ? [{ tag: 'qc', ...qcLine(qc) }] : []),
+        ]
       : [],
     repairs: progress.repairs,
     criteria: contract.criteria.map(c => ({ id: c.id, text: c.text, status: state.review ? (failed.has(c.id) ? 'not_met' : 'met') : '' })),
@@ -553,6 +600,26 @@ function contractText(contract) {
     '',
     'Checks:',
     contract.checks.length > 0 ? contract.checks.map(c => `- ${c.name}: ${c.command}`).join('\n') : '- none (the project has no runnable check)',
+  ].join('\n')
+}
+
+// The contract as the QC agent sees it: what the product must do and how a
+// user starts it. No checks, specs, diff or file list: QC judges the product by
+// using it, and the code it would read is what the reviewers already read.
+// `contract.run` is optional; without it QC finds out how to start the product
+// the way a new teammate would.
+function qcText(contract) {
+  return [
+    `Objective: ${contract.objective}`,
+    '',
+    'Acceptance criteria:',
+    ...contract.criteria.map(c => `- ${c.id}: ${c.text}`),
+    '',
+    'Out of scope:',
+    bullets(contract.outOfScope),
+    '',
+    'How to run the product:',
+    isBlank(contract.run) ? 'Not given. Find out from the repository\'s README, docs and manifest (package.json scripts, Makefile, pyproject), as a new teammate would.' : String(contract.run).trim(),
   ].join('\n')
 }
 
@@ -898,6 +965,34 @@ const REVIEW_SCHEMA = {
   required: ['criteria', 'findings', 'notReviewed'],
 }
 
+const QC_SCHEMA = {
+  type: 'object',
+  properties: {
+    status: { type: 'string', enum: ['done', 'blocked'] },
+    blockedReason: { type: 'string', description: 'Why the product could not be run for a reason the change did not cause, and what is needed; empty when done' },
+    startedWith: { type: 'string', description: 'How the product was built and started, as commands' },
+    criteria: {
+      type: 'array',
+      description: 'Every criterion of the contract exactly once',
+      items: {
+        type: 'object',
+        properties: {
+          id: { type: 'string' },
+          status: { type: 'string', enum: ['pass', 'fail', 'not_observable'] },
+          scenario: { type: 'string', description: 'What was done, through which entry point, with the exact inputs; for not_observable, why no use of the product can show it' },
+          expected: { type: 'string', description: 'What the criterion says should be seen, written before running it' },
+          observed: { type: 'string', description: 'What was seen, quoted from the output, response or page' },
+        },
+        required: ['id', 'status', 'scenario', 'expected', 'observed'],
+      },
+    },
+    filesChanged: { ...STRINGS, description: 'Repository files changed or created and not removed again; must be empty' },
+    commandsRun: COMMANDS,
+    openIssues: STRINGS,
+  },
+  required: ['status', 'blockedReason', 'startedWith', 'criteria', 'filesChanged', 'commandsRun', 'openIssues'],
+}
+
 // ---------------------------------------------------------------------------
 // Agent calls
 // ---------------------------------------------------------------------------
@@ -1100,6 +1195,27 @@ function runSpecReview(spec, contract, check, round) {
   )
 }
 
+// QC: a fresh agent that runs the product and tries each criterion as a user
+// would. It sees the contract and how to start the product, nothing of the
+// specs, the diff or anyone's account, and changes nothing in the repository.
+function runQc(contract, round) {
+  return spawn(
+    [
+      header('qc'),
+      '',
+      'Use the product as it now stands in the repository, the way a user would, and judge each criterion by what it does.',
+      '',
+      qcText(contract),
+      '',
+      `The contract's checks have passed on this change. Do not read the change itself (\`git diff\`, the files it touched): judge what the product does, not what its code says.`,
+      'Reviewers are reading the repository at the same time. Change nothing in it: no edits, commits, stashes or checkouts.',
+      '',
+      skillsNote([], args.skills, '', conditionalFor('qc', args.skills, [])),
+    ].join('\n'),
+    { label: round === 0 ? 'qc' : `qc (round ${round})`, phase: 'Review', schema: QC_SCHEMA, ...modelFor('qc', args.models) },
+  )
+}
+
 // ---------------------------------------------------------------------------
 // The run
 // ---------------------------------------------------------------------------
@@ -1110,12 +1226,15 @@ const contract = input.contract
 // (super-board's rebuild cap). A spec past it fails the run.
 const maxRebuilds = Number.isInteger(input.maxRebuilds) ? input.maxRebuilds : 2
 const maxSpecRevisions = Number.isInteger(input.maxSpecRevisions) ? input.maxSpecRevisions : 2
+// QC runs unless the caller turns it off with `qc: false`, for a change no user
+// can see (the session says why in its report).
+const qcOn = input.qc !== false
 // The agents' scratch directories go next to the repository by default, never
 // inside it, where they would show up as changes that no spec owns.
 const repo = String(input.repo || '').replace(/\/+$/, '')
 const scratch = isBlank(input.scratch) ? `${repo}-factory-scratch` : String(input.scratch).replace(/\/+$/, '')
 
-const state = { outcome: 'blocked', reason: '', overview: '', risks: [], specs: [], builds: [], qa: [], rebuilds: [], sentBack: {}, testsChangedInRebuild: [], check: null, review: null, specReviews: [], failures: [], failureLog: [], repairRounds: 0 }
+const state = { outcome: 'blocked', reason: '', overview: '', risks: [], specs: [], builds: [], qa: [], rebuilds: [], sentBack: {}, testsChangedInRebuild: [], check: null, review: null, specReviews: [], qc: [], failures: [], failureLog: [], repairRounds: 0 }
 
 // Progress for the dashboard, only when the caller passed `dashboard.file`.
 // Records are written one after another and without holding the team up; only
@@ -1171,7 +1290,7 @@ function settle(job, result, tag) {
 const missing = []
 if (isBlank(input.repo)) missing.push('repo')
 if (isBlank(input.base)) missing.push('base')
-for (const role of ['planner', 'implementer', 'qa', 'checker', 'reviewer', 'specReviewer']) {
+for (const role of ['planner', 'implementer', 'qa', 'checker', 'reviewer', 'specReviewer', ...(qcOn ? ['qc'] : [])]) {
   if (!input.roles || isBlank(input.roles[role])) missing.push(`roles.${role}`)
 }
 if (!contract || isBlank(contract.objective)) missing.push('contract.objective')
@@ -1310,13 +1429,19 @@ while (true) {
   }
 
   // With several specs, every spec gets its own reviewer, alongside the reviewer
-  // of the whole change. None of them depends on another, so they run together.
+  // of the whole change. QC uses the product beside them, but only once the
+  // checks pass: a change that fails them goes back to Build anyway, and QC
+  // would only find the same breakage. None depends on another, so they run
+  // together.
   phase('Review')
   const reviewedSpecs = specs.length > 1 ? specs : []
+  const qcNow = qcOn && checkFailures(contract, check).length === 0
+  if (qcOn && !qcNow) log('QC waits: a check failed, so the change goes back to Build first.')
   record('Review', 'running')
   const reviews = await parallel([
     () => runReview(contract, check, specs, round),
     ...reviewedSpecs.map(spec => () => runSpecReview(spec, contract, check, round)),
+    ...(qcNow ? [() => runQc(contract, round)] : []),
   ])
   const review = reviews[0]
   if (!review) return stop('blocked', 'The reviewer did not return a result.')
@@ -1326,8 +1451,20 @@ while (true) {
   state.review = review
   state.specReviews = specReviews.map(r => ({ spec: r.spec.id, ...r.review }))
 
-  state.failures = evaluate(contract, check, review, specReviews)
-  if (state.failures.length === 0) return stop('passed', `All checks pass and every criterion is met${round > 0 ? ` after ${round} return(s) to Build from review` : ''}.`)
+  let qc = null
+  if (qcNow) {
+    qc = reviews[reviewedSpecs.length + 1]
+    if (!qc) return stop('blocked', 'The QC agent did not return a result.')
+    state.qc.push({ round, ...qc })
+    if (qc.status !== 'done') return stop('blocked', `QC could not run the product: ${qc.blockedReason || 'no reason given'}`)
+    const leftover = (qc.filesChanged || []).map(repoPath).filter(Boolean)
+    if (leftover.length > 0) return stop('blocked', `QC changed files in the repository, which it may not do: ${leftover.join(', ')}`)
+  }
+
+  state.failures = evaluate(contract, check, review, specReviews, qc)
+  if (state.failures.length === 0) {
+    return stop('passed', `All checks pass, every criterion is met${qcOn ? ' and QC saw it work' : ' (QC was turned off)'}${round > 0 ? `, after ${round} return(s) to Build` : ''}.`)
+  }
 
   // The specs the failures concern go back to Build, each to a fresh session of
   // its implementer and then to QA again, as a card goes back to Ready.
@@ -1341,11 +1478,11 @@ while (true) {
   state.repairRounds = round
   for (const g of groups) state.sentBack[g.spec.id] = (state.sentBack[g.spec.id] || 0) + 1
   const who = groups.map(g => g.spec.id).join(', ')
-  log(`${state.failures.length} failure(s) from check and review; back to Build: ${who}.`)
+  log(`${state.failures.length} failure(s) from check, review and QC; back to Build: ${who}.`)
   progress.repairs = [...progress.repairs, { tag: `review ${round}`, text: `${state.failures.length} failure(s), back to Build: ${who}`, state: 'run' }]
   phase('Build')
   record('Build', 'running')
-  const stopped = await runChains(groups.map(g => ({ spec: g.spec, failures: g.failures, source: 'the checker and the reviewers' })))
+  const stopped = await runChains(groups.map(g => ({ spec: g.spec, failures: g.failures, source: 'the checker, the reviewers and QC' })))
   if (stopped) return stop(stopped.outcome, `A spec sent back to Build could not be completed. ${stopped.reason}`)
   progress.repairs = progress.repairs.map(r => (r.tag === `review ${round}` ? { ...r, state: 'ok' } : r))
 }

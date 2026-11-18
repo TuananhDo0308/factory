@@ -168,7 +168,7 @@ td .pill { color: var(--on-fill); border-color: var(--on-fill); font-size: 13px;
     <div class="hero-text">
       <span class="tag">A skill for Claude Code</span>
       <h1>A team of agents, orchestrated by <span>code</span>.</h1>
-      <p>Every spec gets its own test-first implementer and its own QA agent. The script decides the order, what each agent sees, and pass or fail.</p>
+      <p>Every spec gets its own test-first implementer and its own QA agent, and a QC agent uses the product before anything passes. The script decides the order, what each agent sees, and pass or fail.</p>
       <div class="cta">
         <a class="btn primary" href="#progress">See progress
           <svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M13 6l6 6-6 6"></path></svg></a>
@@ -180,8 +180,8 @@ td .pill { color: var(--on-fill); border-color: var(--on-fill); font-size: 13px;
       <div class="row f-spec"><b>Spec</b><span>planner writes the specs</span></div>
       <div class="row f-build"><b>Build</b><span>test-first implementer, then QA, per spec</span></div>
       <div class="row f-check"><b>Check</b><span>checker runs the commands</span></div>
-      <div class="row f-review"><b>Review</b><span>1 whole change + 1 per spec</span></div>
-      <div class="row f-repair"><b>Back to Build</b><span>a spec QA or review fails is rebuilt · at most 2 times</span></div>
+      <div class="row f-review"><b>Review + QC</b><span>1 whole change + 1 per spec; QC uses the product</span></div>
+      <div class="row f-repair"><b>Back to Build</b><span>a spec QA, review or QC fails is rebuilt · at most 2 times</span></div>
       <div class="row f-result" id="last-run"><b>Latest run</b><span>loading</span></div>
     </div>
   </section>
@@ -214,7 +214,7 @@ td .pill { color: var(--on-fill); border-color: var(--on-fill); font-size: 13px;
       <div class="end fill f-plain">
         <span class="pill">chat session</span>
         <b>Contract</b>
-        <span>C1..Cn, check commands, base commit, run branch</span>
+        <span>C1..Cn, check commands, how to run the product, base commit, run branch</span>
       </div>
       <svg aria-hidden="true" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M13 6l6 6-6 6"></path></svg>
       <div class="script">
@@ -226,19 +226,19 @@ td .pill { color: var(--on-fill); border-color: var(--on-fill); font-size: 13px;
           <svg aria-hidden="true" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M13 6l6 6-6 6"></path></svg>
           <div class="step fill f-check"><i>3</i><b>Check</b><span>checker runs the commands, lists changed files; if tests fail only after another test file, finds that file</span></div>
           <svg aria-hidden="true" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M13 6l6 6-6 6"></path></svg>
-          <div class="step fill f-review"><i>4</i><b>Review</b><span>1 whole change + 1 per spec</span></div>
+          <div class="step fill f-review"><i>4</i><b>Review + QC</b><span>1 whole change + 1 per spec; once the checks pass, QC starts the product and tries each criterion</span></div>
           <svg aria-hidden="true" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M4 9h13a3 3 0 0 1 0 6H4M8 5L4 9l4 4"></path></svg>
-          <div class="step fill f-repair dashed"><i>5</i><b>Back to Build</b><span>on failure: the specs concerned are rebuilt, go through QA again, then check and review again · at most 2 times per spec</span></div>
+          <div class="step fill f-repair dashed"><i>5</i><b>Back to Build</b><span>on failure: the specs concerned are rebuilt, go through QA again, then check, review and QC again · at most 2 times per spec</span></div>
         </div>
       </div>
       <svg aria-hidden="true" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M13 6l6 6-6 6"></path></svg>
       <div class="end fill f-result">
         <span class="pill white">chat session</span>
         <b>Merge and report</b>
-        <span>reruns the checks itself, and CI's test jobs in a Linux container when Docker is there; merges only a passed run</span>
+        <span>reruns the checks itself, and CI's test jobs in a Linux container when Docker is there; merges only a passed run, an issue run only once the pull request's CI is green</span>
       </div>
     </div>
-    <p class="note">Agents before any return to Build: 5 for one spec, 3N+3 for N specs (N implementers, N QA, N spec reviewers, plus planner, checker and reviewer). A small recorder agent, not part of the team, writes this dashboard's progress file at each step. The outcome is <span class="mono">passed</span>, <span class="mono">failed</span>, or <span class="mono">blocked</span> when the run needs a decision code cannot make.</p>
+    <p class="note">Agents before any return to Build: 6 for one spec, 3N+4 for N specs (N implementers, N QA, N spec reviewers, plus planner, checker, reviewer and QC). A small recorder agent, not part of the team, writes this dashboard's progress file at each step. The outcome is <span class="mono">passed</span>, <span class="mono">failed</span>, or <span class="mono">blocked</span> when the run needs a decision code cannot make.</p>
   </section>
 
   <section class="sec">
@@ -250,6 +250,7 @@ td .pill { color: var(--on-fill); border-color: var(--on-fill); font-size: 13px;
       <article class="card role fill f-check"><span class="pill white">1 per round</span><h3>Checker</h3><p>Sees: the check commands, the base commit, each spec's test files</p><span class="pill white">Read only</span></article>
       <article class="card role fill f-review"><span class="pill white">1 per round</span><h3>Reviewer</h3><p>Sees: the contract, the diff, the check results, the interfaces between specs</p><span class="pill white">Read only</span></article>
       <article class="card role fill f-review"><span class="pill white">1 per spec, with 2+ specs</span><h3>Spec reviewer</h3><p>Sees: one spec and its files</p><span class="pill white">Read only</span></article>
+      <article class="card role fill f-review"><span class="pill white">1 per round, once the checks pass</span><h3>QC</h3><p>Sees: the contract and how to run the product, not the diff. Starts it and tries each criterion as a user would: CLI, HTTP, browser or public API</p><span class="pill white">Changes nothing</span></article>
     </div>
     <p class="note">No reviewer or QA agent sees an implementer's narrative. No file has two owners across specs.</p>
   </section>
@@ -259,19 +260,20 @@ td .pill { color: var(--on-fill); border-color: var(--on-fill); font-size: 13px;
     <ul class="rules">
       <li><span class="mono">validateSpecs()</span><span>Every criterion is covered by a spec</span></li>
       <li><span class="mono">validateSpecs()</span><span>One owner per file; inside a spec, a file is source or test, never both</span></li>
-      <li><span class="mono">skillsFor()</span><span>super-board's skill registry: an implementer loads its spec kind's row (bug: diagnosing-bugs + tdd; feature: tdd + codebase-design; ...) plus verification-before-completion and mp-code-review; QA always tdd, diagnosing-bugs, verification-before-completion, testing-strategy, mp-code-review, pr-security-review; reviewers mp-code-review and codebase-design. A run with one missing stops before the planner</span></li>
-      <li><span class="mono">conditionalFor()</span><span>Implementers are also offered vitest, playwright-best-practices, testing-strategy and domain-modeling, QA vitest and playwright-best-practices, each with the rule for when to load it</span></li>
-      <li><span class="mono">modelFor()</span><span>Planner on Fable (high), whole-change reviewer on Opus (high), implementers, QA and spec reviewers on Sonnet (medium), a rebuild on Opus, the checker on Sonnet (low); the models arg can change any of them</span></li>
+      <li><span class="mono">skillsFor()</span><span>super-board's skill registry: an implementer loads its spec kind's row (bug: diagnosing-bugs + tdd; feature: tdd + codebase-design; ...) plus verification-before-completion and mp-code-review; QA always tdd, diagnosing-bugs, verification-before-completion, testing-strategy, mp-code-review, pr-security-review; reviewers mp-code-review and codebase-design; QC none, so it does not read the code like the reviewers. A run with one missing stops before the planner</span></li>
+      <li><span class="mono">conditionalFor()</span><span>Implementers are also offered vitest, playwright-best-practices, testing-strategy and domain-modeling, QA vitest and playwright-best-practices, QC playwright-best-practices, each with the rule for when to load it</span></li>
+      <li><span class="mono">modelFor()</span><span>Planner on Fable (high), whole-change reviewer on Opus (high), implementers, QA, spec reviewers and QC on Sonnet (medium), a rebuild on Opus, the checker on Sonnet (low); the models arg can change any of them</span></li>
       <li><span class="mono">maxSpecRevisions</span><span>Rejected specs go back to the planner, at most 2 times</span></li>
       <li><span class="mono">buildLevels()</span><span>Dependent specs wait; specs on one level run in parallel</span></li>
       <li><span class="mono">specText()</span><span>QA is not shown the planned Changes, so it judges the tests against what is required</span></li>
+      <li><span class="mono">qcText()</span><span>QC is shown the contract and how to run the product, never the specs, their files or the checks</span></li>
       <li><span class="mono">scratchDir()</span><span>Every agent gets a scratch folder of its own, so no agent can delete another's files or write through a link another made into the repository</span></li>
       <li><span class="mono">filesOutsideAssignment()</span><span>An agent that reports changing a file it may not change stops the run; QA may change test files only</span></li>
       <li><span class="mono">filesOutsideOwnership()</span><span>A changed file that no spec owns stops the run</span></li>
-      <li><span class="mono">evaluate()</span><span>Passed: every check exits 0, every criterion met by every reviewer, no blocking finding, nothing sent back by QA</span></li>
+      <li><span class="mono">evaluate()</span><span>Passed: every check exits 0, every criterion met by every reviewer and seen working by QC (or not observable), no blocking finding, nothing sent back by QA. QC runs only once the checks pass; QC blocked, or leaving files in the repository, stops the run</span></li>
       <li><span class="mono">routeFailures()</span><span>Each failure goes back to the implementer of the spec it concerns: the owner of the file, the specs of the criterion, the owner of the test file the checker found breaking a failing check's tests, or else the specs named in its output</span></li>
       <li><span class="mono">testsChanged()</span><span>Every test file an implementer changes after the first build is recorded and reported</span></li>
-      <li><span class="mono">maxRebuilds</span><span>A spec goes back to Build at most 2 times, from QA or review; past that the run fails</span></li>
+      <li><span class="mono">maxRebuilds</span><span>A spec goes back to Build at most 2 times, from QA, review or QC; past that the run fails</span></li>
       <li><span class="mono">runRecord()</span><span>What this dashboard shows is built from the raw results, not written by an agent</span></li>
       <li><span class="mono">failureEntries()</span><span>Every failure that sent a spec back to Build, or ended the run, is filed with the run in its failure log: what it was, where it pointed, which specs answered for it</span></li>
     </ul>

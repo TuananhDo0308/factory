@@ -23,6 +23,7 @@ def role:
   elif test("^checker( |$)") then {role: "checker", phase: "verify"}
   elif test("^reviewer( |$)") then {role: "reviewer", phase: "review"}
   elif startswith("review ") then {role: "spec-reviewer", phase: "review", spec: after(1)}
+  elif test("^qc( |$)") then {role: "qc", phase: "verify"}
   elif startswith("record ") then {role: "recorder"}
   else {} end
   + ((capture("\\(level (?<l>[0-9]+)\\)") | {level: (.l | tonumber)}) // {});
