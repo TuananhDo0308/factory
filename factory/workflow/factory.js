@@ -331,7 +331,14 @@ function evaluate(contract, check, review, specReviews) {
     const r = ran.get(c.name)
     if (!r) failures.push({ kind: 'check', name: c.name, problem: `Check "${c.name}" (${c.command}) was not run.` })
     else if (r.exitCode !== 0) {
-      failures.push({ kind: 'check', name: c.name, problem: `Check "${c.name}" (${c.command}) exited with ${r.exitCode}.`, outputTail: r.outputTail })
+      const f = { kind: 'check', name: c.name, problem: `Check "${c.name}" (${c.command}) exited with ${r.exitCode}.`, outputTail: r.outputTail }
+      const culprits = (r.culprits || []).map(repoPath).filter(Boolean)
+      if (culprits.length > 0) {
+        f.culprits = culprits
+        f.problem += ` Its failing tests pass alone; they fail after ${culprits.join(', ')}, which leaves state behind.`
+        if (!isBlank(r.culpritEvidence)) f.culpritEvidence = r.culpritEvidence
+      }
+      failures.push(f)
     }
   }
 
@@ -374,8 +381,13 @@ function evaluate(contract, check, review, specReviews) {
 //   - a finding that names a file goes to the spec owning it;
 //   - a criterion judged for one spec goes to that spec, one judged for the
 //     whole change to every spec responsible for it;
-//   - a failing check goes to every spec whose files appear in its output, and
-//     to every spec when none do, since code cannot tell whose fault it is.
+//   - a failing check whose failing tests pass alone, and for which the
+//     checker found the test file(s) that break them (`culprits`), goes to
+//     the specs owning those files only: a mock or global leaked by one test
+//     file makes many other files fail, and the output names the victims;
+//   - any other failing check, or one whose culprits no spec owns, goes to
+//     every spec whose files appear in its output, and to every spec when
+//     none do, since code cannot tell whose fault it is.
 // Anything that matches no spec goes to all of them. Returns [{ spec,
 // failures }] in spec order, for the specs that have something to answer for.
 function routeFailures(failures, specs) {
@@ -388,8 +400,12 @@ function routeFailures(failures, specs) {
     else if (f.spec && bySpec.has(f.spec)) ids = [f.spec]
     else if (f.kind === 'criterion') ids = specs.filter(s => (s.criteria || []).includes(f.id)).map(s => s.id)
     else if (f.kind === 'check') {
-      const out = String(f.outputTail || '')
-      ids = specs.filter(s => specFiles(s).some(file => out.includes(file))).map(s => s.id)
+      const culprits = new Set((f.culprits || []).map(repoPath).filter(c => owner.has(c)).map(c => owner.get(c)))
+      if (culprits.size > 0) ids = specs.filter(s => culprits.has(s.id)).map(s => s.id)
+      else {
+        const out = String(f.outputTail || '')
+        ids = specs.filter(s => specFiles(s).some(file => out.includes(file))).map(s => s.id)
+      }
     }
     if (ids.length === 0) ids = specs.map(s => s.id)
     for (const id of ids) bySpec.get(id).push(f)
@@ -648,6 +664,20 @@ function partsText(specs) {
     .join('\n\n')
 }
 
+// What the checker is told for the isolation search (roles/checker.md): each
+// spec's test files, the suspects when a failing test passes alone. Only the
+// run's own test files are listed: the tests that were there before the run
+// passed with each other already. '' when no spec has test files.
+const MAX_ISOLATION_RUNS = 12
+function isolationText(specs) {
+  const withTests = (specs || []).filter(hasTests)
+  if (withTests.length === 0) return ''
+  return [
+    `If a test command fails, look for a test file that breaks the others, as your brief says, in at most ${MAX_ISOLATION_RUNS} extra runs per command. The suspects are the test files of this run, per spec:`,
+    ...withTests.map(s => `- ${s.id}: ${s.testFiles.map(normPath).join(', ')}`),
+  ].join('\n')
+}
+
 // ---------------------------------------------------------------------------
 // Schemas: what each agent must hand back
 // ---------------------------------------------------------------------------
@@ -776,7 +806,7 @@ const QA_SCHEMA = {
         properties: {
           severity: { type: 'string', enum: ['high', 'medium', 'low'] },
           problem: { type: 'string', description: 'The untested case or faulty test, with the exact witness value' },
-          written: { type: 'boolean', description: 'True when a test for it was added in this session' },
+          written: { type: 'boolean', description: 'True when this session closed it in the spec\'s test files: a test added, or a missing restore added' },
         },
         required: ['severity', 'problem', 'written'],
       },
@@ -812,6 +842,8 @@ const CHECK_SCHEMA = {
           command: { type: 'string' },
           exitCode: { type: 'integer' },
           outputTail: { type: 'string', description: 'Last lines of the command output, copied verbatim' },
+          culprits: { ...STRINGS, description: 'Only for a failing test command whose failing tests pass alone: the repository-relative test file(s) that make them fail when run before them, each confirmed by a run' },
+          culpritEvidence: { type: 'string', description: 'The isolation runs you made and their results, including when no culprit was found' },
         },
         required: ['name', 'command', 'exitCode', 'outputTail'],
       },
@@ -986,7 +1018,8 @@ function rebuildSpec(spec, failures, source, contract, specs, n) {
   )
 }
 
-function runChecks(contract, round) {
+function runChecks(contract, specs, round) {
+  const isolation = isolationText(specs)
   return spawn(
     [
       header('checker'),
@@ -994,6 +1027,7 @@ function runChecks(contract, round) {
       'Run each of these commands from the repository root, exactly as written, and report what happened:',
       contract.checks.length > 0 ? contract.checks.map(c => `- ${c.name}: ${c.command}`).join('\n') : '- (no commands)',
       '',
+      ...(isolation ? [isolation, ''] : []),
       `Then list every file changed or created since the base commit: the output of \`git diff --name-only ${args.base}\` together with \`git ls-files --others --exclude-standard\`.`,
     ].join('\n'),
     { label: round === 0 ? 'checker' : `checker (round ${round})`, phase: 'Check', schema: CHECK_SCHEMA, ...modelFor('checker', args.models) },
@@ -1252,7 +1286,7 @@ let round = 0
 while (true) {
   phase('Check')
   record('Check', 'running')
-  const check = await runChecks(contract, round)
+  const check = await runChecks(contract, specs, round)
   if (!check) return stop('blocked', 'The checker did not return a result.')
   state.check = check
 

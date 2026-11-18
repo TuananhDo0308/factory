@@ -10,9 +10,20 @@ You change nothing. Do not edit files, fix failures, alter Git state or start ot
 - If a command cannot be run at all, for example the program is not installed, report the exit code you got, usually 127, and the error text. Never report a command you did not run, and never mark a failure as a pass.
 - Run every command even if an earlier one fails.
 
+## When a test command fails: find the file at fault
+
+A test file that leaves something behind (a module mock, a fake global such as `fetch`, an environment variable, a timer, a database row) makes tests in other files fail when they share one process, and the output then names those victims, not the file at fault. Your report decides which spec goes back to Build, so without the culprit every spec named, or every spec, is rebuilt for one file's mistake. When a command that runs tests exits non-zero, and your assignment lists the suspects (the run's test files per spec), search, in at most the number of extra runs your assignment gives per command, and stop as soon as you have an answer:
+
+1. Take up to 3 of the failing test files the output names. Run each alone: the same command with only that file as the selection (for example `bun test tests/api/users.test.ts`). If one fails alone too, its failure is its own: stop, and report no culprit.
+2. If they all pass alone, take one of them, F. Run all the suspects together with F, F last. If F passes, the culprit is not among them: stop with no culprit.
+3. Bisect: split the suspects in halves, keeping a spec's files together while you can, and run one half with F last. If F fails, keep that half, otherwise keep the other one without running it, and split again, until one file is left. That takes about log2 of the suspects' count in runs.
+4. Confirm: the culprit plus F fails and F alone passes. Report only a confirmed culprit; if the confirmation passes, the failure needs files from both halves, so report none.
+
+Steps 2 to 4 need F to run after the others in one process, and some runners (Bun among them) pick their own file order, not the order on the command line. So set the order yourself: in your scratch directory, write a test file that imports the suspects and then F by absolute path, and run the test command on that one file from the repository root, for example `bun test <scratch>/order.test.ts`; the imported files' tests run in import order. Writing in your scratch directory is not a change to the repository. If the runner will not run a file outside the repository, say so in `culpritEvidence` and report no culprit. These runs are extra: `exitCode` and `outputTail` stay those of the command as written. Put every isolation run and its result, in a line each, in `culpritEvidence`, also when you found nothing or ran out of runs. Skip the search for commands that do not run tests (build, lint, audit).
+
 Then list the files changed or created since the base commit, using the Git commands in your assignment. Report paths relative to the repository root, one entry per file, without leaving any out.
 
 ## Return
 
-- `results`: one entry per command, with its `name`, the `command` as you ran it, the `exitCode` and the `outputTail`.
+- `results`: one entry per command, with its `name`, the `command` as you ran it, the `exitCode` and the `outputTail`. For a failing test command you searched, also `culpritEvidence` (the isolation runs and their results) and, only when step 4 confirmed one, `culprits`: the repository-relative test file(s) at fault.
 - `changedFiles`: every changed or new file.

@@ -31,6 +31,7 @@ Read enough of the repository to understand the request, then write:
 - **Acceptance criteria**: numbered `C1..Cn`, each something an outsider could check.
 - **Out of scope**: what this task will not touch.
 - **Checks**: the project's real test, build or lint commands, found in its own files, each runnable from the repository root. If there are none, use an empty list and say so in the report; do not invent one.
+- **When the repository has CI** (`.github/workflows/*.yml`, or another CI config), read it and write the checks as CI's own commands: one check per CI job or step that can run locally, with the same paths, flags, environment variables and setup steps, chained in the command (for example `bun run db:push && bun test tests/api tests/services`), and a service the job starts, such as Postgres, running locally the same way (`docker run` of the image CI names). A single command over the whole suite can pass where CI's separate jobs fail, because they select other files and run other setup. Keep the steps that cannot run locally (secrets, deploys, another OS) out of the checks and name them in the report.
 
 Ask the user only what you cannot find out from the code and what would change the outcome. Every agent downstream works from this text alone, so a vague criterion here becomes a guess everywhere else.
 
@@ -118,9 +119,9 @@ The workflow runs in the background and you are notified when it finishes. Do no
 
 1. **Spec**: the planner returns specs, each with a `kind` (feature, bug, ux, refactor, tech-debt, tests, docs) that decides the skills its implementer loads. Code rejects them, and sends them back with the reasons, if a criterion is uncovered, a file has two owners, a kind is missing, a spec names a skill that is not installed, or the dependencies cannot be ordered.
 2. **Build**: each spec runs like a card on super-board's board. Its implementer writes the tests first and then the code, in the source and test files the spec owns. Then a QA agent checks the spec: a ledger of which test asserts each criterion, the edge cases, tests that cannot fail, a code review and a security pass. It writes tests for the serious gaps, in the spec's test files only. If it sends failures back, the spec goes back to Build: a fresh session of its implementer acts on them and a fresh QA checks again, up to `maxRebuilds` times. Every spec gets QA, even one without test files. Specs that do not depend on each other run in parallel; a dependent spec waits for its whole level. The run stops if an agent reports changing a file it may not change (for QA, anything but the test files).
-3. **Check**: the checker runs the contract's checks and lists the changed files. A change to a file no spec owns stops the run.
+3. **Check**: the checker runs the contract's checks and lists the changed files. When a test check fails and its failing test files pass alone, it searches, in a bounded number of extra runs, for the run's test file that breaks them (a leaked mock or global). A change to a file no spec owns stops the run.
 4. **Review**: a fresh reviewer judges the whole change against the contract. When there are several specs, each spec also gets its own reviewer, which sees only that spec and its files; all of them run in parallel. A criterion passes only if every reviewer responsible for it says it is met.
-5. **Back to Build**: there is no separate repair phase. If a check failed, a criterion is not met or there is a blocking finding, the specs concerned go back to Build, as a bounced card goes back to Ready: the owner of the file a failure names, the specs responsible for a criterion, or, for a failing check, the specs whose files appear in its output, and every spec when none do. Each goes through a fresh implementer session (with its spec, its failures and the interfaces of the other parts; it may change its spec's source and test files) and QA again, then the whole change is checked and reviewed again. A spec already sent back `maxRebuilds` times fails the run instead. Code records every test file changed after the first build.
+5. **Back to Build**: there is no separate repair phase. If a check failed, a criterion is not met or there is a blocking finding, the specs concerned go back to Build, as a bounced card goes back to Ready: the owner of the file a failure names, the specs responsible for a criterion, or, for a failing check, the owner of the test file the checker found breaking the others, else the specs whose files appear in its output, and every spec when none do. Each goes through a fresh implementer session (with its spec, its failures and the interfaces of the other parts; it may change its spec's source and test files) and QA again, then the whole change is checked and reviewed again. A spec already sent back `maxRebuilds` times fails the run instead. Code records every test file changed after the first build.
 
 If the Workflow tool is not available in this session, tell the user that the factory cannot run here. Do not fall back to coordinating the agents by hand: the guarantees above exist only because code enforces them.
 
@@ -133,6 +134,15 @@ The workflow returns an object with `outcome`, `reason`, `specs`, `builds` (impl
 - **`blocked`**: the run stopped because it needed a decision that code cannot make. `reason` says what.
 
 Whatever the outcome, confirm it yourself before reporting. Run each of the contract's checks from the repository root and read the output, and look at `git status --short` and `git diff --stat <base>`. The checker's results came from an agent; what you run now is the evidence you report. If your run disagrees with the workflow's result, report the disagreement and treat the task as not passing.
+
+When the repository has CI and `docker info` succeeds, also rerun CI's test jobs in a Linux container that matches CI. A run on this machine, even of CI's exact command, can pass where CI fails: some runners order test files by the filesystem, which differs between macOS and Linux, so a test that leaves a fake global or a mock behind breaks later files only there. For each test job:
+
+1. From the workflow file take the runtime and its version (`runs-on`, `container:`, the versions in `setup-*` steps), the `services` (image, environment, ports), the job's environment and its steps.
+2. `docker network create factory-ci-<run id>`, and start each service on it: `docker run -d --rm --network factory-ci-<run id> --name <service> -e ... <image>`.
+3. Run the steps on a copy of the working tree, so nothing built for this machine (such as `node_modules`) goes in and nothing comes out: `git ls-files -co --exclude-standard | tar -cf - -T - | docker run -i --rm --network factory-ci-<run id> -e ... <runtime image at CI's version> sh -c 'mkdir /w && tar -xf - -C /w && cd /w && <install> && <the job steps>'`. On this network a service is reached by its container name, not `localhost`, so write `-e` values such as `DATABASE_URL` with the service's name as the host. Wait until each service is ready (its health check, or a retry loop) before the job steps.
+4. `docker rm -f` the services and `docker network rm` the network.
+
+A failure there is a failed check: report it with its output and treat the task as not passing, like any disagreement. When Docker is not available, or a job cannot be reproduced this way, say in the report that order- and platform-dependent failures were not ruled out.
 
 Then delete the `scratch` directory (default `<repo>-factory-scratch`): it holds only the agents' temporary files, one folder per agent. Look at it first, and keep it while you still need it for a blocked run.
 
@@ -215,7 +225,7 @@ Finish with a short report to the user:
 - **QA**: per spec, the gaps QA closed with tests and the medium or low gaps it only reported, so the user can decide whether they matter.
 - **Tests changed after the first build**: every file in `testsChangedInRebuild`, with the reason the implementer gave in `fixes`. A test changed after review is where a weakened test would hide, so let the user look.
 - **Criteria**: each `C1..Cn` with met / not met and the evidence.
-- **Checks**: each command and the real result from your own run, including any not run.
+- **Checks**: each command and the real result from your own run, including any not run; the CI steps left out of the checks; and the result of the CI run in a Linux container, or that it was not run and why.
 - **Review**: findings left open from any reviewer, and anything a reviewer could not review.
 - **Back to Build**: which specs QA or review sent back, how many times, and what the implementer fixed.
 - **Merge**: the commit and the branch it was merged into (for an issue run, the pull request URL and the issues it closed), or the branch the unmerged work is on and why it was not merged.

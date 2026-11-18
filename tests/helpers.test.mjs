@@ -131,6 +131,50 @@ test('routeFailures: a failing check goes to the specs named in its output, else
   assert.deepEqual(stray.map(g => g.spec.id), ['S1', 'S2'])
 })
 
+// An isolation failure: one spec's test file leaks a mock, and the output names
+// the victims, here files of both specs and of none.
+const leak = 'FAIL tests/test_a.py::t1\nFAIL tests/test_b.py::t2\nFAIL tests/old_test.py::t3'
+
+test('routeFailures: a check with a culprit owned by a spec goes to that spec only', () => {
+  const groups = h.routeFailures([{ kind: 'check', name: 'test', problem: 'p', outputTail: leak, culprits: ['tests/test_b.py'] }], two)
+  assert.deepEqual(groups.map(g => g.spec.id), ['S2'])
+  const absolute = h.routeFailures([{ kind: 'check', name: 'test', problem: 'p', outputTail: 'segfault', culprits: ['/repo/tests/test_a.py'] }], two)
+  assert.deepEqual(absolute.map(g => g.spec.id), ['S1'], 'an absolute culprit path is read relative to the repository')
+})
+
+test('routeFailures: a culprit no spec owns falls back to the output, then to every spec', () => {
+  const named = h.routeFailures([{ kind: 'check', name: 'test', problem: 'p', outputTail: 'FAILED tests/test_b.py::test_x', culprits: ['tests/old_test.py'] }], two)
+  assert.deepEqual(named.map(g => g.spec.id), ['S2'])
+  const unnamed = h.routeFailures([{ kind: 'check', name: 'test', problem: 'p', outputTail: 'segfault', culprits: ['tests/old_test.py'] }], two)
+  assert.deepEqual(unnamed.map(g => g.spec.id), ['S1', 'S2'])
+})
+
+test('routeFailures: without culprits a check is routed as before', () => {
+  for (const culprits of [undefined, []]) {
+    const groups = h.routeFailures([{ kind: 'check', name: 'test', problem: 'p', outputTail: leak, culprits }], two)
+    assert.deepEqual(groups.map(g => g.spec.id), ['S1', 'S2'])
+  }
+})
+
+test('evaluate carries the checker\'s culprits into the check failure', () => {
+  const check = { results: [{ name: 'test', command: 'run-tests', exitCode: 1, outputTail: leak, culprits: ['./tests/test_b.py'], culpritEvidence: 'tests/test_a.py alone: pass' }], changedFiles: [] }
+  const [f] = h.evaluate(contract, check, goodReview, [])
+  assert.deepEqual(f.culprits, ['tests/test_b.py'])
+  assert.equal(f.culpritEvidence, 'tests/test_a.py alone: pass')
+  assert.ok(f.problem.includes('tests/test_b.py'))
+  assert.deepEqual(h.routeFailures([f], two).map(g => g.spec.id), ['S2'])
+  const plain = h.evaluate(contract, { ...check, results: [{ ...check.results[0], culprits: [], culpritEvidence: 'nothing found' }] }, goodReview, [])
+  assert.equal(plain[0].culprits, undefined)
+  assert.equal(plain[0].problem, 'Check "test" (run-tests) exited with 1.')
+})
+
+test('isolationText lists each spec\'s test files as suspects, with the run cap', () => {
+  const text = h.isolationText(two)
+  assert.ok(text.includes('- S1: tests/test_a.py') && text.includes('- S2: tests/test_b.py'))
+  assert.ok(text.includes(`at most ${h.MAX_ISOLATION_RUNS} extra runs`))
+  assert.equal(h.isolationText([spec({ testFiles: [] })]), '')
+})
+
 test('failureEntries logs each routed failure once, with the specs that had to answer for it', () => {
   const failures = [
     { kind: 'check', name: 'test', problem: 'Check "test" (run-tests) exited with 1.', outputTail: 'segfault' },
