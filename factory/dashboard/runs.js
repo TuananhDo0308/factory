@@ -24,7 +24,7 @@
 //                    runs before the implementer-tdd branch)
 //                    impl / test: 'ok' | 'run' | 'wait' | 'fail' | 'none' (no such agent)
 //   check            { text, state }
-//   review           [{ tag, text, state, label }]  (defaults to one per reviewer)
+//   review           [{ tag, text, state, label }]  (defaults to one per reviewer; the last, tag "qc", is what QC saw)
 //   repairs          [{ round, text, state }]
 //   criteria         [{ id, text, status }]  status: 'met' | 'not_met' | 'unknown' | ''
 //   grades           { '01': 'pass' | 'fail', ... } for the graders of adds-json-flag-to-cli

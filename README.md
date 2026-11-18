@@ -2,7 +2,7 @@
 
 # Factory
 
-**A Claude Code skill that runs a coding task through a small team of agents: planned, built test-first, QA'd and independently reviewed.**
+**A Claude Code skill that runs a coding task through a small team of agents: planned, built test-first, QA'd, independently reviewed, and tried as a user would before it passes.**
 
 Orchestrated by code, not by an agent following instructions.
 
@@ -21,6 +21,7 @@ One agent asked to do everything at once tends to guess and invent details. Fact
 - **One spec, one agent, one session.** An implementer sees only its own spec. No agent is ever handed several specs.
 - **Test-first, then checked by someone else.** The implementer writes each test before its code and watches it fail. A separate QA agent then reads those tests against the spec, without seeing the implementer's plan or account.
 - **Reviewers judge the code, not the story.** No reviewer sees an implementer's or QA agent's narrative.
+- **Someone uses the product.** A QC agent that has seen neither the specs nor the diff starts the product and tries each criterion through its real entry point (CLI, HTTP, browser or public API). A criterion passes only if it saw it work.
 - **Code decides, not agents.** A Workflow script sets the order, decides what each agent sees, validates the plan, caps rebuilds and computes pass or fail from raw results. No agent can declare its own work done.
 
 ## Install
@@ -117,11 +118,11 @@ It works best with the [Impeccable](https://github.com/pbakaus/impeccable) skill
 
 ## How it works
 
-1. **Contract** *(your chat session)*: the goal, numbered acceptance criteria `C1..Cn`, what is out of scope, and the project's real check commands (when the repository has CI, CI's own commands, one check per job that can run locally). The run gets its own branch, `factory/<id>`. `skills-ready.sh` confirms every skill the team loads is installed; a missing one stops the run before it starts.
+1. **Contract** *(your chat session)*: the goal, numbered acceptance criteria `C1..Cn`, what is out of scope, how to run the product (for QC), and the project's real check commands (when the repository has CI, CI's own commands, one check per job that can run locally). The run gets its own branch, `factory/<id>`. `skills-ready.sh` confirms every skill the team loads is installed; a missing one stops the run before it starts.
 2. **Spec** *(planner)*: reads the code and returns one or more specs. Each spec owns its files, names the criteria it answers for and has a `kind` (`feature`, `bug`, `ux`, `refactor`, `tech-debt`, `tests`, `docs`). Code rejects the plan with reasons if a criterion is uncovered, a file has two owners, a file is both source and test, a skill is not installed, or the dependencies form a cycle.
 3. **Build** *(implementer, then QA, per spec)*: the implementer writes each test, sees it fail for the right reason, then writes the code. A fresh QA agent maps criteria to tests, hunts edge cases and tests that cannot fail, runs a code review and a security pass, and adds tests for serious gaps. Independent specs build in parallel; dependent specs wait for the level before them.
 4. **Check** *(checker)*: runs the contract's commands and lists the changed files. When a test command fails but its failing test files pass alone, it bisects the run's test files (at most 12 extra runs) for the one that breaks them, such as a leaked mock or global. A changed file that no spec owns stops the run.
-5. **Review** *(reviewers)*: a fresh reviewer judges the whole change against the contract. When the work was split, each spec also gets its own reviewer. A criterion is met only if every reviewer responsible for it says so.
+5. **Review and QC** *(reviewers, QC)*: a fresh reviewer judges the whole change against the contract. When the work was split, each spec also gets its own reviewer. Once the checks pass, a QC agent runs beside them: it sees only the contract and how to run the product, starts it, and tries each criterion as a user would, writing down what it expected before it looks. A criterion is met only if every reviewer responsible for it says so and QC saw it work (or found it not observable, such as "the module has a test"). Pass `qc: false` for a change nobody can see.
 6. **Back to Build**: there is no separate repair phase. Each failure is routed to the spec whose files it concerns (for a failing check whose culprit test file the checker found, the spec owning that file); that spec gets a new implementer session (on Opus) and QA again, then the whole change is checked and reviewed again. A spec may go back at most `maxRebuilds` times (default 2) before the run fails.
 7. **Verify and merge** *(your chat session)*: reruns the checks itself and, when the repository has CI and Docker is available, CI's test jobs in a Linux container matching CI, since test order and platform can differ from this machine. Only if the workflow returns `passed` and the rerun passes does it commit the specs' files and fast-forward the branch it started from. A failed run stays on `factory/<id>` and your branch is untouched.
 8. **Lessons** *(your chat session)*: every failure that sent a spec back to Build is filed with the run in its failure log. After each run the session reads the logs of the last 10 runs, and a mistake the team made in 3 or more of them (implementers skipping lint, two specs naming one interface differently, the planner leaving a file out) becomes a proposal in the report: a rule in `factory.js` or one sentence in a role brief. You accept or reject it; the fix is made later as an ordinary change to the skill, with tests, never by an agent during a run.
@@ -130,9 +131,9 @@ It works best with the [Impeccable](https://github.com/pbakaus/impeccable) skill
   <img src="docs/images/routing.png" alt="routeFailures() sends a blocking finding in report.py to S2, the spec that owns report.py" width="100%">
 </p>
 
-**Pass or fail is computed by code:** every check exits `0`, every criterion is judged met, and no blocking finding remains. When a decision needs a human (a wrong spec, an implementer needing a file outside its ownership), the workflow stops with `blocked` and hands back to you.
+**Pass or fail is computed by code:** every check exits `0`, every criterion is judged met and seen working by QC, and no blocking finding remains. When a decision needs a human (a wrong spec, an implementer needing a file outside its ownership), the workflow stops with `blocked` and hands back to you.
 
-For issue runs, the session pushes the branch, opens a pull request with `Closes #<issue>` and one `Closes #<sub-issue>` line per sub-issue, and runs `gh pr merge --squash`. If GitHub refuses (branch protection, pending checks, conflicts), the pull request stays open and the session tells you why. It never uses `--admin`.
+For issue runs, the session pushes the branch, opens a pull request with `Closes #<issue>` and one `Closes #<sub-issue>` line per sub-issue, waits for the pull request's CI with `gh pr checks --watch`, and runs `gh pr merge --squash` only when it is green (a failing CI job leaves the pull request open and is reported). If GitHub refuses (branch protection, pending checks, conflicts), the pull request stays open and the session tells you why. It never uses `--admin`.
 
 ## The team
 
@@ -154,6 +155,7 @@ Skills are third-party, installed at pinned commits and never bundled. The `SKIL
 | Implementer | `verification-before-completion`, `mp-code-review` | `bug`: `diagnosing-bugs`, `tdd` · `feature`: `tdd`, `codebase-design` · `ux`: `tdd` · `refactor`, `tech-debt`: `codebase-design`, `tdd` · `tests`: `tdd` · `docs`: none | `vitest`, `playwright-best-practices`, `testing-strategy`, `domain-modeling` |
 | QA | `tdd`, `diagnosing-bugs`, `verification-before-completion`, `testing-strategy`, `mp-code-review`, `pr-security-review` | | `vitest`, `playwright-best-practices` |
 | Reviewers | `mp-code-review`, `codebase-design` | | |
+| QC | none, on purpose: it must not read the code the way the reviewers do | | `playwright-best-practices` |
 
 **Sources:** [mattpocock/skills](https://github.com/mattpocock/skills), [obra/superpowers](https://github.com/obra/superpowers), [EricTechPro/super-board](https://github.com/EricTechPro/super-board), [antfu/skills](https://github.com/antfu/skills), [anthropics/knowledge-work-plugins](https://github.com/anthropics/knowledge-work-plugins), [currents-dev](https://github.com/currents-dev). mattpocock's `code-review` is installed as `mp-code-review` so it does not shadow Claude Code's built-in `/code-review`. A spec may name its own `skills` to replace the `kind` set.
 
@@ -184,11 +186,11 @@ ui-refine-loop/            standalone skill: check → fix loop that polishes on
 factory/
 ├── SKILL.md               instructions for the chat session: contract, run, verify, merge, report
 ├── workflow/factory.js    the Workflow script that orchestrates the team
-├── roles/                 one brief per role (planner, implementer, qa, checker, reviewer, spec-reviewer)
+├── roles/                 one brief per role (planner, implementer, qa, checker, reviewer, spec-reviewer, qc)
 ├── scripts/               install-skills.sh, skills-ready.sh, FactoryBench reporting
 ├── dashboard/             index.html, runs.js (finished runs), lessons.js (recurring failures and decisions), live.js (run in progress, not committed)
 └── evals/                 skill test cases
-tests/                     node --test tests for factory.js's helpers and for ui-refine-loop
+tests/                     node --test tests for factory.js (its helpers, and the whole script with agents stubbed) and for ui-refine-loop
 docs/images/               screenshots for this README
 ```
 
@@ -198,11 +200,12 @@ Factory is a deliberately small baseline. These rules are still enforced by prom
 
 - **Read-only roles are asked, not forced.** The planner, checker and reviewers are told not to edit; code only catches files changed outside every spec's ownership.
 - **Test-first is self-reported.** The implementer reports its red-green steps; code cannot verify it saw each test fail.
-- **Shared misreadings can pass.** Tests come from the agent that wrote the code. QA and reviewers read them against the spec, but a misunderstanding they all share can still get through.
+- **Shared misreadings are narrower, not gone.** Tests come from the agent that wrote the code, and QA and reviewers read them against the spec. QC uses the product without reading the code, but it reads the same contract: a vague criterion is still read one way by everyone.
+- **QC is asked, not forced, to stay blind.** It is not given the diff or the specs and is told not to read the change; code cannot stop it opening a file. It is told to leave the repository as it found it; code stops the run only on the files it reports.
 - **Rebuilt tests may change.** On a rebuild the implementer may edit its own tests. Every test file changed after the first build is recorded and reported to you.
 - **Unattributed failures cost more.** A failing check whose output names no spec file, and for which the checker found no culprit test file, goes back to every spec.
 - **No resume.** A run's state is not saved; when the session ends, the run ends with it.
-- **Issue runs merge without a human on GitHub.** QA, the reviewers and the session's own rerun of the checks are the only gate. Failed runs are never pushed.
+- **Issue runs merge without a human on GitHub.** QA, the reviewers, QC, the session's own rerun of the checks and the pull request's CI are the gate. Failed runs are never pushed.
 - **Third-party skills assume a person at the keyboard.** Agents are told nobody will answer, that the spec's interfaces are the agreed seams, and that the brief wins over a skill. Whether they comply is up to the prompt.
 
 ## Development

@@ -106,6 +106,46 @@ test('evaluate: a spec reviewer can fail a criterion the whole-change reviewer p
 })
 
 
+const goodQc = { status: 'done', criteria: [{ id: 'C1', status: 'pass', scenario: 's', expected: 'e', observed: 'o' }, { id: 'C2', status: 'not_observable', scenario: 'about the code', expected: '', observed: '' }], filesChanged: [] }
+
+test('evaluate: QC fails a criterion it saw fail or did not judge; not_observable passes', () => {
+  assert.deepEqual(h.evaluate(contract, goodCheck, goodReview, [], goodQc), [])
+  assert.deepEqual(h.evaluate(contract, goodCheck, goodReview, [], null), [], 'QC that did not run adds nothing')
+  const failing = { ...goodQc, criteria: [{ id: 'C1', status: 'fail', scenario: 'ran wc --json a.txt', expected: 'JSON', observed: 'usage error' }] }
+  const failures = h.evaluate(contract, goodCheck, goodReview, [], failing)
+  assert.deepEqual(failures.map(f => [f.kind, f.id]), [['qc', 'C1'], ['qc', 'C2']])
+  assert.match(failures[0].problem, /Scenario: ran wc --json a\.txt Expected: JSON Observed: usage error/)
+  assert.match(failures[1].problem, /C2 was not judged by QC/)
+})
+
+test('checkFailures is the check part of evaluate', () => {
+  assert.deepEqual(h.checkFailures(contract, goodCheck), [])
+  assert.deepEqual(h.checkFailures(contract, { results: [{ name: 'test', exitCode: 2 }] }).map(f => f.kind), ['check'])
+})
+
+test('routeFailures and failureEntries: a QC failure goes to the specs of its criterion and logs it', () => {
+  const f = { kind: 'qc', id: 'C2', problem: 'p' }
+  const groups = h.routeFailures([f], two)
+  assert.deepEqual(groups.map(g => g.spec.id), ['S2'])
+  const [e] = h.failureEntries(groups, { stage: 'review', round: 1, sentBack: true })
+  assert.deepEqual(e, { stage: 'review', round: 1, kind: 'qc', specs: ['S2'], criterion: 'C2', problem: 'p', sentBack: true })
+})
+
+test('qcText shows the contract and how to run the product, and nothing of the checks', () => {
+  const text = h.qcText({ ...contract, run: 'python3 wordstats.py FILE' })
+  assert.match(text, /- C1: one/)
+  assert.match(text, /How to run the product:\npython3 wordstats\.py FILE/)
+  assert.ok(!text.includes('run-tests'), 'the check commands are not shown')
+  assert.match(h.qcText(contract), /Not given\. Find out from the repository's README/)
+})
+
+test('qcLine counts what QC saw', () => {
+  assert.deepEqual(h.qcLine(goodQc), { text: '1/2 criteria pass when used, 1 not observable', state: 'ok' })
+  assert.equal(h.qcLine({ criteria: [{ id: 'C1', status: 'fail' }] }).state, 'fail')
+  assert.equal(h.qcLine({ criteria: [] }).state, 'fail')
+})
+
+
 test('routeFailures: a failure naming a file goes to the spec that owns it', () => {
   const groups = h.routeFailures([
     { kind: 'finding', file: 'b.py', line: 1, problem: 'p' },
@@ -241,6 +281,10 @@ test('runRecord shows the run from raw state', () => {
   assert.equal(rec.specs[1].test, 'none')
   assert.equal(rec.check.state, 'ok')
   assert.deepEqual(rec.criteria.map(c => c.status), ['met', 'not_met'])
+  assert.deepEqual(rec.review.map(r => r.tag), ['whole change'])
+  const withQc = h.runRecord(run, contract, { ...state, failures: [{ kind: 'qc', id: 'C1' }], qc: [{ round: 0, ...goodQc }] }, { phase: 'Review', outcome: 'running', levels: 1, build: {}, repairs: [] })
+  assert.deepEqual(withQc.review.at(-1), { tag: 'qc', text: '1/2 criteria pass when used, 1 not observable', state: 'ok' })
+  assert.deepEqual(withQc.criteria.map(c => c.status), ['not_met', 'met'], 'a criterion QC failed is not met')
   const early = h.runRecord(run, contract, { specs: [] }, { phase: 'Spec', outcome: 'running', levels: 0, build: {}, repairs: [] })
   assert.deepEqual(early.criteria.map(c => c.status), ['', ''])
   assert.equal(rec.workflowOutcome, 'running')
@@ -320,6 +364,8 @@ test('conditionalFor offers the installed conditional skills of a role, with the
   assert.deepEqual(h.conditionalFor('implementer', paths, ['vitest']).map(c => c.name), ['playwright-best-practices', 'testing-strategy'], 'not offered again when loaded anyway')
   assert.deepEqual(h.conditionalFor('implementer', { ...paths, 'domain-modeling': '/d' }).map(c => c.name).includes('domain-modeling'), true)
   assert.deepEqual(h.conditionalFor('reviewer', paths), [])
+  assert.deepEqual(h.conditionalFor('qc', paths).map(c => c.name), ['playwright-best-practices'])
+  assert.deepEqual(h.skillsFor('qc'), [], 'QC loads no review skill')
   assert.deepEqual(h.conditionalFor('implementer', undefined), [])
   assert.deepEqual(h.optionalSkills(), ['domain-modeling', 'playwright-best-practices', 'vitest'])
   for (const n of h.optionalSkills()) assert.ok(!h.requiredSkills().includes(n), `${n} is never required`)
@@ -335,7 +381,7 @@ test('skillsNote lists conditional skills apart, each with its rule', () => {
 test('modelFor: the planner and the whole-change reviewer get the strongest models, the rest Sonnet', () => {
   assert.deepEqual(h.modelFor('planner'), { model: 'fable', effort: 'high' })
   assert.deepEqual(h.modelFor('reviewer'), { model: 'opus', effort: 'high' })
-  for (const role of ['implementer', 'qa', 'specReviewer']) assert.deepEqual(h.modelFor(role), { model: 'sonnet', effort: 'medium' })
+  for (const role of ['implementer', 'qa', 'specReviewer', 'qc']) assert.deepEqual(h.modelFor(role), { model: 'sonnet', effort: 'medium' })
   assert.deepEqual(h.modelFor('checker'), { model: 'sonnet', effort: 'low' })
   assert.deepEqual(h.modelFor('rebuild'), { model: 'opus', effort: 'medium' }, 'a spec sent back is rebuilt on a stronger model')
 })
