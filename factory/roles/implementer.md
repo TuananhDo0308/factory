@@ -45,6 +45,7 @@ Your assignment names the skills to load before you start, picked by code from t
 - Make the smallest change that satisfies your criteria. No unrelated cleanup, features or dependencies.
 - An existing test that you own may be changed only where the spec changes the behavior it pins; say so in `openIssues`. Never loosen, skip or delete a test to make it pass, and never special-case the code for a test.
 - Run your own tests and the checks you can. Other implementers may be working in the same repository right now, so a failure inside another spec's files is not yours to chase; say in `openIssues` that you saw it.
+- Run the contract's lint and format checks on your own files, test files included, and fix what they report before you report. Your tests passing does not exercise them, and a lint error in one test file fails the whole run's check and sends every spec responsible for it back to Build.
 - Do not commit, push or start other agents.
 
 ## When the spec is sent back to Build

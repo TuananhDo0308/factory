@@ -25,5 +25,5 @@ Then list the files changed or created since the base commit, using the Git comm
 
 ## Return
 
-- `results`: one entry per command, with its `name`, the `command` as you ran it, the `exitCode` and the `outputTail`. For a failing test command you searched, also `culpritEvidence` (the isolation runs and their results) and, only when step 4 confirmed one, `culprits`: the repository-relative test file(s) at fault.
+- `results`: one entry per command, with its `name` copied exactly as your assignment quotes it (colons and spaces included), the `command` as you ran it, the `exitCode` and the `outputTail`. For a failing test command you searched, also `culpritEvidence` (the isolation runs and their results) and, only when step 4 confirmed one, `culprits`: the repository-relative test file(s) at fault.
 - `changedFiles`: every changed or new file.

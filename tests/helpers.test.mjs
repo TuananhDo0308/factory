@@ -156,6 +156,20 @@ test('routeFailures: without culprits a check is routed as before', () => {
   }
 })
 
+test('resultFor matches a check by name, then by command, so a shortened name is not "not run"', () => {
+  const check = { name: 'ci-tests: Run unit tests', command: 'python3 -m unittest discover -s tests -v' }
+  const exact = { name: 'ci-tests: Run unit tests', command: 'other', exitCode: 0 }
+  const shortened = { name: 'ci-tests', command: 'python3  -m unittest discover -s tests -v ', exitCode: 0 }
+  assert.equal(h.resultFor([shortened, exact], check), exact, 'the exact name wins')
+  assert.equal(h.resultFor([shortened], check), shortened, 'the same command, spacing aside, matches')
+  assert.equal(h.resultFor([{ name: 'lint', command: 'ruff check .', exitCode: 0 }], check), undefined)
+  assert.equal(h.resultFor(undefined, check), undefined)
+  const contractWithColon = { ...contract, checks: [check] }
+  assert.deepEqual(h.evaluate(contractWithColon, { results: [shortened], changedFiles: [] }, goodReview, []), [])
+  assert.deepEqual(h.evaluate(contractWithColon, { results: [], changedFiles: [] }, goodReview, []).map(f => f.problem),
+    ['Check "ci-tests: Run unit tests" (python3 -m unittest discover -s tests -v) was not run.'])
+})
+
 test('evaluate carries the checker\'s culprits into the check failure', () => {
   const check = { results: [{ name: 'test', command: 'run-tests', exitCode: 1, outputTail: leak, culprits: ['./tests/test_b.py'], culpritEvidence: 'tests/test_a.py alone: pass' }], changedFiles: [] }
   const [f] = h.evaluate(contract, check, goodReview, [])

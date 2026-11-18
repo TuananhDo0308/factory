@@ -314,6 +314,19 @@ function filesOutsideOwnership(changedFiles, specs, ignoreFiles) {
   return (changedFiles || []).map(normPath).filter(f => f && !owned.has(f) && !ignore.some(e => matchesIgnore(f, e)))
 }
 
+// The checker's result for one contract check: the result with the check's
+// name, else the one whose command is the check's command. The checker copies
+// names back, and a name it shortens (a run once lost "ci-tests: Run unit
+// tests" to "ci-tests") must not turn a check that ran into one "not run".
+// undefined when neither matches.
+function resultFor(results, check) {
+  const list = results || []
+  const squash = s => String(s || '').replace(/\s+/g, ' ').trim()
+  return list.find(r => r.name === check.name)
+    || list.find(r => squash(r.name) === squash(check.name))
+    || list.find(r => squash(r.command) === squash(check.command))
+}
+
 // Decides pass or fail from the raw facts. An agent's own "verdict" is never
 // consulted: the result is passing only if this list is empty.
 //
@@ -326,9 +339,8 @@ function filesOutsideOwnership(changedFiles, specs, ignoreFiles) {
 function evaluate(contract, check, review, specReviews) {
   const failures = []
 
-  const ran = new Map((check.results || []).map(r => [r.name, r]))
   for (const c of contract.checks) {
-    const r = ran.get(c.name)
+    const r = resultFor(check.results, c)
     if (!r) failures.push({ kind: 'check', name: c.name, problem: `Check "${c.name}" (${c.command}) was not run.` })
     else if (r.exitCode !== 0) {
       const f = { kind: 'check', name: c.name, problem: `Check "${c.name}" (${c.command}) exited with ${r.exitCode}.`, outputTail: r.outputTail }
@@ -1024,8 +1036,8 @@ function runChecks(contract, specs, round) {
     [
       header('checker'),
       '',
-      'Run each of these commands from the repository root, exactly as written, and report what happened:',
-      contract.checks.length > 0 ? contract.checks.map(c => `- ${c.name}: ${c.command}`).join('\n') : '- (no commands)',
+      'Run each of these commands from the repository root, exactly as written, and report what happened. Report each result with the name in quotes, copied exactly:',
+      contract.checks.length > 0 ? contract.checks.map(c => `- name "${c.name}", command: ${c.command}`).join('\n') : '- (no commands)',
       '',
       ...(isolation ? [isolation, ''] : []),
       `Then list every file changed or created since the base commit: the output of \`git diff --name-only ${args.base}\` together with \`git ls-files --others --exclude-standard\`.`,
