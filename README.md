@@ -89,9 +89,14 @@ The skill also triggers when you ask for a "factory" or for a team of agents to 
 
 | Skill | Role | What it does |
 |---|---|---|
+| `client-intake` | BA with the client | Interviews the client (through their BA or PM) and writes `PRODUCT.md`, `GLOSSARY.md`, `DECISIONS.md` and an MVP scope the client approves. |
+| `tech-lead` | Tech lead | Proposes two or three stacks, records the chosen one as an ADR, and sets up a skeleton that builds and tests green, with CI and a `CLAUDE.md` holding the run and check commands and the project's defaults. |
+| `brand-design` | Designer | Imports the client's brand or builds a new identity with them (Claude Design works well here), then writes `DESIGN.md` and tokens the code imports, and mockups of every MVP screen in every state. |
 | `ba-ticket` | Business analyst | Clarifies the request with you and writes one or more issues, each one pull request in size, with user stories, acceptance criteria `C1..Cn` checkable from outside, and what is out of scope. Creates nothing until you approve. |
 | `dev-subissues` | Developer | Reads the issue and the code and adds native GitHub sub-issues: how the work divides, which files each part touches, the seams, the risks. **Context for the planner only**: they carry no criteria of their own. |
-| `factory` | The team | Takes the issue's criteria word for word as the contract. A passing run pushes, opens a pull request that closes the issue and its sub-issues, and squash-merges it into the default branch. |
+| `factory` | The team | Takes the issue's criteria word for word as the contract. The planner rates the risk, code raises it from the files touched and routes the review by it (one Sonnet reviewer for a low-risk change, every reviewer on Opus for a high one); no reviewer runs while a check fails; the CI, test, lint and type-check configuration is protected; and a passing run that touches auth, money, a migration, a dependency, CI or a visible screen waits for a person instead of merging. Its planner returns `questions` instead of guessing; any question stops the run before anything is built, and the session posts them on the issue (`Q1:` lines, label `needs-info`). A passing run pushes, opens a pull request that closes the issue and its sub-issues, and squash-merges it into the default branch. |
+
+Issues from `ba-ticket` and `dev-subissues` carry the label `factory` (and `kind/<kind>`), so they never mix with issues people write by hand. Before a person adds `ready`, `factory/scripts/ready-check.sh <n>` checks the issue mechanically (sections, numbered criteria, vague words, mockup links, unanswered `Q` lines, dependency cycles), and `/factory` with `questionsOnly` asks the planner's questions without building. [`factory/github/`](factory/github/README.md) holds a GitHub Action that hands each `ready` issue, in dependency order, to a Claude Code session on a self-hosted runner and leaves the pull request open for a person to accept.
 
 > [!NOTE]
 > Only the issue's criteria are graded. A requirement that lives only in a sub-issue is not checked, so `dev-subissues` proposes it as a new criterion on the issue instead.
@@ -176,7 +181,10 @@ After each run the session can also report it to XS Factory Bench with `xfb repo
 ## Repository layout
 
 ```text
-ba-ticket/                 BA skill: task → issues with criteria C1..Cn
+client-intake/             BA skill with the client: idea → PRODUCT.md, GLOSSARY.md, DECISIONS.md, MVP scope
+tech-lead/                 tech-lead skill: stack options → ADR, skeleton, CI, CLAUDE.md with defaults
+brand-design/              design skill: brand or new identity → DESIGN.md, tokens, mockups in every state
+ba-ticket/                 BA skill: task → issues with criteria C1..Cn (checklists by kind, DECISIONS.md template)
 dev-subissues/             Dev skill: issue → sub-issues as planner context
 ui-refine-loop/            standalone skill: check → fix loop that polishes one page, ends in a draft PR
 ├── SKILL.md               instructions for the chat session: read, grill, set up, run, open the PR
@@ -187,7 +195,9 @@ factory/
 ├── SKILL.md               instructions for the chat session: contract, run, verify, merge, report
 ├── workflow/factory.js    the Workflow script that orchestrates the team
 ├── roles/                 one brief per role (planner, implementer, qa, checker, reviewer, spec-reviewer, qc)
-├── scripts/               install-skills.sh, skills-ready.sh, FactoryBench reporting
+├── scripts/               install-skills.sh, skills-ready.sh, FactoryBench reporting; factory-issue.sh (labels,
+│                          issues, dependencies), ready-check, next-issue (dispatcher's pick), issue-history
+├── github/                factory-dispatch.yml, the GitHub Action for a self-hosted runner, and its setup
 ├── dashboard/             index.html, runs.js (finished runs), lessons.js (recurring failures and decisions), live.js (run in progress, not committed)
 └── evals/                 skill test cases
 tests/                     node --test tests for factory.js (its helpers, and the whole script with agents stubbed) and for ui-refine-loop

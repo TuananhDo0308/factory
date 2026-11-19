@@ -37,14 +37,15 @@ const red = { results: [{ name: 'test', command: 'run-tests', exitCode: 1, outpu
 const met = { criteria: [{ id: 'C1', status: 'met', evidence: 'e' }, { id: 'C2', status: 'met', evidence: 'e' }], findings: [], notReviewed: [] }
 
 // checks and qcs: one reply per round (the last repeats).
-async function run(over = {}, { checks = [green], qcs = [pass] } = {}) {
+async function run(over = {}, { checks = [green], qcs = [pass], plans = [{ overview: 'o', specs: [spec], risks: [], questions: [] }] } = {}) {
   const calls = []
   const nth = (list, round) => list[Math.min(round, list.length - 1)]
   const roundOf = label => Number((label.match(/round (\d+)/) || [0, 0])[1])
   const agent = async (prompt, opts) => {
-    calls.push({ label: opts.label, phase: opts.phase, prompt })
+    calls.push({ label: opts.label, phase: opts.phase, prompt, opts })
     const l = opts.label
-    if (l.startsWith('build')) return { status: 'done', blockedReason: '', filesChanged: ['wordstats.py', 'tests/test_wordstats.py'], tdd: [], doneWhen: [], checksRun: [], openIssues: [] }
+    if (l.startsWith('planner')) return nth(plans, l.includes('revision') ? 1 : 0)
+    if (l.startsWith('build')) return { status: 'done', blockedReason: '', filesChanged: l === 'build S2' ? ['report.py', 'tests/test_report.py'] : l === 'build S1' && /src\/auth/.test(prompt) ? ['src/auth/login.py'] : ['wordstats.py', 'tests/test_wordstats.py'], tdd: [], doneWhen: [], checksRun: [], openIssues: [] }
     if (l.startsWith('rebuild')) return { status: 'done', blockedReason: '', filesChanged: ['wordstats.py'], fixes: [], checksRun: [], openIssues: [] }
     if (l.startsWith('qa')) return { status: 'done', blockedReason: '', filesChanged: [], ledger: [], gaps: [], failures: [], checksRun: [], openIssues: [] }
     if (l.startsWith('checker')) return nth(checks, roundOf(l))
@@ -84,11 +85,11 @@ test('a criterion QC sees fail goes back to Build, and QC checks again next roun
   assert.deepEqual(r.out.failureLog.map(e => [e.kind, e.criterion, e.specs]), [['qc', 'C1', ['S1']]])
 })
 
-test('QC waits while a check fails, since the change goes back to Build anyway', async () => {
+test('the gate: a failing check goes back to Build with no reviewer or QC on it', async () => {
   const r = await run({}, { checks: [red, green] })
   assert.equal(r.out.outcome, 'passed')
-  assert.ok(!r.labels.slice(0, 4).some(l => l.startsWith('qc')), 'no QC in the failing round')
-  assert.deepEqual(r.labels.filter(l => l.startsWith('qc ')), ['qc (round 1)'])
+  assert.deepEqual(r.labels, ['build S1', 'qa S1', 'checker', 'rebuild 1 S1', 'qa 1 S1', 'checker (round 1)', 'reviewer (round 1)', 'qc (round 1)'])
+  assert.match(r.prompt('rebuild 1 S1'), /exited with 1/)
 })
 
 test('QC that keeps failing fails the run at the rebuild cap', async () => {
@@ -115,4 +116,106 @@ test('qc: false runs no QC and needs no QC brief', async () => {
   assert.match(r.out.reason, /QC was turned off/)
   const missing = await run({ roles: { ...roles, qc: undefined } })
   assert.match(missing.out.reason, /Missing workflow args: roles\.qc/)
+})
+
+const asking = { overview: 'o', specs: [spec], risks: [], questions: [{ question: 'Should --json also cover errors?', why: 'changes the error output', criteria: ['C1'] }] }
+
+test('a planner with open questions stops the run before anything is built', async () => {
+  const r = await run({ specs: undefined }, { plans: [asking] })
+  assert.equal(r.out.outcome, 'blocked')
+  assert.deepEqual(r.labels, ['planner'])
+  assert.equal(r.out.questions.length, 1)
+  assert.match(r.out.reason, /1 open question/)
+  assert.match(r.out.reason, /Q1: Should --json also cover errors\? \(C1\)/)
+})
+
+test('a planner without questions goes on to build as before', async () => {
+  const r = await run({ specs: undefined })
+  assert.equal(r.out.outcome, 'passed')
+  assert.deepEqual(r.labels, ['planner', 'build S1', 'qa S1', 'checker', 'reviewer', 'qc'])
+  assert.deepEqual(r.out.questions, [])
+})
+
+test('questionsOnly runs the planner alone and returns ready when it has no questions', async () => {
+  const roles = { planner: '/roles/planner.md' }
+  const r = await run({ specs: undefined, questionsOnly: true, roles, skills: undefined })
+  assert.equal(r.out.outcome, 'ready')
+  assert.deepEqual(r.labels, ['planner'])
+  assert.match(r.prompt('planner'), /readiness check, not a build/)
+})
+
+test('questionsOnly returns the questions as blocked', async () => {
+  const r = await run({ specs: undefined, questionsOnly: true, roles: { planner: '/roles/planner.md' } }, { plans: [asking] })
+  assert.equal(r.out.outcome, 'blocked')
+  assert.equal(r.out.questions[0].question, 'Should --json also cover errors?')
+})
+
+test('questionsOnly refuses supplied specs, which would skip the planner it exists to run', async () => {
+  const r = await run({ questionsOnly: true })
+  assert.equal(r.out.outcome, 'blocked')
+  assert.deepEqual(r.labels, [])
+  assert.match(r.out.reason, /cannot be given "specs"/)
+})
+
+const spec2 = { ...spec, id: 'S2', criteria: ['C2'], filesOwned: ['report.py'], testFiles: ['tests/test_report.py'] }
+const s1only = { ...spec, criteria: ['C1'] }
+const greenTwo = { ...green, changedFiles: ['wordstats.py', 'report.py'] }
+
+test('a low-risk change gets one reviewer on Sonnet, even when split', async () => {
+  const r = await run({ specs: undefined }, { plans: [{ overview: 'o', specs: [s1only, spec2], risks: [], risk: 'low', surfaces: [], questions: [] }], checks: [greenTwo] })
+  assert.equal(r.out.outcome, 'passed', r.out.reason)
+  assert.ok(!r.labels.some(l => l.startsWith('review ')), 'no spec reviewers at low risk')
+  assert.equal(r.call('reviewer').opts.model, 'sonnet')
+  assert.equal(r.out.risk.risk, 'low')
+})
+
+test('a medium-risk split change keeps the spec reviewers and the Opus reviewer', async () => {
+  const r = await run({ specs: undefined }, { plans: [{ overview: 'o', specs: [s1only, spec2], risks: [], risk: 'medium', surfaces: [], questions: [] }], checks: [greenTwo] })
+  assert.deepEqual(r.labels.filter(l => l.startsWith('review ')), ['review S1', 'review S2'])
+  assert.equal(r.call('reviewer').opts.model, 'opus')
+})
+
+test('owning auth files raises a low rating to high: stronger reviewers, a security review, and a person before merge', async () => {
+  const auth = { ...spec, filesOwned: ['src/auth/login.py'] }
+  const r = await run({ specs: [auth], risk: 'low' }, { checks: [{ ...green, changedFiles: ['src/auth/login.py'] }] })
+  assert.equal(r.out.risk && r.out.risk.risk, 'high', r.out.reason)
+  assert.deepEqual(r.out.risk.surfaces, ['security'])
+  assert.deepEqual([r.call('reviewer').opts.model, r.call('reviewer').opts.effort], ['opus', 'xhigh'])
+  assert.match(r.prompt('reviewer'), /pr-security-review/)
+  assert.equal(r.out.merge.decision, 'person')
+  assert.match(r.out.reason, /A person must accept it/)
+})
+
+test('the models the caller passes still override the routing', async () => {
+  const r = await run({ risk: 'low', models: { reviewer: { model: 'haiku' } } })
+  assert.equal(r.call('reviewer').opts.model, 'haiku')
+})
+
+test('a plain passing change may be merged without a person', async () => {
+  const r = await run()
+  assert.equal(r.out.merge.decision, 'auto')
+  assert.match(r.out.reason, /may be merged without a person/)
+})
+
+test('a dependency change passes but waits for a person', async () => {
+  const deps = { ...spec, filesOwned: ['wordstats.py', 'package.json'] }
+  const r = await run({ specs: [deps] }, { checks: [{ ...green, changedFiles: ['wordstats.py', 'package.json'] }] })
+  assert.equal(r.out.outcome, 'passed')
+  assert.deepEqual(r.out.merge.reasons, ['dependency: package.json'])
+})
+
+test('a spec may not own a protected file unless the caller allows it', async () => {
+  const ci = { ...spec, filesOwned: ['wordstats.py', '.github/workflows/ci.yml'] }
+  const r = await run({ specs: [ci] })
+  assert.equal(r.out.outcome, 'blocked')
+  assert.deepEqual(r.labels, [])
+  assert.match(r.out.reason, /owns \.github\/workflows\/ci\.yml, which is protected/)
+  const allowed = await run({ specs: [ci], allowProtected: ['.github/workflows/ci.yml'] })
+  assert.equal(allowed.out.outcome, 'passed', allowed.out.reason)
+})
+
+test('a protected file changed outside every spec stops the run, even when ignored as output', async () => {
+  const r = await run({ ignoreFiles: ['tsconfig.json'] }, { checks: [{ ...green, changedFiles: ['wordstats.py', 'tsconfig.json'] }] })
+  assert.equal(r.out.outcome, 'blocked')
+  assert.match(r.out.reason, /Protected files were changed: tsconfig\.json/)
 })

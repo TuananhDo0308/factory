@@ -51,12 +51,18 @@ Show the user the sub-issues in full and ask them to approve, change or drop eac
 Then create each one and attach it to the issue as a GitHub sub-issue. The link takes the new issue's internal id, not its number:
 
 ```bash
-gh issue create --title "<title>" --body-file <file in your scratchpad>   # prints the new issue's URL
+bash <this skill>/../factory/scripts/factory-issue.sh create --title "<title>" --body-file <file in your scratchpad>   # prints the new issue's URL
 id=$(gh api repos/{owner}/{repo}/issues/<m> --jq .id)                    # <m> is the new issue's number
 gh api -X POST repos/{owner}/{repo}/issues/<n>/sub_issues -F sub_issue_id="$id"
 ```
 
-Create them in dependency order, so each **Depends on** can name real numbers. Check the result with the `sub_issues` call from step 1.
+Create them in dependency order, so each **Depends on** can name real numbers. The script labels them `factory`, like their parent, so they never mix with issues people write by hand. Check the result with the `sub_issues` call from step 1.
+
+When the issue depends on other issues (its **Depends on**), record that on GitHub too, so the dispatcher builds them in order and code can check there is no cycle:
+
+```bash
+bash <this skill>/../factory/scripts/factory-issue.sh depends --issue <n> --on <m>   # <n> is blocked by <m>
+```
 
 ## Report
 

@@ -17,6 +17,25 @@ Each criterion is checked on its own when the pull request is reviewed. Nothing 
 - **C2** Given <context>, when <something goes wrong>, then <exactly what the user sees or the system does>.
 - **C3** <One observable fact, with its numbers: limits, sizes, formats.>
 
+## UI and states
+
+For a change anyone can see; write "No visible change" otherwise.
+
+- Screens: <screen> — <link to the approved mockup>.
+- States each screen must show: empty, loading, error, many items (<number>), narrow screen (390 px), and any other this feature has.
+
+## Data and API
+
+What is read, created, changed or deleted, with its fields and limits, and any API that is added or changes. "None" when nothing is.
+
+## Permissions
+
+Who may do each action in this ticket, and what everyone else sees when they try. "Everyone who can reach the screen" is an answer too.
+
+## Copy
+
+The exact text of every new label, button, message and error, in the product's language. "None" when there is no new text.
+
 ## Out of scope
 
 - <What a reader might expect and will not get here> (see #<issue> if another ticket has it).

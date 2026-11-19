@@ -418,3 +418,78 @@ test('issueText shows the planner the issue and its sub-issues as background, no
   assert.match(text, /Only the contract's criteria are judged/)
   assert.match(h.issueText({ number: 3, title: 'Fix', body: 'b' }), /It has no sub-issues\./)
 })
+
+test('openQuestions keeps the planner questions that say something, in one shape', () => {
+  const { openQuestions } = h
+  assert.deepEqual(openQuestions(null), [])
+  assert.deepEqual(openQuestions({ questions: [] }), [])
+  assert.deepEqual(openQuestions({}), [], 'an older plan without the field has none')
+  assert.deepEqual(
+    openQuestions({ questions: [{ question: '  Is a deleted order recoverable? ', why: 'changes the delete path', criteria: ['C2'] }, { question: ' ', why: 'x', criteria: [] }, 'Who may export?'] }),
+    [
+      { question: 'Is a deleted order recoverable?', why: 'changes the delete path', criteria: ['C2'] },
+      { question: 'Who may export?', why: '', criteria: [] },
+    ],
+  )
+})
+
+test('questionsText numbers the questions with their criteria and reasons', () => {
+  const { questionsText } = h
+  assert.equal(
+    questionsText([{ question: 'A?', why: 'w', criteria: ['C1', 'C3'] }, { question: 'B?', why: '', criteria: [] }]),
+    'Q1: A? (C1, C3) - w Q2: B?',
+  )
+})
+
+test('matchesGlob: ** across directories, * within a name, a bare name at any depth', () => {
+  const { matchesGlob } = h
+  assert.ok(matchesGlob('.github/workflows/ci.yml', '.github/**'))
+  assert.ok(matchesGlob('web/vitest.config.ts', 'vitest.config.*'))
+  assert.ok(matchesGlob('tsconfig.build.json', 'tsconfig*.json'))
+  assert.ok(matchesGlob('src/auth/login.ts', '**/auth/**'))
+  assert.ok(matchesGlob('src/userAuthGuard.ts', '**/*auth*'), 'case does not matter')
+  assert.ok(!matchesGlob('src/vitest.config/x.ts', 'vitest.config.*'), '* stays within one name')
+  assert.ok(!matchesGlob('docs/github/x.md', '.github/**'))
+})
+
+test('protectedFiles finds the checks a run is judged by, minus what the caller allows', () => {
+  const { protectedFiles } = h
+  const files = ['src/a.ts', '.github/workflows/ci.yml', 'jest.config.js', 'eslint.config.mjs', 'factory/checks.sh']
+  assert.deepEqual(protectedFiles(files), ['.github/workflows/ci.yml', 'jest.config.js', 'eslint.config.mjs', 'factory/checks.sh'])
+  assert.deepEqual(protectedFiles(files, ['src/**'], ['.github/**', 'jest.config.js']), ['src/a.ts', 'eslint.config.mjs', 'factory/checks.sh'])
+})
+
+test('sensitiveKinds names auth, money, migrations, dependencies and CI by path', () => {
+  const { sensitiveKinds } = h
+  assert.deepEqual(sensitiveKinds(['src/auth/session.ts', 'api/payments.py', 'db/migrations/001.sql', 'package.json', 'Dockerfile']), ['auth', 'money', 'migration', 'dependency', 'ci'])
+  assert.deepEqual(sensitiveKinds(['src/list.ts']), [])
+})
+
+test('assessRisk keeps the rating unless the files show more, and adds surfaces', () => {
+  const { assessRisk } = h
+  assert.deepEqual(assessRisk('low', [], [{ filesOwned: ['src/list.py'] }]), { risk: 'low', surfaces: [], raisedBy: [] })
+  assert.deepEqual(assessRisk(undefined, ['bogus'], []), { risk: 'medium', surfaces: [], raisedBy: [] }, 'an unrated run is medium')
+  const a = assessRisk('low', [], [{ filesOwned: ['src/billing.ts', 'src/Plan.tsx'] }])
+  assert.equal(a.risk, 'high')
+  assert.deepEqual(a.surfaces, ['ui', 'security'])
+  assert.equal(assessRisk('low', [], [{ filesOwned: ['package.json'] }]).risk, 'medium')
+  assert.equal(assessRisk('high', [], [{ filesOwned: ['package.json'] }]).risk, 'high', 'never lowered')
+})
+
+test('routedModels puts the caller over the routing, role by role', () => {
+  const { routedModels } = h
+  assert.deepEqual(routedModels('low', {}), { reviewer: { model: 'sonnet', effort: 'medium' } })
+  assert.deepEqual(routedModels('high', { reviewer: { effort: 'high' } }).reviewer, { model: 'opus', effort: 'high' })
+  assert.deepEqual(routedModels('medium', undefined), {})
+})
+
+test('escalation says what a person must look at, or lets the run merge', () => {
+  const { escalation } = h
+  const medium = { risk: 'medium', surfaces: [], raisedBy: [] }
+  assert.deepEqual(escalation(['src/list.py'], medium, []), { decision: 'auto', reasons: [] })
+  const e = escalation(['src/list.py', 'db/migrations/002.sql', 'yarn.lock'], { risk: 'high', surfaces: ['ui'], raisedBy: ['the specs own a migration'] }, [{ rebuild: 1, spec: 'S1', files: ['t.py'] }])
+  assert.equal(e.decision, 'person')
+  assert.deepEqual(e.reasons.map(r => r.split(':')[0]), ['migration', 'dependency', 'high-risk', 'ui', 'tests-rewritten'])
+  assert.match(e.reasons[4], /t\.py/)
+  assert.deepEqual(escalation(['yarn.lock'], medium, [], ['auth']).decision, 'auto', 'the caller chooses what needs a person')
+})

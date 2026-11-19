@@ -6,7 +6,7 @@ export const meta = {
     { title: 'Spec', detail: 'planner turns the contract into specs; code validates them' },
     { title: 'Build', detail: 'per spec: the implementer writes the tests first, then the code; then QA. A spec QA sends back is rebuilt and checked again' },
     { title: 'Check', detail: 'checker runs the contract checks and lists changed files' },
-    { title: 'Review', detail: 'one reviewer for the whole change, plus one per spec when the work was split, and, once the checks pass, a QC agent that runs the product; the specs a failure concerns go back to Build' },
+    { title: 'Review', detail: 'only once every check passes: reviewers chosen by the run\'s risk (one for the whole change, plus one per spec when the work was split above low risk) and a QC agent that runs the product; the specs a failure concerns go back to Build, and a passing run is marked for a person when it touches what one must see' },
   ],
 }
 
@@ -140,13 +140,18 @@ const SKILLS = {
       'playwright-best-practices': 'when a criterion is seen in a browser',
     },
   },
+  // Added for a surface the run touches: a change to auth or money gets the
+  // security review from its reviewers too, not only from QA.
+  surfaces: {
+    security: { reviewer: ['pr-security-review'], specReviewer: ['pr-security-review'] },
+  },
   // Skills that wait on a person. Nobody is there to answer during a run.
   interactive: ['grill-me', 'grilling', 'grill-with-docs', 'wizard', 'teach', 'to-questionnaire', 'wait-what', 'ask-matt', 'setup-matt-pocock-skills'],
 }
 
 // Every skill the registry can hand out: what the session must have installed.
 function requiredSkills() {
-  const all = [...Object.values(SKILLS.implementer).flat(), ...Object.values(SKILLS.always).flat()]
+  const all = [...Object.values(SKILLS.implementer).flat(), ...Object.values(SKILLS.always).flat(), ...Object.values(SKILLS.surfaces).flatMap(r => Object.values(r).flat())]
   return [...new Set(all)].sort()
 }
 
@@ -174,20 +179,24 @@ function missingSkills(available) {
 
 // The skills one agent loads, in order. `role` is implementer, qa, reviewer or
 // specReviewer; `spec` is absent for the reviewer of the whole change.
-function skillsFor(role, spec) {
+// `surfaces` (the run's, from assessRisk) add the skills SKILLS.surfaces names.
+function skillsFor(role, spec, surfaces) {
+  const extra = (surfaces || []).flatMap(s => ((SKILLS.surfaces[s] || {})[role]) || [])
   const own =
     role === 'implementer' && spec
       ? Array.isArray(spec.skills) && spec.skills.length > 0
         ? spec.skills
         : SKILLS.implementer[spec.kind] || []
       : []
-  return [...new Set([...own, ...(SKILLS.always[role] || [])])]
+  return [...new Set([...own, ...(SKILLS.always[role] || []), ...extra])]
 }
 
 // Returns a list of human-readable problems; empty means the specs are usable.
 // `available` lists the skill names installed for this run; when given, a
 // spec's own `skills` must come from it.
-function validateSpecs(specs, contract, available) {
+// `guarded(file)` says whether a file is protected in this run (see
+// protectedFiles): a spec may not own one.
+function validateSpecs(specs, contract, available, guarded) {
   const problems = []
   if (!Array.isArray(specs) || specs.length === 0) return ['No specs were returned.']
 
@@ -238,6 +247,9 @@ function validateSpecs(specs, contract, available) {
           problems.push(`File ${f} is owned by both ${owner.get(f)} and ${s.id}; a file may have one owner only.`)
         }
         owner.set(f, s.id)
+        if (guarded && guarded(f)) {
+          problems.push(`Spec ${s.id}: owns ${f}, which is protected: the checks a run is judged by may not change in it. Reach the criterion without it, or the caller must allow it with "allowProtected".`)
+        }
       }
     }
   }
@@ -310,6 +322,129 @@ function matchesIgnore(file, entry) {
   if (e.startsWith('**/')) return file.split('/').includes(e.slice(3))
   if (e.startsWith('*.')) return file.endsWith(e.slice(1))
   return file === e || file.startsWith(`${e}/`)
+}
+
+// A path pattern: `**` matches across directories, `*` within one name, and a
+// pattern without a slash matches that name at any depth. Case is ignored, so
+// `*auth*` also catches `UserAuthGuard.tsx` (and, harmlessly, `Author.tsx`).
+function matchesGlob(file, pattern) {
+  const f = normPath(file)
+  let p = normPath(pattern)
+  if (!f || !p) return false
+  if (!p.includes('/')) p = `**/${p}`
+  const re = p
+    .split('**/')
+    .map(part => part.split('**').map(s => s.split('*').map(x => x.replace(/[.+?^${}()|[\]\\]/g, '\\$&')).join('[^/]*')).join('.*'))
+    .join('(?:.*/)?')
+  return new RegExp(`^${re}$`, 'i').test(f)
+}
+
+// Files no agent may change unless the caller allows it for this run: the
+// checks a run is judged by (CI, test runner, linter and type-checker
+// configuration). A run that could edit them could pass by weakening them.
+const PROTECTED = [
+  '.github/**', '.gitlab-ci.yml', '.circleci/**', 'Jenkinsfile', 'azure-pipelines.yml',
+  'vitest.config.*', 'vitest.workspace.*', 'jest.config.*', 'playwright.config.*', 'karma.conf.*', 'cypress.config.*',
+  'pytest.ini', 'tox.ini', 'noxfile.py', 'mypy.ini', '.flake8', 'ruff.toml', '.ruff.toml',
+  '.eslintrc*', 'eslint.config.*', '.prettierrc*', 'prettier.config.*', 'biome.json', 'biome.jsonc', 'tsconfig*.json',
+  'factory/checks.sh',
+]
+
+function protectedList(extra, allowed) {
+  const allow = (allowed || []).map(normPath)
+  return [...PROTECTED, ...(extra || [])].map(normPath).filter(p => p && !allow.includes(p))
+}
+
+// The files among `files` that a protected pattern matches. `allowed` lists
+// patterns or exact paths the caller lets this run change.
+function protectedFiles(files, extra, allowed) {
+  const patterns = protectedList(extra, allowed)
+  const allow = (allowed || []).map(normPath)
+  return (files || []).map(normPath).filter(f => f && !allow.some(a => a === f || matchesGlob(f, a)) && patterns.some(p => matchesGlob(f, p)))
+}
+
+// --- Risk -------------------------------------------------------------------
+// Kinds of change a person must see before it ships, recognised by path. Code
+// uses them twice: to raise the risk the planner rated (a change to auth is
+// never `low`), and, once the run passes, to say whether it may be merged
+// without a person (`escalation`).
+const SENSITIVE = {
+  auth: ['**/auth/**', '**/*auth*', '**/*login*', '**/*session*', '**/*permission*', '**/*rbac*', '**/*acl*', '**/*oauth*', '**/*jwt*', '**/*password*'],
+  money: ['**/*payment*', '**/*billing*', '**/*invoice*', '**/*stripe*', '**/*checkout*', '**/*pricing*', '**/*subscription*'],
+  migration: ['**/migrations/**', '**/migrate/**', '**/*.sql', '**/schema.prisma', '**/alembic/**'],
+  dependency: ['package.json', 'package-lock.json', 'pnpm-lock.yaml', 'yarn.lock', 'bun.lockb', 'requirements*.txt', 'pyproject.toml', 'poetry.lock', 'uv.lock', 'Pipfile', 'Pipfile.lock', 'go.mod', 'go.sum', 'Cargo.toml', 'Cargo.lock', 'Gemfile', 'Gemfile.lock', 'composer.json', 'composer.lock'],
+  ci: ['.github/**', '.gitlab-ci.yml', '.circleci/**', 'Jenkinsfile', 'Dockerfile', '**/Dockerfile', 'docker-compose*.yml', 'compose*.yml', 'vercel.json', 'netlify.toml', 'fly.toml', '**/*.tf', 'Procfile', 'app.yaml'],
+}
+const UI_FILES = ['*.tsx', '*.jsx', '*.vue', '*.svelte', '*.astro', '*.css', '*.scss', '*.sass', '*.less', '*.html', '*.erb', '*.blade.php']
+const RISKS = ['low', 'medium', 'high']
+const SURFACES = ['ui', 'security', 'data']
+
+// The sensitive kinds `files` touch, in SENSITIVE's order.
+function sensitiveKinds(files) {
+  const list = (files || []).map(normPath).filter(Boolean)
+  return Object.keys(SENSITIVE).filter(k => list.some(f => SENSITIVE[k].some(p => matchesGlob(f, p))))
+}
+
+// Which reviewers and models a run gets, by its risk (super-board's and
+// zazencodes' routing): a low-risk change is reviewed once, on a cheaper
+// model; a high-risk one by every reviewer on the strongest. `args.models`
+// still overrides any role.
+const ROUTING = {
+  low: { specReviews: false, models: { reviewer: { model: 'sonnet', effort: 'medium' } } },
+  medium: { specReviews: true, models: {} },
+  high: { specReviews: true, models: { reviewer: { model: 'opus', effort: 'xhigh' }, specReviewer: { model: 'opus', effort: 'high' } } },
+}
+
+// The run's risk and surfaces, from what the planner (or the caller) rated,
+// raised to what the files the specs own show: code never lets a change to
+// auth, money or a migration be `low`. Returns { risk, surfaces, raisedBy }.
+function assessRisk(rated, surfaces, specs) {
+  const files = (specs || []).flatMap(s => s.filesOwned || [])
+  const kinds = sensitiveKinds(files)
+  let risk = RISKS.includes(rated) ? rated : 'medium'
+  const s = new Set((surfaces || []).filter(x => SURFACES.includes(x)))
+  const raisedBy = []
+  const raise = (to, why) => {
+    if (RISKS.indexOf(to) > RISKS.indexOf(risk)) { risk = to; raisedBy.push(why) }
+  }
+  if (kinds.includes('auth') || kinds.includes('money')) { s.add('security'); raise('high', `the specs own ${kinds.filter(k => k === 'auth' || k === 'money').join(' and ')} files`) }
+  if (kinds.includes('migration')) { s.add('data'); raise('high', 'the specs own a migration') }
+  if (kinds.includes('dependency') || kinds.includes('ci')) raise('medium', `the specs own ${kinds.filter(k => k === 'dependency' || k === 'ci').join(' and ')} files`)
+  if (files.map(normPath).some(f => UI_FILES.some(p => matchesGlob(f, p)))) s.add('ui')
+  return { risk, surfaces: SURFACES.filter(x => s.has(x)), raisedBy }
+}
+
+// The models for a run at this risk, with the caller's overrides on top.
+function routedModels(risk, overrides) {
+  const routed = (ROUTING[risk] || ROUTING.medium).models
+  const out = {}
+  for (const role of new Set([...Object.keys(routed), ...Object.keys(overrides || {})])) {
+    out[role] = { ...(routed[role] || {}), ...((overrides || {})[role] || {}) }
+  }
+  return out
+}
+
+// Whether a passing run may be merged with no person looking, from facts code
+// can see. Each reason names what a person must look at; none means it may be
+// merged. `escalate` lists the kinds that need a person: by default all of
+// auth, money, migration, dependency, ci, high-risk, ui and tests-rewritten.
+const ESCALATE = ['auth', 'money', 'migration', 'dependency', 'ci', 'high-risk', 'ui', 'tests-rewritten']
+function escalation(changedFiles, assessed, testsChangedInRebuild, escalate) {
+  const on = new Set(Array.isArray(escalate) ? escalate : ESCALATE)
+  const reasons = []
+  const files = (changedFiles || []).map(normPath).filter(Boolean)
+  for (const k of sensitiveKinds(files)) {
+    if (!on.has(k)) continue
+    const which = files.filter(f => SENSITIVE[k].some(p => matchesGlob(f, p)))
+    reasons.push(`${k}: ${which.join(', ')}`)
+  }
+  if (on.has('high-risk') && assessed && assessed.risk === 'high') reasons.push(`high-risk: rated high${assessed.raisedBy && assessed.raisedBy.length ? ` (${assessed.raisedBy.join('; ')})` : ''}`)
+  if (on.has('ui') && assessed && assessed.surfaces.includes('ui')) reasons.push('ui: a user will see this change; the person who asked for it should try it')
+  if (on.has('tests-rewritten') && (testsChangedInRebuild || []).length > 0) {
+    const tests = [...new Set(testsChangedInRebuild.flatMap(t => (typeof t === 'string' ? [t] : t.files || [])))]
+    reasons.push(`tests-rewritten: test files changed after the first build (${tests.join(', ')})`)
+  }
+  return { decision: reasons.length > 0 ? 'person' : 'auto', reasons }
 }
 
 // Files changed in the repository that no spec owns, that were not already
@@ -416,6 +551,22 @@ function evaluate(contract, check, review, specReviews, qc) {
   }
   if (qc) failures.push(...qcFailures(contract, qc))
   return failures
+}
+
+// The planner's open questions, blank ones dropped. A plan with any is not
+// built: nobody answers during a run, so a question the planner had to answer
+// itself would be a guess that every agent after it builds on. The session
+// takes them to the people who can answer, outside the run.
+function openQuestions(plan) {
+  if (!plan || !Array.isArray(plan.questions)) return []
+  return plan.questions
+    .map(q => (typeof q === 'string' ? { question: q, why: '', criteria: [] } : q))
+    .filter(q => q && !isBlank(q.question))
+    .map(q => ({ question: String(q.question).trim(), why: isBlank(q.why) ? '' : String(q.why).trim(), criteria: Array.isArray(q.criteria) ? q.criteria : [] }))
+}
+
+function questionsText(questions) {
+  return questions.map((q, i) => `Q${i + 1}: ${q.question}${q.criteria.length ? ` (${q.criteria.join(', ')})` : ''}${q.why ? ` - ${q.why}` : ''}`).join(' ')
 }
 
 // Sends the failures of a check and review back to Build, to the specs that
@@ -800,8 +951,18 @@ const PLAN_SCHEMA = {
     overview: { type: 'string' },
     specs: { type: 'array', items: SPEC_SCHEMA },
     risks: STRINGS,
+    risk: { type: 'string', enum: ['low', 'medium', 'high'] },
+    surfaces: { type: 'array', items: { type: 'string', enum: ['ui', 'security', 'data'] } },
+    questions: {
+      type: 'array',
+      items: {
+        type: 'object',
+        properties: { question: { type: 'string' }, why: { type: 'string' }, criteria: STRINGS },
+        required: ['question', 'why', 'criteria'],
+      },
+    },
   },
-  required: ['overview', 'specs', 'risks'],
+  required: ['overview', 'specs', 'risks', 'risk', 'surfaces', 'questions'],
 }
 
 const BUILD_SCHEMA = {
@@ -1046,6 +1207,9 @@ function planSpecs(contract, previous, problems) {
       ...(issueText(args.issue) ? ['', issueText(args.issue)] : []),
       '',
       `Skills installed for this run, which a spec may name in "skills" instead of those of its kind: ${Object.keys(args.skills || {}).join(', ') || 'none'}`,
+      ...(args.questionsOnly
+        ? ['', 'This is a readiness check, not a build: nothing will be built from these specs. What matters is `questions`: every decision the contract, the issue and the repository leave to you. Plan as you would for a build, so you meet the same gaps, then return them.']
+        : []),
       redo,
     ].join('\n'),
     { label: problems ? 'planner (revision)' : 'planner', phase: 'Spec', schema: PLAN_SCHEMA, ...modelFor('planner', args.models) },
@@ -1168,7 +1332,7 @@ function runReview(contract, check, specs, round) {
       JSON.stringify(check.results, null, 2),
       seams,
       '',
-      skillsNote(skillsFor('reviewer'), args.skills, fixedPoint('the contract above')),
+      skillsNote(skillsFor('reviewer', null, args.surfaces), args.skills, fixedPoint('the contract above')),
     ].join('\n'),
     { label: round === 0 ? 'reviewer' : `reviewer (round ${round})`, phase: 'Review', schema: REVIEW_SCHEMA, ...modelFor('reviewer', args.models) },
   )
@@ -1189,7 +1353,7 @@ function runSpecReview(spec, contract, check, round) {
       'Check results for the whole change, observed by an independent checker:',
       JSON.stringify(check.results, null, 2),
       '',
-      skillsNote(skillsFor('specReviewer', spec), args.skills, fixedPoint('the spec above')),
+      skillsNote(skillsFor('specReviewer', spec, args.surfaces), args.skills, fixedPoint('the spec above')),
     ].join('\n'),
     { label: round === 0 ? `review ${spec.id}` : `review ${spec.id} (round ${round})`, phase: 'Review', schema: REVIEW_SCHEMA, ...modelFor('specReviewer', args.models) },
   )
@@ -1228,13 +1392,17 @@ const maxRebuilds = Number.isInteger(input.maxRebuilds) ? input.maxRebuilds : 2
 const maxSpecRevisions = Number.isInteger(input.maxSpecRevisions) ? input.maxSpecRevisions : 2
 // QC runs unless the caller turns it off with `qc: false`, for a change no user
 // can see (the session says why in its report).
-const qcOn = input.qc !== false
+const qcOn = input.qc !== false && input.questionsOnly !== true
+// `questionsOnly: true` runs the planner alone, as the readiness check before
+// an issue is marked ready: outcome `ready` when it has no questions, else
+// `blocked` with them in `questions`. Nothing is built.
+const questionsOnly = input.questionsOnly === true
 // The agents' scratch directories go next to the repository by default, never
 // inside it, where they would show up as changes that no spec owns.
 const repo = String(input.repo || '').replace(/\/+$/, '')
 const scratch = isBlank(input.scratch) ? `${repo}-factory-scratch` : String(input.scratch).replace(/\/+$/, '')
 
-const state = { outcome: 'blocked', reason: '', overview: '', risks: [], specs: [], builds: [], qa: [], rebuilds: [], sentBack: {}, testsChangedInRebuild: [], check: null, review: null, specReviews: [], qc: [], failures: [], failureLog: [], repairRounds: 0 }
+const state = { outcome: 'blocked', reason: '', overview: '', risks: [], questions: [], risk: null, merge: null, specs: [], builds: [], qa: [], rebuilds: [], sentBack: {}, testsChangedInRebuild: [], check: null, review: null, specReviews: [], qc: [], failures: [], failureLog: [], repairRounds: 0 }
 
 // Progress for the dashboard, only when the caller passed `dashboard.file`.
 // Records are written one after another and without holding the team up; only
@@ -1290,7 +1458,7 @@ function settle(job, result, tag) {
 const missing = []
 if (isBlank(input.repo)) missing.push('repo')
 if (isBlank(input.base)) missing.push('base')
-for (const role of ['planner', 'implementer', 'qa', 'checker', 'reviewer', 'specReviewer', ...(qcOn ? ['qc'] : [])]) {
+for (const role of questionsOnly ? ['planner'] : ['planner', 'implementer', 'qa', 'checker', 'reviewer', 'specReviewer', ...(qcOn ? ['qc'] : [])]) {
   if (!input.roles || isBlank(input.roles[role])) missing.push(`roles.${role}`)
 }
 if (!contract || isBlank(contract.objective)) missing.push('contract.objective')
@@ -1299,11 +1467,13 @@ if (!contract || !Array.isArray(contract.checks)) missing.push('contract.checks'
 if (missing.length > 0) return stop('blocked', `Missing workflow args: ${missing.join(', ')}`)
 const badModels = modelProblems(input.models)
 if (badModels.length > 0) return stop('blocked', `The "models" arg is not usable: ${badModels.join(' ')}`)
-const absentSkills = missingSkills(input.skills)
+if (questionsOnly && Array.isArray(input.specs) && input.specs.length > 0) return stop('blocked', '"questionsOnly" runs the planner; it cannot be given "specs".')
+const absentSkills = questionsOnly ? [] : missingSkills(input.skills)
 if (absentSkills.length > 0) {
   return stop('blocked', `Skills the team needs are not installed or were not passed in "skills": ${absentSkills.join(', ')}. Run scripts/skills-ready.sh, install what it reports missing, and pass its output as "skills".`)
 }
-const installed = Object.keys(input.skills)
+const installed = Object.keys(input.skills || {})
+const guarded = f => protectedFiles([f], input.protectedPaths, input.allowProtected).length > 0
 
 // --- Spec -------------------------------------------------------------------
 phase('Spec')
@@ -1311,14 +1481,30 @@ record('Spec', 'running')
 let specs = input.specs
 let problems
 if (Array.isArray(specs) && specs.length > 0) {
-  problems = validateSpecs(specs, contract, installed)
+  problems = validateSpecs(specs, contract, installed, guarded)
   state.specs = specs
   if (problems.length > 0) return stop('blocked', `The supplied specs are not usable: ${problems.join(' ')}`)
   log(`Using ${specs.length} supplied spec(s); planner skipped.`)
 } else {
+  // A plan with open questions stops here, before any spec is checked or
+  // built: the answers may change the specs.
+  const asked = p => {
+    state.questions = openQuestions(p)
+    state.overview = p.overview
+    state.risks = p.risks
+    if (state.questions.length === 0) return null
+    state.specs = p.specs
+    return stop('blocked', `The planner has ${state.questions.length} open question(s) that the contract, the issue and the repository do not answer: ${questionsText(state.questions)}`)
+  }
   let plan = await planSpecs(contract)
   if (!plan) return stop('blocked', 'The planner did not return a result.')
-  problems = validateSpecs(plan.specs, contract, installed)
+  const firstAsk = asked(plan)
+  if (firstAsk) return firstAsk
+  if (questionsOnly) {
+    state.specs = plan.specs
+    return stop('ready', 'The planner has no open questions.')
+  }
+  problems = validateSpecs(plan.specs, contract, installed, guarded)
   let revisions = 0
   while (problems.length > 0 && revisions < maxSpecRevisions) {
     revisions++
@@ -1326,14 +1512,27 @@ if (Array.isArray(specs) && specs.length > 0) {
     const revised = await planSpecs(contract, plan.specs, problems)
     if (!revised) return stop('blocked', 'The planner did not return a revised result.')
     plan = revised
-    problems = validateSpecs(plan.specs, contract, installed)
+    const revisedAsk = asked(plan)
+    if (revisedAsk) return revisedAsk
+    problems = validateSpecs(plan.specs, contract, installed, guarded)
   }
   specs = plan.specs
   state.specs = specs
   state.overview = plan.overview
   state.risks = plan.risks
+  state.rated = { risk: plan.risk, surfaces: plan.surfaces }
   if (problems.length > 0) return stop('blocked', `The specs are still not usable after ${maxSpecRevisions} revision(s): ${problems.join(' ')}`)
 }
+
+// Risk routes the review: code raises the rating to what the specs' files
+// show, then picks the reviewers and their models from ROUTING. The prompt
+// helpers read the result from `args` (models, surfaces).
+const rated = state.rated || { risk: input.risk, surfaces: input.surfaces }
+state.risk = assessRisk(rated.risk, rated.surfaces, specs)
+args.models = routedModels(state.risk.risk, input.models)
+args.surfaces = state.risk.surfaces
+log(`Risk ${state.risk.risk}${state.risk.raisedBy.length ? ` (raised: ${state.risk.raisedBy.join('; ')})` : ''}; surfaces: ${state.risk.surfaces.join(', ') || 'none'}.`)
+if (!qcOn && state.risk.surfaces.includes('ui')) log('QC is off, but the change has a visible surface: nobody will use it before a person does.')
 
 const levels = buildLevels(specs)
 progress.levels = levels.length
@@ -1427,43 +1626,55 @@ while (true) {
   if (stray.length > 0) {
     return stop('blocked', `Files were changed that no spec owns: ${stray.join(', ')}. Either the specs were incomplete or an agent went outside its assignment.`)
   }
-
-  // With several specs, every spec gets its own reviewer, alongside the reviewer
-  // of the whole change. QC uses the product beside them, but only once the
-  // checks pass: a change that fails them goes back to Build anyway, and QC
-  // would only find the same breakage. None depends on another, so they run
-  // together.
-  phase('Review')
-  const reviewedSpecs = specs.length > 1 ? specs : []
-  const qcNow = qcOn && checkFailures(contract, check).length === 0
-  if (qcOn && !qcNow) log('QC waits: a check failed, so the change goes back to Build first.')
-  record('Review', 'running')
-  const reviews = await parallel([
-    () => runReview(contract, check, specs, round),
-    ...reviewedSpecs.map(spec => () => runSpecReview(spec, contract, check, round)),
-    ...(qcNow ? [() => runQc(contract, round)] : []),
-  ])
-  const review = reviews[0]
-  if (!review) return stop('blocked', 'The reviewer did not return a result.')
-  const specReviews = reviewedSpecs.map((spec, i) => ({ spec, review: reviews[i + 1] }))
-  const absent = specReviews.filter(r => !r.review).map(r => r.spec.id)
-  if (absent.length > 0) return stop('blocked', `The reviewer of ${absent.join(', ')} did not return a result.`)
-  state.review = review
-  state.specReviews = specReviews.map(r => ({ spec: r.spec.id, ...r.review }))
-
-  let qc = null
-  if (qcNow) {
-    qc = reviews[reviewedSpecs.length + 1]
-    if (!qc) return stop('blocked', 'The QC agent did not return a result.')
-    state.qc.push({ round, ...qc })
-    if (qc.status !== 'done') return stop('blocked', `QC could not run the product: ${qc.blockedReason || 'no reason given'}`)
-    const leftover = (qc.filesChanged || []).map(repoPath).filter(Boolean)
-    if (leftover.length > 0) return stop('blocked', `QC changed files in the repository, which it may not do: ${leftover.join(', ')}`)
+  const touched = protectedFiles(check.changedFiles, input.protectedPaths, input.allowProtected)
+  if (touched.length > 0) {
+    return stop('blocked', `Protected files were changed: ${touched.join(', ')}. They hold the checks the run is judged by; undo the change, or allow it with "allowProtected" if the task is about them.`)
   }
 
-  state.failures = evaluate(contract, check, review, specReviews, qc)
-  if (state.failures.length === 0) {
-    return stop('passed', `All checks pass, every criterion is met${qcOn ? ' and QC saw it work' : ' (QC was turned off)'}${round > 0 ? `, after ${round} return(s) to Build` : ''}.`)
+  // The gate: a change that fails a check goes straight back to Build with the
+  // checker's output, and no reviewer or QC agent is started on it. Reviewing
+  // code that does not pass its own checks costs agents and finds what the
+  // checks already found.
+  const red = checkFailures(contract, check)
+  if (red.length > 0) {
+    log(`Gate: ${red.length} check(s) failed; no reviewer runs this round.`)
+    state.failures = red
+  } else {
+    // With several specs and a risk above low, every spec gets its own
+    // reviewer, alongside the reviewer of the whole change. QC uses the product
+    // beside them. None depends on another, so they run together.
+    phase('Review')
+    const reviewedSpecs = specs.length > 1 && (ROUTING[state.risk.risk] || ROUTING.medium).specReviews ? specs : []
+    record('Review', 'running')
+    const reviews = await parallel([
+      () => runReview(contract, check, specs, round),
+      ...reviewedSpecs.map(spec => () => runSpecReview(spec, contract, check, round)),
+      ...(qcOn ? [() => runQc(contract, round)] : []),
+    ])
+    const review = reviews[0]
+    if (!review) return stop('blocked', 'The reviewer did not return a result.')
+    const specReviews = reviewedSpecs.map((spec, i) => ({ spec, review: reviews[i + 1] }))
+    const absent = specReviews.filter(r => !r.review).map(r => r.spec.id)
+    if (absent.length > 0) return stop('blocked', `The reviewer of ${absent.join(', ')} did not return a result.`)
+    state.review = review
+    state.specReviews = specReviews.map(r => ({ spec: r.spec.id, ...r.review }))
+
+    let qc = null
+    if (qcOn) {
+      qc = reviews[reviewedSpecs.length + 1]
+      if (!qc) return stop('blocked', 'The QC agent did not return a result.')
+      state.qc.push({ round, ...qc })
+      if (qc.status !== 'done') return stop('blocked', `QC could not run the product: ${qc.blockedReason || 'no reason given'}`)
+      const leftover = (qc.filesChanged || []).map(repoPath).filter(Boolean)
+      if (leftover.length > 0) return stop('blocked', `QC changed files in the repository, which it may not do: ${leftover.join(', ')}`)
+    }
+
+    state.failures = evaluate(contract, check, review, specReviews, qc)
+    if (state.failures.length === 0) {
+      state.merge = escalation(check.changedFiles, state.risk, state.testsChangedInRebuild, input.escalate)
+      const merge = state.merge.decision === 'auto' ? 'It may be merged without a person.' : `A person must accept it before it is merged: ${state.merge.reasons.join('; ')}.`
+      return stop('passed', `All checks pass, every criterion is met${qcOn ? ' and QC saw it work' : ' (QC was turned off)'}${round > 0 ? `, after ${round} return(s) to Build` : ''}. ${merge}`)
+    }
   }
 
   // The specs the failures concern go back to Build, each to a fresh session of
