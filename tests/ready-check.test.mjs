@@ -2,7 +2,7 @@
 // Run: node --test tests/
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { checkIssue, sections, vagueWords, unansweredQuestions, findCycle, criteria, uiProblems } from '../factory/scripts/ready-check.mjs'
+import { checkIssue, draftIssue, sections, vagueWords, unansweredQuestions, findCycle, criteria, uiProblems } from '../factory/scripts/ready-check.mjs'
 
 const body = `# Export orders as CSV
 
@@ -84,7 +84,8 @@ test('vague words in a criterion are refused, in English and Vietnamese, as whol
 test('a visible change must link its mockup; "No visible change" needs none', () => {
   assert.deepEqual(uiProblems('No visible change'), [])
   assert.deepEqual(uiProblems('Không có thay đổi giao diện'), [])
-  assert.match(uiProblems('- Screens: Orders')[0], /links no mockup/)
+  assert.match(uiProblems('- Screens: Orders')[0], /gives no mockup/)
+  assert.deepEqual(uiProblems('- Orders: .factory/design/mockups/12/orders.png'), [], 'an image in the repository counts')
 })
 
 test('a Q line is open until a later comment answers it with the same number', () => {
@@ -106,4 +107,9 @@ test('sections are read by their second-level heading', () => {
   const s = sections('# T\n\n## A\n\nx\n\n## B\n')
   assert.equal(s.A, 'x')
   assert.equal(s.B, '')
+})
+
+test('a draft is checked like an open factory issue with no comments yet', () => {
+  assert.deepEqual(checkIssue(draftIssue(body)).problems, [])
+  assert.match(checkIssue(draftIssue(body.replace('## Copy', '## Words'))).problems.join(' '), /"Copy" is missing/)
 })

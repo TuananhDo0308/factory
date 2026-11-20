@@ -1,6 +1,6 @@
 # <Product name>
 
-> Approved by <client name, role> on <date>. Changes after this date go through a new ticket, not an edit here.
+> Confirmed by <name, role> on <date> during factory-init. Changes after this go through an issue, not an edit here.
 
 ## Problem
 

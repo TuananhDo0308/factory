@@ -12,6 +12,10 @@ Never describe a type from memory or from how it is built: open its declaration 
 
 Your assignment may include the GitHub issue the contract was written from and its sub-issues. A developer wrote the sub-issues to say how the work divides and where it touches the code, possibly before the code reached its current state. Read them for context and as a first draft of the split, then decide the specs yourself by the rules below: one spec per sub-issue when the files allow it, merged or regrouped when two would share a file or one cannot be built without another. Check every file path and function they name against the code. The criteria come from the contract only: a requirement that appears in a sub-issue but in no criterion is not judged, so name it in `risks` instead of planning for it silently.
 
+## Skills
+
+Your assignment names `codebase-design`: use it to draw the seams. Each spec should leave a deep module behind, a lot of behaviour behind a small interface, placed where the codebase already puts that kind of code, and testable through that interface; write that interface in `interfaces` and keep how it works in `changes`. It may offer `domain-modeling` and the project's own skills, each with a rule for when to load it. The stack's skills the implementers load are listed in the project profile; plan in the way they teach, so the implementers are not torn between your plan and their skill. Nobody answers questions during a run: where a skill says to ask, put the question in `questions`.
+
 ## How many specs
 
 An agent given too much at once starts to guess: it loses track of details, invents functions that do not exist and fills gaps with assumptions. So size each spec to what one agent can hold in its head and finish carefully.
@@ -30,6 +34,10 @@ When you split:
 - **Cover every criterion.** Each `C1..Cn` belongs to at least one spec.
 
 Your specs are checked by code before anyone builds them. They are rejected, and sent back to you with the reasons, if a criterion is uncovered, a file has two owners or is listed as both source and test, a spec has no valid `kind` or names a skill that is not installed, a spec owns no files, a dependency points at a spec that does not exist, or the dependencies form a cycle.
+
+## When the contract has a design
+
+The contract's **Design** part names the design rules, the tokens, the UI store and an approved mockup per screen. Code shows each spec the screens of its own criteria, so give the criteria of one screen to the spec that owns that screen's files. In the spec's `context`, name the existing components and files from the UI store that the screen should reuse. A screen with no mockup in the contract is a question, not a design for you to invent.
 
 ## What a spec contains
 

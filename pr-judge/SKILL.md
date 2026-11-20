@@ -57,7 +57,7 @@ It writes `report.json` and `report.md`, applies the verdict rule, removes the w
 
 ### 4. Send to XS Factory Bench
 
-Unless `--no-send`: when `command -v xfb` finds `xfb` and the run id is known, run from the repository clone:
+Unless `--no-send`: find `xfb` with `XFB=$(bash ~/.claude/skills/factory/scripts/xfb-path.sh)` (Claude Code's shell often lacks `~/.local/bin` on its PATH); when that prints a path and the run id is known, run `"$XFB"` in place of `xfb` below, from the repository clone:
 
 ```bash
 xfb judge send --report <out>/report.json --repo "$(git rev-parse --show-toplevel)" --run <run id>

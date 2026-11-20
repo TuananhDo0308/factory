@@ -27,6 +27,11 @@
 //   review           [{ tag, text, state, label }]  (defaults to one per reviewer; the last, tag "qc", is what QC saw)
 //   repairs          [{ round, text, state }]
 //   criteria         [{ id, text, status }]  status: 'met' | 'not_met' | 'unknown' | ''
+//   risk             { level: 'low' | 'medium' | 'high', surfaces: ['ui'|'security'|'data'], raisedBy: [why code raised it] } or null
+//   merge            { decision: 'auto' | 'person', reasons: [what a person must look at] } or null (only for a passing run)
+//   questions        [{ question, criteria }] the planner stopped on (a blocked run)
+//   flaky            names of checks that failed and passed when run again
+//   tddUnproven      ids of specs whose new tests could not be run on the base code
 //   grades           { '01': 'pass' | 'fail', ... } for the graders of adds-json-flag-to-cli
 //   failureLog       every failure that sent a spec back to Build, or ended the run, in the order
 //                    found (missing in runs filed before it was recorded):

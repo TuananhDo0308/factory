@@ -336,7 +336,7 @@ test('skillsFor: the kind picks the implementer\'s skills, a spec\'s own skills 
   assert.deepEqual(h.skillsFor('qa', spec({ kind: 'bug', skills: ['impeccable'] })), ['tdd', 'diagnosing-bugs', 'verification-before-completion', 'testing-strategy', 'mp-code-review', 'pr-security-review'])
   assert.deepEqual(h.skillsFor('reviewer'), ['mp-code-review', 'codebase-design'])
   assert.deepEqual(h.skillsFor('specReviewer', spec()), ['mp-code-review', 'codebase-design'])
-  assert.deepEqual(h.skillsFor('planner'), [])
+  assert.deepEqual(h.skillsFor('planner'), ['codebase-design'], 'the planner draws the seams with codebase-design')
 })
 
 test('missingSkills: a run needs every skill the registry can hand out', () => {
@@ -492,4 +492,162 @@ test('escalation says what a person must look at, or lets the run merge', () => 
   assert.deepEqual(e.reasons.map(r => r.split(':')[0]), ['migration', 'dependency', 'high-risk', 'ui', 'tests-rewritten'])
   assert.match(e.reasons[4], /t\.py/)
   assert.deepEqual(escalation(['yarn.lock'], medium, [], ['auth']).decision, 'auto', 'the caller chooses what needs a person')
+})
+
+test('stack skills from the project profile are added to the process skills, per role', () => {
+  const { skillsFor } = h
+  const project = { implementer: ['vitest', 'nextjs-conventions'], reviewer: ['nextjs-conventions'], qc: ['playwright-best-practices'] }
+  assert.deepEqual(skillsFor('implementer', { kind: 'feature', skills: [] }, null, project), ['tdd', 'codebase-design', 'verification-before-completion', 'mp-code-review', 'vitest', 'nextjs-conventions'])
+  assert.deepEqual(skillsFor('specReviewer', { kind: 'feature' }, null, project), ['mp-code-review', 'codebase-design', 'nextjs-conventions'], 'a spec reviewer gets the reviewer\'s')
+  assert.deepEqual(skillsFor('qc', null, null, project), ['playwright-best-practices'])
+  assert.deepEqual(skillsFor('qc', null, null, undefined), [])
+})
+
+test('missingProjectSkills names the stack skills a run was not given', () => {
+  const { missingProjectSkills } = h
+  assert.deepEqual(missingProjectSkills({ implementer: ['vitest', 'x'], qc: ['x'] }, { vitest: '/s/vitest' }), ['x'])
+  assert.deepEqual(missingProjectSkills(undefined, {}), [])
+})
+
+const designed = {
+  objective: 'o', criteria: [{ id: 'C1', text: 'one' }, { id: 'C2', text: 'two' }], outOfScope: [], checks: [],
+  design: { doc: 'DESIGN.md', tokens: 'src/tokens.css', uiStore: 'docs/ui', reuse: ['components/DataTable'], screens: [
+    { screen: 'Orders', criteria: ['C1'], mockup: 'docs/mockups/orders.png', states: ['empty', 'mobile-390'] },
+    { screen: 'Export', criteria: ['C2'], mockup: 'docs/mockups/export.png', states: [] },
+  ] },
+}
+
+test('designProblems refuses mockups that are links, missing or tied to no criterion', () => {
+  const { designProblems } = h
+  assert.deepEqual(designProblems(designed), [])
+  assert.deepEqual(designProblems({ criteria: [] }), [])
+  const p = designProblems({ ...designed, design: { screens: [{ screen: 'A', criteria: ['C9'], mockup: 'https://claude.ai/design/x' }, { criteria: [], mockup: '' }] } }).join(' ')
+  assert.match(p, /"A"'s mockup is a link/)
+  assert.match(p, /names C9, which is not in the contract/)
+  assert.match(p, /screen 2 has no mockup/)
+  assert.match(p, /screen 2 names no criterion/)
+  assert.match(p, /no design doc/)
+})
+
+test('designText gives each spec the screens of its own criteria, with the rules and tokens', () => {
+  const { designText } = h
+  const t = designText(designed.design, ['C1'])
+  assert.match(t, /Design rules: DESIGN\.md; tokens: src\/tokens\.css/)
+  assert.match(t, /Component catalogue: docs\/ui\/catalog\.md/)
+  assert.match(t, /Reuse: components\/DataTable/)
+  assert.match(t, /Screen "Orders" for C1: mockup docs\/mockups\/orders\.png; states: empty, mobile-390/)
+  assert.ok(!t.includes('Export'))
+  assert.equal(designText(undefined, ['C1']), '')
+})
+
+test('the specs see their design; QC sees every screen to compare', () => {
+  const { specText, qcText, contractText } = h
+  const spec = { id: 'S1', title: 't', goal: 'g', criteria: ['C2'], filesOwned: ['a.tsx'], testFiles: [], tests: 't', doneWhen: [] }
+  assert.match(specText(spec, designed, 'implementer'), /Screen "Export" for C2/)
+  assert.ok(!specText(spec, designed, 'implementer').includes('"Orders"'))
+  assert.match(qcText(designed), /Screens to compare[\s\S]*"Orders" \(C1\): docs\/mockups\/orders\.png[\s\S]*"Export"/)
+  assert.match(contractText(designed), /Design \(what the product must look like\)/)
+})
+
+test('projectNote sends every role but QC to the project instructions first', () => {
+  const { projectNote } = h
+  const docs = { agents: 'CLAUDE.md', decisions: 'DECISIONS.md', product: 'PRODUCT.md' }
+  assert.deepEqual(projectNote('qc', docs), [])
+  assert.match(projectNote('implementer', docs).join('\n'), /read CLAUDE\.md before anything else[\s\S]*DECISIONS\.md/)
+  assert.ok(!projectNote('implementer', docs).join('\n').includes('PRODUCT.md'))
+  assert.match(projectNote('planner', docs).join('\n'), /PRODUCT\.md/)
+  assert.deepEqual(projectNote('implementer', {}), [])
+})
+
+test('a screen that differs from its mockup fails the criteria it shows', () => {
+  const { qcFailures } = h
+  const ok = { criteria: [{ id: 'C1', status: 'pass' }, { id: 'C2', status: 'pass' }], screens: [{ screen: 'Orders', status: 'match', screenshot: 's1', differences: [] }, { screen: 'Export', status: 'differs', screenshot: 's2', differences: ['button is outlined, mockup is filled'] }] }
+  const f = qcFailures(designed, ok)
+  assert.deepEqual(f.map(x => [x.kind, x.id]), [['qc', 'C2']])
+  assert.match(f[0].problem, /does not match its mockup docs\/mockups\/export\.png: button is outlined/)
+  const missing = qcFailures(designed, { ...ok, screens: [] })
+  assert.deepEqual(missing.map(x => x.id), ['C1', 'C2'])
+  assert.match(missing[0].problem, /was not compared/)
+})
+
+test('a check that fails and then passes when run again is flaky, not a failure', () => {
+  const { checkFailures, flakyChecks } = h
+  const c = { checks: [{ name: 'test', command: 't' }, { name: 'lint', command: 'l' }] }
+  const check = { results: [{ name: 'test', command: 't', exitCode: 1, rerunExitCode: 0, outputTail: 'timeout' }, { name: 'lint', command: 'l', exitCode: 1, rerunExitCode: 1, outputTail: 'x' }] }
+  assert.deepEqual(checkFailures(c, check).map(f => f.name), ['lint'])
+  assert.deepEqual(flakyChecks(c, check).map(f => f.name), ['test'])
+})
+
+test('new tests of a feature, bug or UX spec must fail on the base code', () => {
+  const { tddTargets, tddFailures } = h
+  const specs = [{ id: 'S1', kind: 'feature', testFiles: ['a.test.ts'] }, { id: 'S2', kind: 'refactor', testFiles: ['b.test.ts'] }, { id: 'S3', kind: 'bug', testFiles: [] }, { id: 'S4', kind: 'ux', testFiles: ['c.test.ts'] }]
+  const targets = tddTargets(specs)
+  assert.deepEqual(targets.map(s => s.id), ['S1', 'S4'])
+  const r = tddFailures(targets, [{ spec: 'S1', files: ['a.test.ts'], exitCode: 0 }])
+  assert.deepEqual(r.failures.map(f => [f.kind, f.spec]), [['tdd', 'S1']])
+  assert.match(r.failures[0].problem, /pass on the base code/)
+  assert.deepEqual(r.unproven, ['S4'])
+  assert.deepEqual(tddFailures(targets, [{ spec: 'S1', exitCode: 1 }, { spec: 'S4', exitCode: 2 }]).failures, [])
+})
+
+test('a migration must go up, down and up again, and a failure goes to its owner', () => {
+  const { migrationFailures, routeFailures } = h
+  const contract = { migration: { up: 'db up', down: 'db down' } }
+  assert.deepEqual(migrationFailures(contract, { changedFiles: ['src/a.ts'] }), [])
+  assert.deepEqual(migrationFailures({}, { changedFiles: ['db/migrations/1.sql'] }), [], 'without a way to run it, nothing to check')
+  assert.match(migrationFailures(contract, { changedFiles: ['db/migrations/1.sql'] })[0].problem, /was not run up, down and up again/)
+  const f = migrationFailures(contract, { changedFiles: ['db/migrations/1.sql'], migration: { ran: true, steps: [{ command: 'db up', exitCode: 0 }, { command: 'db down', exitCode: 1, outputTail: 'cannot drop' }] } })
+  assert.equal(f.length, 1)
+  const specs = [{ id: 'S1', filesOwned: ['src/a.ts'], testFiles: [] }, { id: 'S2', filesOwned: ['db/migrations/1.sql'], testFiles: [] }]
+  assert.deepEqual(routeFailures(f, specs).map(g => g.spec.id), ['S2'])
+})
+
+test('QC: a broken screen goes to the specs with UI files; a serious a11y problem fails the screen\'s criteria', () => {
+  const { qcFailures, routeFailures } = h
+  const contract = { criteria: [{ id: 'C1', text: 'x' }], design: { screens: [{ screen: 'Export', criteria: ['C1'], mockup: 'm.png' }], baseline: [{ screen: 'Orders', route: '/orders', before: ['b.png'] }] } }
+  const qc = { criteria: [{ id: 'C1', status: 'pass' }], screens: [{ screen: 'Export', status: 'match', screenshot: 's', differences: [] }],
+    baseline: [{ screen: 'Orders', after: 'a.png', status: 'regressed', differences: ['table header lost its border'] }],
+    a11y: [{ screen: 'Export', tool: 'axe', violations: [{ id: 'button-name', impact: 'critical', nodes: 1, help: 'Buttons must have text' }, { id: 'region', impact: 'moderate', nodes: 3, help: '' }] }] }
+  const f = qcFailures(contract, qc)
+  assert.deepEqual(f.map(x => x.kind), ['regression', 'qc'])
+  assert.match(f[0].problem, /table header lost its border/)
+  assert.match(f[1].problem, /button-name \(critical/)
+  assert.ok(!f[1].problem.includes('region'), 'moderate problems are not failures')
+  const specs = [{ id: 'S1', criteria: ['C1'], filesOwned: ['api/x.ts'], testFiles: [] }, { id: 'S2', criteria: [], filesOwned: ['app/orders/Table.tsx'], testFiles: [] }]
+  assert.deepEqual(routeFailures([f[0]], specs).map(g => g.spec.id), ['S2'])
+  assert.match(qcFailures(contract, { ...qc, baseline: [] })[0].problem, /was not compared with how it looked before/)
+})
+
+test('every role but QC is told the stack; a baseline screen needs a route and a before shot', () => {
+  const { projectNote, designProblems } = h
+  const stack = { languages: ['typescript'], frameworks: ['nextjs', 'prisma'], packageManager: 'pnpm', adr: 'docs/adr/0001-stack.md' }
+  assert.match(projectNote('implementer', { agents: 'CLAUDE.md' }, stack).join('\n'), /Stack: typescript, nextjs, prisma \(pnpm\); why it was chosen: docs\/adr\/0001-stack\.md/)
+  assert.match(projectNote('checker', {}, stack).join('\n'), /Stack: typescript/)
+  assert.deepEqual(projectNote('qc', { agents: 'CLAUDE.md' }, stack), [])
+  const p = designProblems({ criteria: [], design: { baseline: [{ screen: 'Orders', route: '', before: [] }] } }).join(' ')
+  assert.match(p, /"Orders" has no route/)
+  assert.match(p, /no before screenshot/)
+})
+
+test('the project\'s own skills are offered to every role but the checker, unless already loaded', () => {
+  const { repoSkillsFor, conditionalFor } = h
+  const available = { tdd: '/home/.claude/skills/tdd/SKILL.md', 'next-conventions': '/repo/.claude/skills/next-conventions/SKILL.md', vitest: '/repo/.claude/skills/vitest/SKILL.md' }
+  assert.deepEqual(repoSkillsFor(available, '/repo', ['vitest']).map(s => s.name), ['next-conventions'])
+  assert.deepEqual(conditionalFor('implementer', available, ['tdd']).map(s => s.name), ['vitest', 'next-conventions'], 'vitest from the registry rule, then the repo skill')
+  assert.deepEqual(conditionalFor('checker', available, []), [])
+  assert.deepEqual(conditionalFor('planner', { ...available, 'domain-modeling': '/x' }, ['codebase-design']).map(s => s.name), ['domain-modeling', 'next-conventions', 'vitest'])
+})
+
+test('the run record carries the risk, the merge decision, the questions, flaky checks and unproven specs', () => {
+  const { runRecord } = h
+  const contract = { criteria: [{ id: 'C1', text: 'one' }], checks: [{ name: 'test', command: 't' }] }
+  const state = { specs: [], risk: { risk: 'high', surfaces: ['security'], raisedBy: ['the specs own auth files'] }, merge: { decision: 'person', reasons: ['auth: src/auth/x.ts'] },
+    questions: [{ question: 'Soft delete?', why: 'w', criteria: ['C1'] }], flaky: [{ name: 'test', command: 't' }], tddUnproven: ['S2'], check: { results: [{ name: 'test', exitCode: 1, rerunExitCode: 0 }] } }
+  const r = runRecord({ id: 'r1', title: 't', agents: 3, maxRepairRounds: 2 }, contract, state, { outcome: 'passed', phase: 'Review', levels: 1, build: {}, repairs: [] })
+  assert.deepEqual(r.risk, { level: 'high', surfaces: ['security'], raisedBy: ['the specs own auth files'] })
+  assert.deepEqual(r.merge, { decision: 'person', reasons: ['auth: src/auth/x.ts'] })
+  assert.deepEqual(r.questions, [{ question: 'Soft delete?', criteria: ['C1'] }])
+  assert.deepEqual(r.flaky, ['test'])
+  assert.deepEqual(r.tddUnproven, ['S2'])
+  assert.equal(r.check.state, 'ok', 'a flaky check does not paint the check red')
 })

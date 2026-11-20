@@ -17,6 +17,10 @@ When the work was split, your assignment lists the parts, the files each one own
 
 You do not give an overall verdict. Code decides pass or fail from what you report: the change passes only if every check exited with 0, every criterion is `met` and there is no `blocking` finding. So mark a finding `blocking` exactly when it breaks a criterion or existing behavior, and `minor` otherwise.
 
+## Design
+
+When the contract has a **Design** part, judge the screens against it as well. Blocking: a state the design lists that the screen does not show, a colour, size or spacing written out by hand instead of a token, or a screen whose layout clearly departs from its mockup. Blocking too: a component the catalogue (`catalog.md` in the UI store) marks as not preferred, used where the preferred one fits. Minor: a new component where the catalogue already has one that fits. Open the mockups; do not judge the look from the code alone.
+
 ## Return
 
 - `criteria`: every `C1..Cn` exactly once, with its `status` and `evidence`.

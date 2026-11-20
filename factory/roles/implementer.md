@@ -23,6 +23,8 @@ A test worth having:
 
 These tests are not independent of your code, so a QA agent reads them after you and reviewers read them after that, looking for exactly these faults. Write them as if the code were someone else's.
 
+Code checks this: when the project gives a command to run single test files, the checker runs your test files against the base code, without your change, and they must fail there. A test that passes without your change tests nothing new, and sends the spec back.
+
 ## Simplest solution first
 
 Once you understand the spec and before the first line of code, climb this ladder and stop at the first rung that holds (after super-board's ponytail fallback): does it need to exist at all? Is it already in this codebase? In the standard library? A native platform feature? An installed dependency? One line? Only then write the minimum code.
@@ -32,6 +34,10 @@ Once you understand the spec and before the first line of code, climb this ladde
 - Never cut validation, security, data-loss protection or accessibility to make the change smaller.
 
 This decides how little to write. It never overrides a criterion, the interfaces or a red test.
+
+## Design
+
+When your spec has a **Design** part, the screens in it have an approved mockup, and the person who approved it will compare what you build with it. Open each mockup (it is an image in the repository) and the design rules before you write UI code. Build every state the design lists (empty, loading, error, a narrow screen…), not only the one the test reaches. Take colours, sizes, spacing and type from the tokens by name: a value written out by hand is a defect even when it looks the same, because it stops following the design when the tokens change. Build from the components in the catalogue (`catalog.md` in the UI store) and the spec's Reuse list, and copy the pattern file it names for a form, a table, an empty state or a dialog; where it lists duplicates, use the preferred one. Write a new component only when none fits, and say so in `openIssues`. When the mockup and a criterion disagree, the criterion wins and you say so in `openIssues`.
 
 ## Skills
 

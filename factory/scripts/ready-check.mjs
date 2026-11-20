@@ -5,11 +5,13 @@
 // SKILL.md, "Check an issue is ready").
 //
 //   node ready-check.mjs <issue number> [--json]
+//   node ready-check.mjs --body-file <draft.md> [--json]   a draft, before it is an issue
 //
 // Run inside the repository the issue belongs to. Exit 0 when nothing below
 // fails, 1 when something does (each problem printed), 2 on a usage or gh
 // error. The pure functions are exported for tests/ready-check.test.mjs.
 import { execFileSync } from 'node:child_process'
+import { existsSync, readFileSync } from 'node:fs'
 import { pathToFileURL } from 'node:url'
 
 export const REQUIRED_SECTIONS = ['Objective', 'Acceptance criteria', 'UI and states', 'Data and API', 'Permissions', 'Copy', 'Out of scope', 'Depends on']
@@ -83,7 +85,7 @@ export function vagueWords(text) {
 export function uiProblems(text) {
   const t = String(text || '').trim()
   if (t === '' || NO_UI.test(t)) return []
-  return /https?:\/\/\S+/.test(t) ? [] : ['"UI and states" names screens but links no mockup.']
+  return /https?:\/\/\S+|\S+\.(png|jpe?g|webp|gif)\b/i.test(t) ? [] : ['"UI and states" names screens but gives no mockup (an image in the repository, under .factory/design/mockups/<issue>/, or a link).']
 }
 
 // Issue numbers in a "Depends on" section.
@@ -161,11 +163,35 @@ function gh(args) {
   return execFileSync('gh', args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'inherit'] })
 }
 
+// A draft written by factory-clarify, before it is an issue: checked the same
+// way, as an open issue labelled factory, with no comments yet. Its
+// dependencies are checked against the open issues when gh can read them.
+export function draftIssue(body, number = 0) {
+  return { number, state: 'OPEN', labels: ['factory'], body, comments: [] }
+}
+
 function main(argv) {
   const json = argv.includes('--json')
+  const bodyFile = argv[argv.indexOf('--body-file') + 1]
+  if (argv.includes('--body-file')) {
+    if (!bodyFile || !existsSync(bodyFile)) { console.error('ready-check: --body-file must name a file'); return 2 }
+    let graph = {}
+    try {
+      const open = JSON.parse(execFileSync('gh', ['issue', 'list', '--label', 'factory', '--state', 'open', '--limit', '500', '--json', 'number,body'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }))
+      graph = Object.fromEntries(open.map(o => [o.number, dependsOn(sections(o.body)['Depends on'])]))
+    } catch {}
+    const result = checkIssue(draftIssue(readFileSync(bodyFile, 'utf8')), graph)
+    if (json) console.log(JSON.stringify({ draft: bodyFile, ...result }, null, 2))
+    else {
+      console.log(result.ready ? 'Draft: no mechanical problems. Next: the planner\'s questions (questionsOnly).' : 'Draft: not ready.')
+      for (const p of result.problems) console.log(`  - ${p}`)
+      for (const note of result.notes) console.log(`  note: ${note}`)
+    }
+    return result.ready ? 0 : 1
+  }
   const n = Number(argv.find(a => /^\d+$/.test(a)))
   if (!n) {
-    console.error('usage: ready-check.mjs <issue number> [--json]')
+    console.error('usage: ready-check.mjs <issue number> [--json] | --body-file <draft.md> [--json]')
     return 2
   }
   let issue, graph

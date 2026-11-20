@@ -116,6 +116,9 @@ const SKILLS = {
     docs: [],
   },
   always: {
+    // The planner draws the seams every spec is built along: deep modules with
+    // small interfaces, at the place the codebase already puts such code.
+    planner: ['codebase-design'],
     implementer: ['verification-before-completion', 'mp-code-review'],
     qa: ['tdd', 'diagnosing-bugs', 'verification-before-completion', 'testing-strategy', 'mp-code-review', 'pr-security-review'],
     reviewer: ['mp-code-review', 'codebase-design'],
@@ -124,6 +127,9 @@ const SKILLS = {
   // Loaded only when the situation calls for it, which the agent judges by the
   // rule given with each. Offered only when installed; a run starts without them.
   conditional: {
+    planner: {
+      'domain-modeling': 'when the ticket names a domain concept the code does not have yet, or uses a word the code means differently; settle the term in the specs, not in files',
+    },
     implementer: {
       vitest: 'when the tests run on Vitest (the repository\'s package.json or config says so)',
       'playwright-best-practices': 'when the test for a criterion has to drive a browser, or the repository tests with Playwright',
@@ -166,9 +172,21 @@ function optionalSkills() {
 // that `available` ({ name: path }) resolves and that it does not load anyway.
 function conditionalFor(role, available, loaded) {
   const have = available && typeof available === 'object' ? available : {}
-  return Object.entries(SKILLS.conditional[role] || {})
+  const listed = Object.entries(SKILLS.conditional[role] || {})
     .filter(([name]) => !isBlank(have[name]) && !(loaded || []).includes(name))
     .map(([name, when]) => ({ name, when }))
+  const own = role === 'checker' ? [] : repoSkillsFor(have, args && args.repo, [...(loaded || []), ...listed.map(l => l.name)])
+  return [...listed, ...own]
+}
+
+// The project's own skills (under <repo>/.claude/skills, installed by
+// factory-init or written by the team) that this role is not already loading:
+// offered with a rule, so an agent loads the one that covers what it touches.
+function repoSkillsFor(available, repo, loaded) {
+  const root = `${String(repo || '').replace(/\/+$/, '')}/.claude/skills/`
+  return Object.entries(available || {})
+    .filter(([name, path]) => String(path || '').startsWith(root) && !(loaded || []).includes(name))
+    .map(([name]) => ({ name, when: 'a skill of this project: read its description, and load it when it covers the code, library or pattern you work on' }))
 }
 
 // The required skills that `available` ({ name: path }) does not resolve.
@@ -177,18 +195,30 @@ function missingSkills(available) {
   return requiredSkills().filter(n => isBlank(have[n]))
 }
 
+// The project's stack skills (its profile's `skills`) that `available` does not
+// resolve: a run must not start with an agent missing the skill its stack needs.
+function missingProjectSkills(project, available) {
+  const have = available && typeof available === 'object' ? available : {}
+  const all = [...new Set(Object.values(project || {}).flat())]
+  return all.filter(n => isBlank(have[n]))
+}
+
 // The skills one agent loads, in order. `role` is implementer, qa, reviewer or
 // specReviewer; `spec` is absent for the reviewer of the whole change.
 // `surfaces` (the run's, from assessRisk) add the skills SKILLS.surfaces names.
-function skillsFor(role, spec, surfaces) {
+// `project` is the `skills` part of the project's profile (.factory/project.json):
+// the stack's skills the tech lead chose, by role. They are added to the
+// process skills, never in place of them; a spec reviewer gets the reviewer's.
+function skillsFor(role, spec, surfaces, project) {
   const extra = (surfaces || []).flatMap(s => ((SKILLS.surfaces[s] || {})[role]) || [])
+  const stack = ((project || {})[role === 'specReviewer' ? 'reviewer' : role]) || []
   const own =
     role === 'implementer' && spec
       ? Array.isArray(spec.skills) && spec.skills.length > 0
         ? spec.skills
         : SKILLS.implementer[spec.kind] || []
       : []
-  return [...new Set([...own, ...(SKILLS.always[role] || []), ...extra])]
+  return [...new Set([...own, ...(SKILLS.always[role] || []), ...extra, ...stack])]
 }
 
 // Returns a list of human-readable problems; empty means the specs are usable.
@@ -347,7 +377,7 @@ const PROTECTED = [
   'vitest.config.*', 'vitest.workspace.*', 'jest.config.*', 'playwright.config.*', 'karma.conf.*', 'cypress.config.*',
   'pytest.ini', 'tox.ini', 'noxfile.py', 'mypy.ini', '.flake8', 'ruff.toml', '.ruff.toml',
   '.eslintrc*', 'eslint.config.*', '.prettierrc*', 'prettier.config.*', 'biome.json', 'biome.jsonc', 'tsconfig*.json',
-  'factory/checks.sh',
+  'factory/checks.sh', '.factory/**',
 ]
 
 function protectedList(extra, allowed) {
@@ -474,6 +504,7 @@ function checkFailures(contract, check) {
   for (const c of contract.checks) {
     const r = resultFor(check.results, c)
     if (!r) failures.push({ kind: 'check', name: c.name, problem: `Check "${c.name}" (${c.command}) was not run.` })
+    else if (r.exitCode !== 0 && r.rerunExitCode === 0) continue // flaky: see flakyChecks
     else if (r.exitCode !== 0) {
       const f = { kind: 'check', name: c.name, problem: `Check "${c.name}" (${c.command}) exited with ${r.exitCode}.`, outputTail: r.outputTail }
       const culprits = (r.culprits || []).map(repoPath).filter(Boolean)
@@ -488,6 +519,53 @@ function checkFailures(contract, check) {
   return failures
 }
 
+// Checks that failed and then passed when the checker ran them again as
+// written: flaky, not broken by the change. They do not send anything back to
+// Build (a rebuild cannot fix a test that fails at random) but are reported, so
+// a person can fix the test.
+function flakyChecks(contract, check) {
+  return contract.checks
+    .map(c => ({ c, r: resultFor(check.results, c) }))
+    .filter(({ r }) => r && r.exitCode !== 0 && r.rerunExitCode === 0)
+    .map(({ c, r }) => ({ name: c.name, command: c.command, outputTail: r.outputTail }))
+}
+
+// The specs whose tests must be shown to fail without the change: a feature,
+// a bug fix or a UX change is built test-first, so its new tests, run against
+// the base code, must fail. A test that passes there tests nothing the change
+// added. Refactors, tests for existing code and docs pass there by design.
+const TDD_KINDS = ['feature', 'bug', 'ux']
+function tddTargets(specs) {
+  return (specs || []).filter(s => TDD_KINDS.includes(s.kind) && (s.testFiles || []).length > 0)
+}
+
+// The checker's base runs, as failures: a spec whose tests passed on the base
+// code goes back to Build. A spec with no base run is only noted (the runner
+// may not run there); `unproven` lists them for the report.
+function tddFailures(targets, baseRuns) {
+  const runs = new Map((baseRuns || []).map(r => [r.spec, r]))
+  const failures = []
+  const unproven = []
+  for (const s of targets) {
+    const r = runs.get(s.id)
+    if (!r) unproven.push(s.id)
+    else if (r.exitCode === 0) failures.push({ kind: 'tdd', spec: s.id, problem: `The tests of ${s.id} (${(r.files || s.testFiles).join(', ')}) pass on the base code, without the change: they do not test what the change adds. Write tests that fail without it, for each criterion.` })
+  }
+  return { failures, unproven }
+}
+
+// A change with a migration must migrate up, down and up again on the test
+// database, when the project says how (contract.migration). A failing step, or
+// a migration that was not tried, goes back to the spec that owns the migration.
+function migrationFailures(contract, check) {
+  const m = contract.migration
+  const files = (check.changedFiles || []).map(normPath).filter(f => SENSITIVE.migration.some(p => matchesGlob(f, p)))
+  if (!m || files.length === 0) return []
+  const ran = check.migration
+  if (!ran || !ran.ran) return [{ kind: 'check', name: 'migration', culprits: files, problem: `The change adds or edits a migration (${files.join(', ')}), but it was not run up, down and up again.` }]
+  return (ran.steps || []).filter(st => st.exitCode !== 0).map(st => ({ kind: 'check', name: 'migration', culprits: files, outputTail: st.outputTail, problem: `Migration step \`${st.command}\` exited with ${st.exitCode}.` }))
+}
+
 // What the QC agent found, as failures: a criterion it saw fail when it used
 // the product, or one it did not judge. `not_observable` (the criterion is
 // about the code, not about what a user sees) passes, as no run could show it.
@@ -499,6 +577,31 @@ function qcFailures(contract, qc) {
     if (!j) failures.push({ kind: 'qc', id: c.id, problem: `Criterion ${c.id} was not judged by QC.` })
     else if (j.status !== 'pass' && j.status !== 'not_observable') {
       failures.push({ kind: 'qc', id: c.id, problem: `Criterion ${c.id} fails when the product is used. Scenario: ${j.scenario} Expected: ${j.expected} Observed: ${j.observed}` })
+    }
+  }
+  // A screen the change must not break (design.baseline) that looks different
+  // from before, beyond the change it intends, is a regression.
+  for (const b of (contract.design && contract.design.baseline) || []) {
+    const j = (qc.baseline || []).find(x => x.screen === b.screen)
+    if (!j) failures.push({ kind: 'regression', screen: b.screen, problem: `Screen "${b.screen}" (${b.route}) was not compared with how it looked before the change.` })
+    else if (j.status === 'regressed') failures.push({ kind: 'regression', screen: b.screen, problem: `Screen "${b.screen}" (${b.route}) changed in ways the ticket does not ask for: ${(j.differences || []).join('; ') || 'no difference named'}. Before: ${(b.before || []).join(', ')}; after: ${j.after}` })
+  }
+  // Serious and critical accessibility problems on a screen this change makes.
+  for (const a of qc.a11y || []) {
+    const sc = ((contract.design && contract.design.screens) || []).find(x => x.screen === a.screen)
+    if (!sc) continue
+    const bad = (a.violations || []).filter(v => v.impact === 'serious' || v.impact === 'critical')
+    for (const id of bad.length ? sc.criteria || [] : []) failures.push({ kind: 'qc', id, problem: `Screen "${sc.screen}" has ${bad.length} serious accessibility problem(s): ${bad.map(v => `${v.id} (${v.impact}, ${v.nodes} element(s))${v.help ? `: ${v.help}` : ''}`).join('; ')}.` })
+  }
+  // A screen with an approved mockup must look like it. A difference goes to
+  // the specs responsible for the screen's criteria, like a failed criterion.
+  const compared = new Map((qc.screens || []).map(sc => [sc.screen, sc]))
+  for (const sc of (contract.design && contract.design.screens) || []) {
+    const j = compared.get(sc.screen)
+    const first = (sc.criteria || [])[0]
+    if (!j) failures.push({ kind: 'qc', id: first, problem: `Screen "${sc.screen}" was not compared with its mockup ${sc.mockup}.` })
+    else if (j.status !== 'match') {
+      for (const id of sc.criteria || []) failures.push({ kind: 'qc', id, problem: `Screen "${sc.screen}" does not match its mockup ${sc.mockup}: ${(j.differences || []).join('; ') || 'no difference named'}. Screenshot: ${j.screenshot}` })
     }
   }
   return failures
@@ -593,6 +696,7 @@ function routeFailures(failures, specs) {
     if (f.kind === 'finding' && owner.has(normPath(f.file))) ids = [owner.get(normPath(f.file))]
     else if (f.spec && bySpec.has(f.spec)) ids = [f.spec]
     else if (f.kind === 'criterion' || f.kind === 'qc') ids = specs.filter(s => (s.criteria || []).includes(f.id)).map(s => s.id)
+    else if (f.kind === 'regression') ids = specs.filter(s => (s.filesOwned || []).some(file => UI_FILES.some(p => matchesGlob(file, p)))).map(s => s.id)
     else if (f.kind === 'check') {
       const culprits = new Set((f.culprits || []).map(repoPath).filter(c => owner.has(c)).map(c => owner.get(c)))
       if (culprits.size > 0) ids = specs.filter(s => culprits.has(s.id)).map(s => s.id)
@@ -715,7 +819,7 @@ function runRecord(run, contract, state, progress) {
     check: state.check
       ? {
           text: results.map(r => `${r.name}: exit ${r.exitCode}`).join(' · ') || 'no checks to run',
-          state: results.every(r => r.exitCode === 0) ? 'ok' : 'fail',
+          state: results.every(r => r.exitCode === 0 || r.rerunExitCode === 0) ? 'ok' : 'fail',
         }
       : { text: contract.checks.map(c => c.command).join(' · ') },
     review: state.review
@@ -728,6 +832,14 @@ function runRecord(run, contract, state, progress) {
     repairs: progress.repairs,
     criteria: contract.criteria.map(c => ({ id: c.id, text: c.text, status: state.review ? (failed.has(c.id) ? 'not_met' : 'met') : '' })),
     failureLog: state.failureLog || [],
+    // How the review was routed, and whether a person must accept a passing run.
+    risk: state.risk ? { level: state.risk.risk, surfaces: state.risk.surfaces, raisedBy: state.risk.raisedBy } : null,
+    merge: state.merge || null,
+    // Questions the planner stopped on, flaky checks, and specs whose tests
+    // could not be shown to fail on the base code.
+    questions: (state.questions || []).map(q => ({ question: q.question, criteria: q.criteria })),
+    flaky: (state.flaky || []).map(f => f.name),
+    tddUnproven: state.tddUnproven || [],
   }
 }
 
@@ -737,6 +849,47 @@ function runRecord(run, contract, state, progress) {
 
 function bullets(items) {
   return (items || []).map(i => `- ${i}`).join('\n') || '- none'
+}
+
+// What the product must look like, from the contract's `design` (the
+// project's DESIGN.md and tokens, and the approved mockup of each screen a
+// criterion shows, with the states it must show). It reaches every role that
+// builds or judges a screen, so nobody invents a look. Mockups are files in the
+// repository: a link behind a sign-in is one an agent cannot open.
+function designProblems(contract) {
+  const d = contract && contract.design
+  if (!d) return []
+  const problems = []
+  const ids = new Set((contract.criteria || []).map(c => c.id))
+  for (const [i, sc] of (d.screens || []).entries()) {
+    const name = isBlank(sc.screen) ? `screen ${i + 1}` : `screen "${sc.screen}"`
+    if (isBlank(sc.mockup)) problems.push(`design: ${name} has no mockup.`)
+    else if (/^https?:/i.test(String(sc.mockup))) problems.push(`design: ${name}'s mockup is a link (${sc.mockup}); commit the image to the repository so agents can open it.`)
+    if (!Array.isArray(sc.criteria) || sc.criteria.length === 0) problems.push(`design: ${name} names no criterion.`)
+    for (const c of sc.criteria || []) if (!ids.has(c)) problems.push(`design: ${name} names ${c}, which is not in the contract.`)
+  }
+  if ((d.screens || []).length > 0 && isBlank(d.doc)) problems.push('design: screens are given but no design doc (DESIGN.md).')
+  for (const [i, b] of (d.baseline || []).entries()) {
+    const name = isBlank(b.screen) ? `baseline screen ${i + 1}` : `baseline screen "${b.screen}"`
+    if (isBlank(b.route)) problems.push(`design: ${name} has no route.`)
+    if (!Array.isArray(b.before) || b.before.length === 0) problems.push(`design: ${name} has no before screenshot; take it on the base commit before the run.`)
+  }
+  return problems
+}
+
+// The design lines for the screens that concern `ids` (all screens when ids is null).
+function designText(design, ids) {
+  if (!design) return ''
+  const screens = (design.screens || []).filter(sc => !ids || (sc.criteria || []).some(c => ids.includes(c)))
+  const lines = []
+  if (!isBlank(design.doc)) lines.push(`- Design rules: ${design.doc}${isBlank(design.tokens) ? '' : `; tokens: ${design.tokens} (use them; no colour, size or spacing written out by hand)`}`)
+  if (!isBlank(design.uiStore)) {
+    lines.push(`- Component catalogue: ${design.uiStore}/catalog.md (build from these components and copy its pattern files; where it lists duplicates, use the preferred one; a new component only when none fits)`)
+    lines.push(`- Today's screens, if they were captured: ${design.uiStore}/screens/ (index.json lists them by route); a screen the ticket changes in words starts from how it looks there`)
+  }
+  if ((design.reuse || []).length > 0) lines.push(`- Reuse: ${design.reuse.join(', ')}`)
+  for (const sc of screens) lines.push(`- Screen "${sc.screen}" for ${sc.criteria.join(', ')}: mockup ${sc.mockup}${(sc.states || []).length ? `; states: ${sc.states.join(', ')}` : ''}`)
+  return lines.length > 0 ? lines.join('\n') : ''
 }
 
 function contractText(contract) {
@@ -751,6 +904,7 @@ function contractText(contract) {
     '',
     'Checks:',
     contract.checks.length > 0 ? contract.checks.map(c => `- ${c.name}: ${c.command}`).join('\n') : '- none (the project has no runnable check)',
+    ...(designText(contract.design, null) ? ['', 'Design (what the product must look like):', designText(contract.design, null)] : []),
   ].join('\n')
 }
 
@@ -771,6 +925,12 @@ function qcText(contract) {
     '',
     'How to run the product:',
     isBlank(contract.run) ? 'Not given. Find out from the repository\'s README, docs and manifest (package.json scripts, Makefile, pyproject), as a new teammate would.' : String(contract.run).trim(),
+    ...((contract.design && (contract.design.screens || []).length > 0)
+      ? ['', 'Screens to compare with their approved mockups (one entry each in `screens`, and an accessibility scan of each in `a11y`):', ...contract.design.screens.map(sc => `- "${sc.screen}" (${sc.criteria.join(', ')}): ${sc.mockup}${(sc.states || []).length ? `; states: ${sc.states.join(', ')}` : ''}`)]
+      : []),
+    ...((contract.design && (contract.design.baseline || []).length > 0)
+      ? ['', 'Screens this change must not break, with how they looked before it (one entry each in `baseline`):', ...contract.design.baseline.map(b => `- "${b.screen}" at ${b.route}: before ${(b.before || []).join(', ')}${b.expect ? `; the change intends: ${b.expect}` : ''}`)]
+      : []),
   ].join('\n')
 }
 
@@ -820,6 +980,7 @@ function specText(spec, contract, view) {
     ...part('Goal:', spec.goal),
     ...part('Criteria:', (spec.criteria || []).map(id => `- ${id}: ${criteria.get(id) || ''}`).join('\n')),
     ...files,
+    ...(designText(contract.design, spec.criteria || []) ? part('Design (follow it; the mockups are the approved look):', designText(contract.design, spec.criteria || [])) : []),
     ...part('Context:', spec.context || 'none'),
     ...part('Interfaces:', spec.interfaces || 'none'),
     ...(view !== 'qa' ? part('Changes:', spec.changes || 'none') : []),
@@ -884,7 +1045,24 @@ function header(role) {
     `Repository: ${args.repo}`,
     `Base commit: ${args.base}`,
     'Work only inside that repository.',
+    ...projectNote(role, args.projectDocs, args.projectStack),
   ].join('\n')
+}
+
+// The project's own instructions, named in its profile's `docs`: every role
+// that reads code reads them first, because the patterns, commands and
+// defaults the tech lead wrote there are what the code must follow. QC does
+// not: it uses the product the way a user would, from the README and docs.
+function projectNote(role, docs, stack) {
+  if (role === 'qc') return []
+  const st = stack && (stack.languages || []).length
+    ? [`Stack: ${[...(stack.languages || []), ...(stack.frameworks || [])].join(', ')}${stack.packageManager ? ` (${stack.packageManager})` : ''}${stack.adr ? `; why it was chosen: ${stack.adr}` : ''}. Follow its conventions and the project's own patterns; add no other framework or library for something these already do.`]
+    : []
+  if (!docs || isBlank(docs.agents)) return st.length ? ['', ...st] : []
+  const more = [['product', 'what the product is and for whom'], ['decisions', 'decisions people already made; follow them'], ['glossary', 'the words the product uses']]
+    .filter(([k]) => role === 'planner' || role === 'reviewer' ? !isBlank(docs[k]) : k === 'decisions' && !isBlank(docs[k]))
+    .map(([k, why]) => `- ${docs[k]}: ${why}`)
+  return ['', `Project instructions: read ${docs.agents} before anything else and follow it; where it conflicts with your role brief on what you may change or return, the brief wins.`, ...st, ...more]
 }
 
 // The parts of the change and who owns which file, without the specs themselves.
@@ -1084,11 +1262,30 @@ const CHECK_SCHEMA = {
           outputTail: { type: 'string', description: 'Last lines of the command output, copied verbatim' },
           culprits: { ...STRINGS, description: 'Only for a failing test command whose failing tests pass alone: the repository-relative test file(s) that make them fail when run before them, each confirmed by a run' },
           culpritEvidence: { type: 'string', description: 'The isolation runs you made and their results, including when no culprit was found' },
+          rerunExitCode: { type: 'integer', description: 'Only when the command failed: the exit code of running it once more, exactly as written' },
         },
         required: ['name', 'command', 'exitCode', 'outputTail'],
       },
     },
     changedFiles: { ...STRINGS, description: 'Repository-relative paths changed or created since the base commit' },
+    baseRuns: {
+      type: 'array',
+      description: 'Only when asked: each listed spec\'s test files run against the base code',
+      items: {
+        type: 'object',
+        properties: { spec: { type: 'string' }, files: STRINGS, command: { type: 'string' }, exitCode: { type: 'integer' }, outputTail: { type: 'string' } },
+        required: ['spec', 'files', 'command', 'exitCode', 'outputTail'],
+      },
+    },
+    migration: {
+      type: 'object',
+      description: 'Only when asked and a changed file is a migration: up, down and up again',
+      properties: {
+        ran: { type: 'boolean' },
+        steps: { type: 'array', items: { type: 'object', properties: { command: { type: 'string' }, exitCode: { type: 'integer' }, outputTail: { type: 'string' } }, required: ['command', 'exitCode', 'outputTail'] } },
+      },
+      required: ['ran', 'steps'],
+    },
   },
   required: ['results', 'changedFiles'],
 }
@@ -1147,11 +1344,52 @@ const QC_SCHEMA = {
         required: ['id', 'status', 'scenario', 'expected', 'observed'],
       },
     },
+    screens: {
+      type: 'array',
+      description: 'One entry per screen the contract gives a mockup for; empty when it gives none',
+      items: {
+        type: 'object',
+        properties: {
+          screen: { type: 'string' },
+          screenshot: { type: 'string', description: 'Path of the screenshot taken, in the scratch directory' },
+          status: { type: 'string', enum: ['match', 'differs'] },
+          differences: STRINGS,
+        },
+        required: ['screen', 'screenshot', 'status', 'differences'],
+      },
+    },
+    baseline: {
+      type: 'array',
+      description: 'One entry per screen the change must not break; empty when none are listed',
+      items: {
+        type: 'object',
+        properties: {
+          screen: { type: 'string' },
+          after: { type: 'string', description: 'Path of the screenshot taken now' },
+          status: { type: 'string', enum: ['same', 'intended', 'regressed'] },
+          differences: STRINGS,
+        },
+        required: ['screen', 'after', 'status', 'differences'],
+      },
+    },
+    a11y: {
+      type: 'array',
+      description: 'Accessibility scan of each screen with a mockup; empty when no scanner could run',
+      items: {
+        type: 'object',
+        properties: {
+          screen: { type: 'string' },
+          tool: { type: 'string' },
+          violations: { type: 'array', items: { type: 'object', properties: { id: { type: 'string' }, impact: { type: 'string', enum: ['minor', 'moderate', 'serious', 'critical'] }, nodes: { type: 'integer' }, help: { type: 'string' } }, required: ['id', 'impact', 'nodes', 'help'] } },
+        },
+        required: ['screen', 'tool', 'violations'],
+      },
+    },
     filesChanged: { ...STRINGS, description: 'Repository files changed or created and not removed again; must be empty' },
     commandsRun: COMMANDS,
     openIssues: STRINGS,
   },
-  required: ['status', 'blockedReason', 'startedWith', 'criteria', 'filesChanged', 'commandsRun', 'openIssues'],
+  required: ['status', 'blockedReason', 'startedWith', 'criteria', 'screens', 'baseline', 'a11y', 'filesChanged', 'commandsRun', 'openIssues'],
 }
 
 // ---------------------------------------------------------------------------
@@ -1207,6 +1445,7 @@ function planSpecs(contract, previous, problems) {
       ...(issueText(args.issue) ? ['', issueText(args.issue)] : []),
       '',
       `Skills installed for this run, which a spec may name in "skills" instead of those of its kind: ${Object.keys(args.skills || {}).join(', ') || 'none'}`,
+      skillsNote(skillsFor('planner', null, null, args.projectSkills), args.skills, '', conditionalFor('planner', args.skills, skillsFor('planner', null, null, args.projectSkills))),
       ...(args.questionsOnly
         ? ['', 'This is a readiness check, not a build: nothing will be built from these specs. What matters is `questions`: every decision the contract, the issue and the repository leave to you. Plan as you would for a build, so you meet the same gaps, then return them.']
         : []),
@@ -1227,7 +1466,7 @@ function buildSpec(spec, contract) {
       '',
       specText(spec, contract, 'implementer'),
       '',
-      skillsNote(skillsFor('implementer', spec), args.skills, '', conditionalFor('implementer', args.skills, skillsFor('implementer', spec))),
+      skillsNote(skillsFor('implementer', spec, null, args.projectSkills), args.skills, '', conditionalFor('implementer', args.skills, skillsFor('implementer', spec, null, args.projectSkills))),
     ].join('\n'),
     { label: `build ${spec.id}`, phase: 'Build', schema: BUILD_SCHEMA, ...modelFor('implementer', args.models) },
   )
@@ -1250,7 +1489,7 @@ function qaSpec(spec, contract, pass) {
       '',
       specText(spec, contract, 'qa'),
       '',
-      skillsNote(skillsFor('qa', spec), args.skills, '', conditionalFor('qa', args.skills, skillsFor('qa', spec))),
+      skillsNote(skillsFor('qa', spec, null, args.projectSkills), args.skills, '', conditionalFor('qa', args.skills, skillsFor('qa', spec, null, args.projectSkills))),
       '',
       `See this spec's part of the change with \`git diff ${args.base} -- <file>\` for each file above; a new file is untracked, so read it directly.`,
       'Implementers of other specs may still be working in the same repository. Run this spec\'s test files, not the whole suite: a failure in another spec\'s half-built files is not yours to report.',
@@ -1283,14 +1522,27 @@ function rebuildSpec(spec, failures, source, contract, specs, n) {
       '',
       `See the change so far with \`git diff ${args.base}\` and \`git status --short\` (new files are untracked).`,
       '',
-      skillsNote(skillsFor('implementer', spec), args.skills, '', conditionalFor('implementer', args.skills, skillsFor('implementer', spec))),
+      skillsNote(skillsFor('implementer', spec, null, args.projectSkills), args.skills, '', conditionalFor('implementer', args.skills, skillsFor('implementer', spec, null, args.projectSkills))),
     ].join('\n'),
     { label: `rebuild ${n} ${spec.id}`, phase: 'Build', schema: REBUILD_SCHEMA, ...modelFor('rebuild', args.models) },
   )
 }
 
-function runChecks(contract, specs, round) {
+// `tdd` lists the specs whose new tests must be shown to fail on the base code
+// this round: every eligible spec in the first check, then those just rebuilt.
+function runChecks(contract, specs, round, tdd) {
   const isolation = isolationText(specs)
+  const proof = !isBlank(contract.testFileCommand) && (tdd || []).length > 0
+    ? [
+        'Then show that the new tests fail without the change. In your scratch directory, `git worktree add --detach <dir> ' + args.base + '`, and if the repository has a `node_modules`, link it into that worktree. For each spec below, copy its test files from the repository into the worktree at the same paths, run the command with `{files}` replaced by those paths, from the worktree root, and report it in `baseRuns` with the spec id, the files, the command, the exit code and the output tail. Then `git worktree remove --force <dir>`. Change nothing in the repository itself.',
+        `Command: ${contract.testFileCommand}`,
+        ...tdd.map(s => `- ${s.id}: ${(s.testFiles || []).join(' ')}`),
+        '',
+      ]
+    : []
+  const migrate = contract.migration && !isBlank(contract.migration.up) && !isBlank(contract.migration.down)
+    ? [`If any changed file is a database migration (under a migrations folder, a .sql file, schema.prisma), run, from the repository root and against the test database only, in this order: \`${contract.migration.up}\`, then \`${contract.migration.down}\`, then \`${contract.migration.up}\` again, and report them in \`migration\` (ran: true, one step each). When no changed file is a migration, report \`migration\` with ran: false and no steps.`, '']
+    : []
   return spawn(
     [
       header('checker'),
@@ -1298,7 +1550,11 @@ function runChecks(contract, specs, round) {
       'Run each of these commands from the repository root, exactly as written, and report what happened. Report each result with the name in quotes, copied exactly:',
       contract.checks.length > 0 ? contract.checks.map(c => `- name "${c.name}", command: ${c.command}`).join('\n') : '- (no commands)',
       '',
+      'When a command fails, run it once more exactly as written and report that exit code too, in `rerunExitCode`: a test that fails only sometimes must not be taken for a broken change.',
+      '',
       ...(isolation ? [isolation, ''] : []),
+      ...proof,
+      ...migrate,
       `Then list every file changed or created since the base commit: the output of \`git diff --name-only ${args.base}\` together with \`git ls-files --others --exclude-standard\`.`,
     ].join('\n'),
     { label: round === 0 ? 'checker' : `checker (round ${round})`, phase: 'Check', schema: CHECK_SCHEMA, ...modelFor('checker', args.models) },
@@ -1332,7 +1588,7 @@ function runReview(contract, check, specs, round) {
       JSON.stringify(check.results, null, 2),
       seams,
       '',
-      skillsNote(skillsFor('reviewer', null, args.surfaces), args.skills, fixedPoint('the contract above')),
+      skillsNote(skillsFor('reviewer', null, args.surfaces, args.projectSkills), args.skills, fixedPoint('the contract above'), conditionalFor('reviewer', args.skills, skillsFor('reviewer', null, args.surfaces, args.projectSkills))),
     ].join('\n'),
     { label: round === 0 ? 'reviewer' : `reviewer (round ${round})`, phase: 'Review', schema: REVIEW_SCHEMA, ...modelFor('reviewer', args.models) },
   )
@@ -1353,7 +1609,7 @@ function runSpecReview(spec, contract, check, round) {
       'Check results for the whole change, observed by an independent checker:',
       JSON.stringify(check.results, null, 2),
       '',
-      skillsNote(skillsFor('specReviewer', spec, args.surfaces), args.skills, fixedPoint('the spec above')),
+      skillsNote(skillsFor('specReviewer', spec, args.surfaces, args.projectSkills), args.skills, fixedPoint('the spec above'), conditionalFor('specReviewer', args.skills, skillsFor('specReviewer', spec, args.surfaces, args.projectSkills))),
     ].join('\n'),
     { label: round === 0 ? `review ${spec.id}` : `review ${spec.id} (round ${round})`, phase: 'Review', schema: REVIEW_SCHEMA, ...modelFor('specReviewer', args.models) },
   )
@@ -1374,7 +1630,7 @@ function runQc(contract, round) {
       `The contract's checks have passed on this change. Do not read the change itself (\`git diff\`, the files it touched): judge what the product does, not what its code says.`,
       'Reviewers are reading the repository at the same time. Change nothing in it: no edits, commits, stashes or checkouts.',
       '',
-      skillsNote([], args.skills, '', conditionalFor('qc', args.skills, [])),
+      skillsNote(skillsFor('qc', null, null, args.projectSkills), args.skills, '', conditionalFor('qc', args.skills, skillsFor('qc', null, null, args.projectSkills))),
     ].join('\n'),
     { label: round === 0 ? 'qc' : `qc (round ${round})`, phase: 'Review', schema: QC_SCHEMA, ...modelFor('qc', args.models) },
   )
@@ -1402,7 +1658,7 @@ const questionsOnly = input.questionsOnly === true
 const repo = String(input.repo || '').replace(/\/+$/, '')
 const scratch = isBlank(input.scratch) ? `${repo}-factory-scratch` : String(input.scratch).replace(/\/+$/, '')
 
-const state = { outcome: 'blocked', reason: '', overview: '', risks: [], questions: [], risk: null, merge: null, specs: [], builds: [], qa: [], rebuilds: [], sentBack: {}, testsChangedInRebuild: [], check: null, review: null, specReviews: [], qc: [], failures: [], failureLog: [], repairRounds: 0 }
+const state = { outcome: 'blocked', reason: '', overview: '', risks: [], questions: [], risk: null, merge: null, flaky: [], tddUnproven: [], specs: [], builds: [], qa: [], rebuilds: [], sentBack: {}, testsChangedInRebuild: [], check: null, review: null, specReviews: [], qc: [], failures: [], failureLog: [], repairRounds: 0 }
 
 // Progress for the dashboard, only when the caller passed `dashboard.file`.
 // Records are written one after another and without holding the team up; only
@@ -1468,6 +1724,10 @@ if (missing.length > 0) return stop('blocked', `Missing workflow args: ${missing
 const badModels = modelProblems(input.models)
 if (badModels.length > 0) return stop('blocked', `The "models" arg is not usable: ${badModels.join(' ')}`)
 if (questionsOnly && Array.isArray(input.specs) && input.specs.length > 0) return stop('blocked', '"questionsOnly" runs the planner; it cannot be given "specs".')
+const badDesign = designProblems(contract)
+if (badDesign.length > 0) return stop('blocked', `The contract's design is not usable: ${badDesign.join(' ')}`)
+const absentStack = questionsOnly ? [] : missingProjectSkills(input.projectSkills, input.skills)
+if (absentStack.length > 0) return stop('blocked', `The project's stack skills are not installed or were not passed in "skills": ${absentStack.join(', ')}. Install them with scripts/stack-skills.mjs and pass the output of skills-ready.sh.`)
 const absentSkills = questionsOnly ? [] : missingSkills(input.skills)
 if (absentSkills.length > 0) {
   return stop('blocked', `Skills the team needs are not installed or were not passed in "skills": ${absentSkills.join(', ')}. Run scripts/skills-ready.sh, install what it reports missing, and pass its output as "skills".`)
@@ -1613,10 +1873,12 @@ for (const level of levels) {
 
 // --- Check and review; failures go back to Build ---------------------------
 let round = 0
+let rebuilt = null
 while (true) {
   phase('Check')
   record('Check', 'running')
-  const check = await runChecks(contract, specs, round)
+  const tdd = tddTargets(rebuilt ? specs.filter(s => rebuilt.has(s.id)) : specs)
+  const check = await runChecks(contract, specs, round, tdd)
   if (!check) return stop('blocked', 'The checker did not return a result.')
   state.check = check
 
@@ -1635,7 +1897,13 @@ while (true) {
   // checker's output, and no reviewer or QC agent is started on it. Reviewing
   // code that does not pass its own checks costs agents and finds what the
   // checks already found.
-  const red = checkFailures(contract, check)
+  for (const f of flakyChecks(contract, check)) {
+    if (!state.flaky.some(x => x.name === f.name)) state.flaky.push(f)
+    log(`Flaky: check "${f.name}" failed, then passed when run again; not sent back, reported.`)
+  }
+  const proof = isBlank(contract.testFileCommand) ? { failures: [], unproven: [] } : tddFailures(tdd, check.baseRuns)
+  for (const id of proof.unproven) if (!state.tddUnproven.includes(id)) state.tddUnproven.push(id)
+  const red = [...checkFailures(contract, check), ...migrationFailures(contract, check), ...proof.failures]
   if (red.length > 0) {
     log(`Gate: ${red.length} check(s) failed; no reviewer runs this round.`)
     state.failures = red
@@ -1673,7 +1941,11 @@ while (true) {
     if (state.failures.length === 0) {
       state.merge = escalation(check.changedFiles, state.risk, state.testsChangedInRebuild, input.escalate)
       const merge = state.merge.decision === 'auto' ? 'It may be merged without a person.' : `A person must accept it before it is merged: ${state.merge.reasons.join('; ')}.`
-      return stop('passed', `All checks pass, every criterion is met${qcOn ? ' and QC saw it work' : ' (QC was turned off)'}${round > 0 ? `, after ${round} return(s) to Build` : ''}. ${merge}`)
+      const notes = [
+      ...(state.flaky.length ? [`Flaky, fix the test: ${state.flaky.map(f => f.name).join(', ')}.`] : []),
+      ...(state.tddUnproven.length ? [`Not shown to fail on the base code (no base run): ${state.tddUnproven.join(', ')}.`] : []),
+    ].join(' ')
+    return stop('passed', `All checks pass, every criterion is met${qcOn ? ' and QC saw it work' : ' (QC was turned off)'}${round > 0 ? `, after ${round} return(s) to Build` : ''}. ${merge}${notes ? ` ${notes}` : ''}`)
     }
   }
 
@@ -1688,6 +1960,7 @@ while (true) {
   round++
   state.repairRounds = round
   for (const g of groups) state.sentBack[g.spec.id] = (state.sentBack[g.spec.id] || 0) + 1
+  rebuilt = new Set(groups.map(g => g.spec.id))
   const who = groups.map(g => g.spec.id).join(', ')
   log(`${state.failures.length} failure(s) from check, review and QC; back to Build: ${who}.`)
   progress.repairs = [...progress.repairs, { tag: `review ${round}`, text: `${state.failures.length} failure(s), back to Build: ${who}`, state: 'run' }]

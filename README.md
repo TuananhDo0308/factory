@@ -2,27 +2,57 @@
 
 # Factory
 
-**A Claude Code skill that runs a coding task through a small team of agents: planned, built test-first, QA'd, independently reviewed, and tried as a user would before it passes.**
+**Claude Code skills that take a project from setup to merged pull requests: set the project up once, clarify each feature with a person, then let a team of agents build it test-first, check it, review it by risk and use it before it passes.**
 
 Orchestrated by code, not by an agent following instructions.
 
-[Install](#install) · [Usage](#usage) · [How it works](#how-it-works) · [The team](#the-team) · [Limitations](#limitations)
+[Pipeline](#the-pipeline) · [Install](#install) · [Usage](#usage) · [The build loop](#the-build-loop) · [What each agent gets](#what-each-agent-gets) · [Testing coverage](#testing-coverage) · [Limitations](#limitations)
 
 </div>
 
-<p align="center">
-  <img src="docs/images/pipeline.png" alt="A Factory run: Contract, Spec, Build (one implementer and one QA agent per spec, in parallel), Check, Review and Merge, with a loop from Review back to Build" width="100%">
-</p>
-
 ## Why Factory
 
-One agent asked to do everything at once tends to guess and invent details. Factory splits the work so that every agent has one narrow job and a fresh context:
+One agent asked to do everything at once tends to guess and invent details. Factory moves every question to the one step where a person can answer it, and splits the build so that every agent has one narrow job and a fresh context:
 
+- **Questions are asked before the build, never during it.** `/factory clarify` grills the person, writes the ticket, draws the new screens and gets an approval. From then on nobody is asked anything: a run that still finds a question stops and posts it on the issue.
 - **One spec, one agent, one session.** An implementer sees only its own spec. No agent is ever handed several specs.
-- **Test-first, then checked by someone else.** The implementer writes each test before its code and watches it fail. A separate QA agent then reads those tests against the spec, without seeing the implementer's plan or account.
-- **Reviewers judge the code, not the story.** No reviewer sees an implementer's or QA agent's narrative.
-- **Someone uses the product.** A QC agent that has seen neither the specs nor the diff starts the product and tries each criterion through its real entry point (CLI, HTTP, browser or public API). A criterion passes only if it saw it work.
-- **Code decides, not agents.** A Workflow script sets the order, decides what each agent sees, validates the plan, caps rebuilds and computes pass or fail from raw results. No agent can declare its own work done.
+- **Test-first, and proven.** The implementer writes each test before its code. When the project gives a command to run single test files, code runs the new tests on the base commit: a test that already passes there proves nothing and sends the spec back.
+- **Review scaled to risk.** The planner rates the risk; code raises it from the files touched (auth, money, migrations, dependencies, CI) and picks the reviewers and their models from it.
+- **Someone uses the product.** A QC agent that has seen neither the specs nor the diff starts the product, tries each criterion, compares new screens with their approved mockups and the screens that must not break with how they looked before.
+- **Code decides, not agents.** A Workflow script sets the order, decides what each agent sees, validates the plan, caps rebuilds, computes pass or fail from raw results and decides whether a passing change may merge without a person.
+
+## The pipeline
+
+```mermaid
+flowchart TD
+  subgraph once["Once per project"]
+    I["/factory init<br/>scan the repo, ask what files do not say,<br/>catalogue the UI, install stack skills"] --> F[(".factory/<br/>profile, product, decisions,<br/>design, UI catalogue")]
+  end
+  subgraph feature["Per feature, with a person"]
+    R["A GitHub issue or a request in your words"] --> C["/factory clarify<br/>grill, ticket, mockups, readiness checks"]
+    C --> A{"Person approves?"}
+    A -- "change" --> C
+    A -- "yes" --> RD["Issue labelled ready<br/>branch factory/N holds the mockups and the plan"]
+  end
+  subgraph build["Build, nobody asked"]
+    RD --> W["/factory or the dispatcher<br/>the workflow script runs the team"]
+    W --> PR["Pull request"]
+    PR --> M{"Code: merge decision"}
+    M -- "auto" --> MG["Squash-merged"]
+    M -- "person" --> PP["Left open for a person,<br/>label factory-review"]
+  end
+  F -.-> C
+  F -.-> W
+  W -.-> X["XS Factory Bench:<br/>run record, telemetry, pr-judge verdict"]
+```
+
+| Step | Who works | Who decides |
+|---|---|---|
+| `/factory init` | scripts scan the stack, design, routes and UI; the session asks the person the rest | the person confirms the profile; `project-check.mjs` checks it |
+| `/factory clarify` | the session grills, writes the ticket and draws mockups; the planner runs alone to find open questions | `ready-check.mjs`, the planner's questions, then the person's approval |
+| Build | planner, implementers, QA, checker, reviewers, QC | the workflow script: pass, back to Build, blocked or failed |
+| Merge | the session pushes and opens the pull request | code's `merge.decision`: `auto`, or `person` with the reasons |
+| Report | the session sends the run record; `pr-judge` grades the pull request from outside | nothing: reporting never changes a run |
 
 ## Install
 
@@ -36,14 +66,14 @@ Open Claude Code in any directory and paste this. Claude downloads Factory, inst
 Install the Factory skill for Claude Code from https://github.com/sangtruong-rgb/factory, following these steps exactly:
 
 1. Clone the repository (git clone --depth 1) into a temporary directory.
-2. If ~/.claude/skills/factory, ~/.claude/skills/ba-ticket, ~/.claude/skills/dev-subissues, ~/.claude/skills/ui-refine-loop or ~/.claude/skills/pr-judge already exists, stop, tell me what it is (directory or symlink, and where it points) and ask me before replacing it. Never overwrite without my consent.
-3. Copy the factory/, ba-ticket/, dev-subissues/, ui-refine-loop/ and pr-judge/ folders of the repository to ~/.claude/skills/factory, ~/.claude/skills/ba-ticket, ~/.claude/skills/dev-subissues, ~/.claude/skills/ui-refine-loop and ~/.claude/skills/pr-judge (step 2 applies to all five).
+2. If ~/.claude/skills/factory, ~/.claude/skills/factory-init, ~/.claude/skills/factory-clarify, ~/.claude/skills/ba-ticket, ~/.claude/skills/dev-subissues, ~/.claude/skills/ui-refine-loop or ~/.claude/skills/pr-judge already exists, stop, tell me what it is (directory or symlink, and where it points) and ask me before replacing it. Never overwrite without my consent.
+3. Copy the factory/, factory-init/, factory-clarify/, ba-ticket/, dev-subissues/, ui-refine-loop/ and pr-judge/ folders of the repository to the folders of the same names under ~/.claude/skills (step 2 applies to all seven).
 4. Run: bash ~/.claude/skills/factory/scripts/install-skills.sh
    It installs the skills the agent team loads (mattpocock/skills, obra/superpowers, super-board, antfu/skills, anthropics/knowledge-work-plugins, currents-dev) at pinned commits into ~/.claude/skills, and leaves any skill that is already there untouched.
 5. Run: bash ~/.claude/skills/factory/scripts/skills-ready.sh "$HOME"
    It must exit 0. If it exits 10, it prints the names of the missing skills: tell me.
 6. Delete the temporary directory.
-7. Report: which skills were installed (including factory, ba-ticket, dev-subissues, ui-refine-loop and pr-judge), which were kept because they already existed, whether skills-ready passed, and remind me to open a new Claude Code session to use /factory.
+7. Report: which skills were installed (including factory, factory-init, factory-clarify, ba-ticket, dev-subissues, ui-refine-loop and pr-judge), which were kept because they already existed, whether skills-ready passed, and remind me to open a new Claude Code session and run /factory init in each project.
 ```
 
 ### Option 2: install by hand
@@ -51,6 +81,8 @@ Install the Factory skill for Claude Code from https://github.com/sangtruong-rgb
 ```sh
 git clone --depth 1 https://github.com/sangtruong-rgb/factory.git /tmp/factory-src
 cp -r /tmp/factory-src/factory       ~/.claude/skills/factory
+cp -r /tmp/factory-src/factory-init  ~/.claude/skills/factory-init
+cp -r /tmp/factory-src/factory-clarify ~/.claude/skills/factory-clarify
 cp -r /tmp/factory-src/ba-ticket     ~/.claude/skills/ba-ticket
 cp -r /tmp/factory-src/dev-subissues ~/.claude/skills/dev-subissues
 cp -r /tmp/factory-src/ui-refine-loop ~/.claude/skills/ui-refine-loop
@@ -63,43 +95,46 @@ rm -rf /tmp/factory-src
 > [!WARNING]
 > If `~/.claude/skills/factory` already exists (for example an older Factory), `cp -r` mixes the new files into it. Back it up or remove it first.
 
-Then **open a new Claude Code session** so the skills load. No custom agents need installing: each agent reads its own role brief from `factory/roles/`.
+Then **open a new Claude Code session** so the skills load, and run `/factory init` in each project you want to build with it. The skills live in your Claude Code (`~/.claude/skills`), not in your project; a project only gets `.factory/`, its stack skills in `.claude/skills/` and the files the runs produce. No custom agents need installing: each agent reads its own role brief from `factory/roles/`.
 
 ## Usage
 
-**From a plain request**, in the repository you want to change:
+**Set a project up**, once, in its repository:
 
 ```text
-/factory add a --json flag to the wordstats command, keep the default output, with tests
+/factory init
 ```
 
-The skill also triggers when you ask for a "factory" or for a team of agents to plan, build and review a task.
+It checks first, in one command (`init-status.mjs`), whether the project is already set up and current, and stops if it is, so running it again costs almost nothing. A stopped init resumes; a project whose files changed redoes only the steps those files feed.
 
-**From GitHub issues**, where one issue is one run and one pull request:
+**Clarify each feature**, from a request or an issue:
 
 ```text
-/ba-ticket users need to export the order list to CSV, filtered by date
-/dev-subissues #42
+/factory clarify users need to export the order list to CSV
+/factory clarify #42
+```
+
+**Build it** once it is `ready`, by hand or through the dispatcher:
+
+```text
 /factory #42
 ```
 
-<p align="center">
-  <img src="docs/images/issue-flow.png" alt="/ba-ticket writes the issue, /dev-subissues adds sub-issues as planner context, /factory #42 runs it and merges the pull request" width="100%">
-</p>
+`/factory` sends anything that is not a ready issue to `factory-clarify` first. A plain request still works for small changes (`/factory add a --json flag to the wordstats command, with tests`).
 
-| Skill | Role | What it does |
+| Skill | When | What it does |
 |---|---|---|
-| `client-intake` | BA with the client | Interviews the client (through their BA or PM) and writes `PRODUCT.md`, `GLOSSARY.md`, `DECISIONS.md` and an MVP scope the client approves. |
-| `tech-lead` | Tech lead | Proposes two or three stacks, records the chosen one as an ADR, and sets up a skeleton that builds and tests green, with CI and a `CLAUDE.md` holding the run and check commands and the project's defaults. |
-| `brand-design` | Designer | Imports the client's brand or builds a new identity with them (Claude Design works well here), then writes `DESIGN.md` and tokens the code imports, and mockups of every MVP screen in every state. |
-| `ba-ticket` | Business analyst | Clarifies the request with you and writes one or more issues, each one pull request in size, with user stories, acceptance criteria `C1..Cn` checkable from outside, and what is out of scope. Creates nothing until you approve. |
-| `dev-subissues` | Developer | Reads the issue and the code and adds native GitHub sub-issues: how the work divides, which files each part touches, the seams, the risks. **Context for the planner only**: they carry no criteria of their own. |
-| `factory` | The team | Takes the issue's criteria word for word as the contract. The planner rates the risk, code raises it from the files touched and routes the review by it (one Sonnet reviewer for a low-risk change, every reviewer on Opus for a high one); no reviewer runs while a check fails; the CI, test, lint and type-check configuration is protected; and a passing run that touches auth, money, a migration, a dependency, CI or a visible screen waits for a person instead of merging. Its planner returns `questions` instead of guessing; any question stops the run before anything is built, and the session posts them on the issue (`Q1:` lines, label `needs-info`). A passing run pushes, opens a pull request that closes the issue and its sub-issues, and squash-merges it into the default branch. |
+| `factory-init` | Once per project | Tells a new project from an existing one. A new project gets its requirements, stack (2–3 options, an ADR, a scaffold with CI) and design direction settled with you. An existing one gets its stack and commands read from its manifests and confirmed, its UI catalogued from the code (`scan-ui.mjs`: every component with its props, variants and usage, style helpers, duplicates with the preferred one, the file to copy for each pattern), optionally its screens captured, and its design written down. Finds the best vetted skills for the stack (`catalog/stack-skills.json`, pinned commits) and installs them into the project's `.claude/skills/`. Writes `.factory/` and `CLAUDE.md` defaults, and checks every command passes. |
+| `factory-clarify` | Before every build | Takes an issue or a request, reads the profile, decisions, catalogue and code it touches, and how earlier tickets of that kind went (`issue-history`), then grills you in waves of at most three questions with a recommended answer each. Writes the ticket (criteria `C1..Cn` as Given / When / Then with real values, UI and states, data, permissions, copy, out of scope), proposes a split when it is more than one pull request, draws each new screen from the app's own components and tokens, and lists the existing screens that must not break. Checks it with `ready-check.mjs` and with the planner alone (`questionsOnly`), keeps the planner's plan in `.factory/plans/N.json`, and after you approve opens or rewrites the issue, pushes `factory/N` with the mockups and the plan, and labels it `ready`. |
+| `factory` | Each ready issue | Runs the build loop below, verifies the result itself, opens the pull request and merges it only when code says `auto`. |
+| `ba-ticket`, `dev-subissues` | Optional | Write an issue (`ba-ticket`) or add sub-issues as planner context (`dev-subissues`) without the mockups and checks of `factory-clarify`. Issues they create carry the label `factory` and `kind/<kind>`. |
 
-Issues from `ba-ticket` and `dev-subissues` carry the label `factory` (and `kind/<kind>`), so they never mix with issues people write by hand. Before a person adds `ready`, `factory/scripts/ready-check.sh <n>` checks the issue mechanically (sections, numbered criteria, vague words, mockup links, unanswered `Q` lines, dependency cycles), and `/factory` with `questionsOnly` asks the planner's questions without building. [`factory/github/`](factory/github/README.md) holds a GitHub Action that hands each `ready` issue, in dependency order, to a Claude Code session on a self-hosted runner and leaves the pull request open for a person to accept.
+Issues the factory creates carry the label `factory`, so they never mix with issues people write by hand. Labels on the way: `needs-info` (a question is open), `ready` (the AI's from now on), `factory-review` (a passing pull request that waits for a person). [`factory/github/`](factory/github/README.md) holds a GitHub Action that hands each `ready` issue, in dependency order, to a Claude Code session on a self-hosted runner.
 
 > [!NOTE]
-> Only the issue's criteria are graded. A requirement that lives only in a sub-issue is not checked, so `dev-subissues` proposes it as a new criterion on the issue instead.
+> Only the issue's criteria are graded. A requirement that lives only in a sub-issue or a comment is not checked.
+
+### Standalone skills
 
 **Polishing a page afterwards**, when it works but looks off:
 
@@ -121,107 +156,137 @@ It works best with the [Impeccable](https://github.com/pbakaus/impeccable) skill
 
 `pr-judge` is another standalone skill, and the one place the team's output is graded from outside the team. It loads none of the skills the team loads (`mp-code-review`, `pr-security-review`, `tdd` and the rest), so the team never grades itself. It checks the pull request and the merge base out in worktrees and runs measured checks: build, type check, lint, format and tests with the base's commands, on the head and, when the head fails, on the base; dependencies added; code changed without a test; shortcuts around the checks such as `@ts-ignore`, `.skip` or a deleted assertion; and SonarQube when it is set up. Then one isolated judge per criterion of [`pr-judge/rubric.md`](pr-judge/rubric.md) reads the change: the issue's acceptance criteria `C1..Cn`, readability, fit with the repository, simplicity, failure handling, tests, security and merge readiness. It writes `report.md` and `report.json` under `~/.xfb/judge/` with a pass / fail / unknown verdict decided by code, not by a judge, and, when [XS Factory Bench](https://github.com/sangtruong-rgb/xs-factory-bench)'s `xfb` is installed, sends it to the run the pull request came from (branch `factory/<run id>`). It refuses a pull request from a fork unless you pass `--allow-fork`, since the checks run its code. The rubric is a draft and the judges are uncalibrated: read the verdict beside the report, not instead of it.
 
-## How it works
+## The build loop
 
-1. **Contract** *(your chat session)*: the goal, numbered acceptance criteria `C1..Cn`, what is out of scope, how to run the product (for QC), and the project's real check commands (when the repository has CI, CI's own commands, one check per job that can run locally). The run gets its own branch, `factory/<id>`. `skills-ready.sh` confirms every skill the team loads is installed; a missing one stops the run before it starts.
-2. **Spec** *(planner)*: reads the code and returns one or more specs. Each spec owns its files, names the criteria it answers for and has a `kind` (`feature`, `bug`, `ux`, `refactor`, `tech-debt`, `tests`, `docs`). Code rejects the plan with reasons if a criterion is uncovered, a file has two owners, a file is both source and test, a skill is not installed, or the dependencies form a cycle.
-3. **Build** *(implementer, then QA, per spec)*: the implementer writes each test, sees it fail for the right reason, then writes the code. A fresh QA agent maps criteria to tests, hunts edge cases and tests that cannot fail, runs a code review and a security pass, and adds tests for serious gaps. Independent specs build in parallel; dependent specs wait for the level before them.
-4. **Check** *(checker)*: runs the contract's commands and lists the changed files. When a test command fails but its failing test files pass alone, it bisects the run's test files (at most 12 extra runs) for the one that breaks them, such as a leaked mock or global. A changed file that no spec owns stops the run.
-5. **Review and QC** *(reviewers, QC)*: a fresh reviewer judges the whole change against the contract. When the work was split, each spec also gets its own reviewer. Once the checks pass, a QC agent runs beside them: it sees only the contract and how to run the product, starts it, and tries each criterion as a user would, writing down what it expected before it looks. A criterion is met only if every reviewer responsible for it says so and QC saw it work (or found it not observable, such as "the module has a test"). Pass `qc: false` for a change nobody can see.
-6. **Back to Build**: there is no separate repair phase. Each failure is routed to the spec whose files it concerns (for a failing check whose culprit test file the checker found, the spec owning that file); that spec gets a new implementer session (on Opus) and QA again, then the whole change is checked and reviewed again. A spec may go back at most `maxRebuilds` times (default 2) before the run fails.
-7. **Verify and merge** *(your chat session)*: reruns the checks itself and, when the repository has CI and Docker is available, CI's test jobs in a Linux container matching CI, since test order and platform can differ from this machine. Only if the workflow returns `passed` and the rerun passes does it commit the specs' files and fast-forward the branch it started from. A failed run stays on `factory/<id>` and your branch is untouched.
-8. **Lessons** *(your chat session)*: every failure that sent a spec back to Build is filed with the run in its failure log. After each run the session reads the logs of the last 10 runs, and a mistake the team made in 3 or more of them (implementers skipping lint, two specs naming one interface differently, the planner leaving a file out) becomes a proposal in the report: a rule in `factory.js` or one sentence in a role brief. You accept or reject it; the fix is made later as an ordinary change to the skill, with tests, never by an agent during a run.
+```mermaid
+flowchart TD
+  P["Planner<br/>specs, risk, surfaces, questions"] -- "any question" --> Q["Stop: blocked,<br/>questions posted on the issue"]
+  P --> V{"Code validates the plan<br/>and raises the risk from file paths"}
+  V --> IQ["Per spec: implementer, test-first, then QA<br/>independent specs in parallel"]
+  IQ --> CH["Checker<br/>project checks, flaky rerun,<br/>new tests on the base commit, migration up/down/up"]
+  CH --> G{"Every check green?"}
+  G -- "no: no review this round" --> BK["Back to Build<br/>each failure to the spec that owns it"]
+  G -- "yes" --> RQ["In parallel, blind to each other:<br/>reviewers chosen by risk, QC uses the product"]
+  RQ --> E{"Code judges"}
+  E -- "failures" --> BK
+  BK --> IQ
+  E -- "pass" --> ES["Code decides the merge: auto or person"]
+```
+
+1. **Contract** *(your chat session)*: the issue's criteria word for word, what is out of scope, and the project's part from `project-check.mjs --contract`: its check commands, how to run the app, its design pointers, `testFileCommand`, the migration commands, its stack, skills per role and docs. A clarified issue also brings its mockups (`design.screens`), the screens that must not break (`design.baseline`) and the approved plan, which is reused while the criteria and the files it touches are unchanged. The run works on `factory/N`. A missing skill stops the run before it starts.
+2. **Spec** *(planner)*: reads the code and returns specs. Each owns its files, names the criteria it answers for and has a `kind` (`feature`, `bug`, `ux`, `refactor`, `tech-debt`, `tests`, `docs`). It rates the risk (`low`, `medium`, `high`) and the surfaces (`ui`, `security`, `data`), and returns `questions` instead of guessing; any question stops the run. Code rejects the plan if a criterion is uncovered, a file has two owners, a skill is not installed or the dependencies form a cycle, and raises the risk from the files the specs own (below).
+3. **Build** *(implementer, then QA, per spec)*: the implementer writes each test, sees it fail, then writes the code, following the project's design rules and UI catalogue (the preferred component of any duplicate, the pattern file for a form or a table). A fresh QA agent maps criteria to tests, hunts edge cases and tests that cannot fail, runs a security pass and adds tests for serious gaps. Independent specs build in parallel.
+4. **Check** *(checker)*: runs the contract's commands and lists the changed files.
+   - A failing command is run again once; a check that then passes is reported as flaky, not sent back.
+   - With `testFileCommand`, the new tests of each `feature`, `bug` and `ux` spec are run in a worktree of the base commit. Tests that pass there send the spec back: they do not show the change.
+   - With migration commands, the migration is run up, down and up again.
+   - When a test command fails but its failing files pass alone, it bisects for the file that leaks state into them.
+   - A changed file that no spec owns, or a change to a protected path (CI, check configuration, `.factory/`), stops the run.
+5. **Gate**: while any check is red, no reviewer and no QC runs that round. The failures go straight back to Build.
+6. **Review and QC** *(in parallel)*: reviewers read the code; QC uses the product. Neither sees the other's verdict.
+
+   | Risk | Whole-change reviewer | One reviewer per spec (2+ specs) |
+   |---|---|---|
+   | `low` | Sonnet, medium effort | none |
+   | `medium` | Opus, high effort | Sonnet, medium effort |
+   | `high` | Opus, xhigh effort | Opus, high effort |
+
+   Code raises the planner's rating, never lowers it: files about auth, sessions, permissions, payments or billing make the run `high` with surface `security`; a migration makes it `high` with surface `data`; dependency manifests, lockfiles or CI files make it at least `medium`; UI files add surface `ui`. Surface `security` adds `pr-security-review` to the reviewers.
+
+   QC runs every round whatever the risk (turn it off with `qc: false` for a change nobody can see). It tries each criterion through the product's real entry point, compares each new screen with its approved mockup, compares each must-not-break screen with its screenshot from before the build (a change the ticket does not ask for is a `regression`, sent back to the specs that own UI files), and scans each screen with axe: a serious or critical violation fails the screen's criteria. QC changing a file stops the run.
+7. **Back to Build**: each failure goes to the spec whose files it concerns, which gets a new implementer session (on Opus) and QA again. A spec may go back `maxRebuilds` times (default 2) before the run fails.
+8. **Merge decision** *(code)*: a passing run gets `merge: { decision, reasons }`. It is `person` when the change touches auth, money, a migration, a dependency or CI, was rated `high`, changes a visible screen, or rewrote tests after the first build (the list is the profile's `escalate`). Otherwise `auto`.
+9. **Verify and merge** *(your chat session)*: reruns the checks itself (and CI's test jobs in a Linux container when Docker is there), pushes, and opens a pull request that closes the issue. It squash-merges only when the decision is `auto` and CI is green; otherwise it leaves the pull request open with the reasons in a comment and the label `factory-review`. It never uses `--admin`.
+10. **Report and lessons** *(your chat session)*: the run record (outcome, failure log, risk and why it was raised, merge decision, questions, flaky checks, specs whose tests could not be proven) goes to the dashboard and, through `xfb report`, to XS Factory Bench. A mistake the team made in 3 of the last 10 runs becomes a proposed rule for you to accept or reject.
 
 <p align="center">
   <img src="docs/images/routing.png" alt="routeFailures() sends a blocking finding in report.py to S2, the spec that owns report.py" width="100%">
 </p>
 
-**Pass or fail is computed by code:** every check exits `0`, every criterion is judged met and seen working by QC, and no blocking finding remains. When a decision needs a human (a wrong spec, an implementer needing a file outside its ownership), the workflow stops with `blocked` and hands back to you.
+**Pass or fail is computed by code:** every check exits `0` (or passed on its rerun), every new test was shown to fail on the base code, every criterion is judged met by its reviewers and seen working by QC, no must-not-break screen regressed, and no blocking finding remains. When a decision needs a person, the workflow stops with `blocked` and says why.
 
-For issue runs, the session pushes the branch, opens a pull request with `Closes #<issue>` and one `Closes #<sub-issue>` line per sub-issue, waits for the pull request's CI with `gh pr checks --watch`, and runs `gh pr merge --squash` only when it is green (a failing CI job leaves the pull request open and is reported). If GitHub refuses (branch protection, pending checks, conflicts), the pull request stays open and the session tells you why. It never uses `--admin`.
+## What each agent gets
 
-## The team
+Init writes the project down once; every run hands the right part of it to each agent, so no agent has to rediscover the stack or the design.
 
-<p align="center">
-  <img src="docs/images/team.png" alt="Each role with its model, effort, the skills it loads and the files it may change" width="100%">
-</p>
-
-Models are chosen per role in code (the `MODELS` table in `factory.js`). The strongest models go where a mistake costs the most: a wrong spec misleads every agent after it, and the whole-change reviewer is the last gate. Override any role with the `models` arg, for example `{"implementer": {"model": "opus"}}`.
-
-<details>
-<summary><b>Skills each agent loads</b></summary>
-
-<br>
-
-Skills are third-party, installed at pinned commits and never bundled. The `SKILLS` registry in `factory.js` picks them per role, following super-board's registry row for row.
-
-| Agent | Always | By spec `kind` | Conditional (agent decides by rule) |
+| Agent | Model (default) | Project context | Skills |
 |---|---|---|---|
-| Implementer | `verification-before-completion`, `mp-code-review` | `bug`: `diagnosing-bugs`, `tdd` · `feature`: `tdd`, `codebase-design` · `ux`: `tdd` · `refactor`, `tech-debt`: `codebase-design`, `tdd` · `tests`: `tdd` · `docs`: none | `vitest`, `playwright-best-practices`, `testing-strategy`, `domain-modeling` |
-| QA | `tdd`, `diagnosing-bugs`, `verification-before-completion`, `testing-strategy`, `mp-code-review`, `pr-security-review` | | `vitest`, `playwright-best-practices` |
-| Reviewers | `mp-code-review`, `codebase-design` | | |
-| QC | none, on purpose: it must not read the code the way the reviewers do | | `playwright-best-practices` |
+| Planner | Fable, high | `CLAUDE.md`, decisions, stack, product, glossary, the issue and its sub-issues, the approved plan | `codebase-design` (deep modules, clean seams), `domain-modeling` when the domain needs it, the profile's planner skills, the repo's own `.claude/skills` |
+| Implementer | Sonnet, medium (Opus on a rebuild) | `CLAUDE.md`, decisions, stack, design rules, UI catalogue, its spec's mockups | by spec `kind` (`tdd`, `diagnosing-bugs`, `codebase-design`), `verification-before-completion`, `mp-code-review`, the stack skills init installed (for example `vitest`), the repo's own skills |
+| QA | Sonnet, medium | `CLAUDE.md`, decisions, stack, its spec without the implementer's plan | `tdd`, `testing-strategy`, `diagnosing-bugs`, `mp-code-review`, `pr-security-review`, `verification-before-completion`, the stack's test skills |
+| Checker | Sonnet, low | the commands only | none |
+| Reviewers | by risk (above) | `CLAUDE.md`, decisions, stack, product, glossary, design rules with the blocking ones (for example a non-preferred component) | `mp-code-review`, `codebase-design`, `pr-security-review` on surface `security`, the profile's reviewer skills, the repo's own skills |
+| QC | Sonnet, medium | the criteria, how to run the app, the mockups and the before screenshots. Not the diff, not the specs | none of the review skills, on purpose; `playwright-best-practices` and the profile's QC skills |
 
-**Sources:** [mattpocock/skills](https://github.com/mattpocock/skills), [obra/superpowers](https://github.com/obra/superpowers), [EricTechPro/super-board](https://github.com/EricTechPro/super-board), [antfu/skills](https://github.com/antfu/skills), [anthropics/knowledge-work-plugins](https://github.com/anthropics/knowledge-work-plugins), [currents-dev](https://github.com/currents-dev). mattpocock's `code-review` is installed as `mp-code-review` so it does not shadow Claude Code's built-in `/code-review`. A spec may name its own `skills` to replace the `kind` set.
+Override any model with the `models` arg, for example `{"implementer": {"model": "opus"}}`. Third-party skills are installed at pinned commits, never bundled: [mattpocock/skills](https://github.com/mattpocock/skills), [obra/superpowers](https://github.com/obra/superpowers), [EricTechPro/super-board](https://github.com/EricTechPro/super-board), [antfu/skills](https://github.com/antfu/skills), [anthropics/knowledge-work-plugins](https://github.com/anthropics/knowledge-work-plugins), [currents-dev](https://github.com/currents-dev). mattpocock's `code-review` is installed as `mp-code-review` so it does not shadow Claude Code's built-in `/code-review`.
 
-Differences from super-board: mattpocock's `implement` and `ask-matt` are blocked for agents; `resolving-merge-conflicts` is no longer published and runs never merge mid-way; the `ponytail` plugin has no public source, so its "simplest solution first" rule is written into the implementer brief and reviewers flag over-engineering as `minor`.
+## Testing coverage
 
-</details>
+The roles are not tests themselves; each writes tests, runs them, or uses the product.
 
-## Dashboard
+| Role | What it does with tests | Integration | Regression |
+|---|---|---|---|
+| Implementer | writes the tests first, at the cheapest layer that shows the criterion: unit, then integration, then the real entry point | when it picks that layer | its tests guard every later change |
+| QA | adds tests for serious gaps, flags tests that only assert on their own mocks | when it picks that layer | same |
+| Checker | runs the whole suite and every check command each round, new tests on the base commit, migrations both ways | runs the ones the suite has | **yes, for code** |
+| Reviewers | read the code; run nothing | no | no |
+| QC | uses the product for this issue's criteria and the screens listed as must-not-break | end to end, by hand; leaves no test behind | **yes, for the listed screens** |
 
-The skill ships with a static dashboard. Open `factory/dashboard/index.html` in a browser to see the team, the run in progress (refreshed every few seconds), past runs with their failure logs, the lessons proposed from recurring failures and the benchmark.
+## Dashboard and XS Factory Bench
+
+Open `factory/dashboard/index.html` to see the team, the run in progress, past runs with their failure logs, the lessons proposed from recurring failures and the benchmark.
 
 <p align="center">
   <img src="docs/images/dashboard.jpg" alt="The Factory dashboard's Progress view: past runs and the Spec, Build, Check, Review, Back to Build and Result columns of one run" width="100%">
 </p>
 
-After each run the session can also report it to XS Factory Bench with `xfb report`, if `xfb` is installed, failure log included (files and problem text only when you turn sharing on), so recurring failures can be followed across everyone's runs. This never changes the run.
+When [XS Factory Bench](https://github.com/sangtruong-rgb/xs-factory-bench)'s `xfb` is installed, every run reports to it: `xfb start` before the run, `xfb report` with the run record after it, and `pr-judge`'s verdict with `xfb judge send`. `scripts/xfb-path.sh` finds `xfb` even when its folder (often `~/.local/bin`) is not on the session's `PATH`, which is common in the Claude Code desktop app; without it reporting was skipped silently. Token and cost telemetry goes through Claude Code's own OpenTelemetry settings. Reporting never changes a run.
 
 ## Repository layout
 
 ```text
-client-intake/             BA skill with the client: idea → PRODUCT.md, GLOSSARY.md, DECISIONS.md, MVP scope
-tech-lead/                 tech-lead skill: stack options → ADR, skeleton, CI, CLAUDE.md with defaults
-brand-design/              design skill: brand or new identity → DESIGN.md, tokens, mockups in every state
-ba-ticket/                 BA skill: task → issues with criteria C1..Cn (checklists by kind, DECISIONS.md template)
-dev-subissues/             Dev skill: issue → sub-issues as planner context
-ui-refine-loop/            standalone skill: check → fix loop that polishes one page, ends in a draft PR
-├── SKILL.md               instructions for the chat session: read, grill, set up, run, open the PR
-├── workflow/              ui-refine-loop.js, the Workflow script that runs the rounds
-├── references/            briefs for the loop's agents, the taste file, the rubric, the config keys
-└── scripts/               refine-setup.sh, shoot.mjs (screenshots), pr-shots.sh
+factory-init/              setup, once: scan → ask → .factory/ profile, design, UI catalogue, stack skills
+factory-clarify/           before each build: issue or prompt → grill → ticket + mockups → approve → ready
+ba-ticket/                 optional: task → issues with criteria C1..Cn (checklists by kind, templates)
+dev-subissues/             optional: issue → sub-issues as planner context
+ui-refine-loop/            standalone: check → fix loop that polishes one page, ends in a draft PR
+pr-judge/                  standalone: grades one pull request from outside the team
 factory/
-├── SKILL.md               instructions for the chat session: contract, run, verify, merge, report
-├── workflow/factory.js    the Workflow script that orchestrates the team
+├── SKILL.md               the chat session's part: contract, run, verify, merge, report
+├── workflow/factory.js    the Workflow script that runs the team
 ├── roles/                 one brief per role (planner, implementer, qa, checker, reviewer, spec-reviewer, qc)
-├── scripts/               install-skills.sh, skills-ready.sh, FactoryBench reporting; factory-issue.sh (labels,
-│                          issues, dependencies), ready-check, next-issue (dispatcher's pick), issue-history
+├── scripts/               setup: init-status, detect-stack, detect-design, scan-ui, find-routes, capture-screens,
+│                          find-skills, stack-skills, init-skeleton, project-check
+│                          issues: factory-issue.sh, ready-check, next-issue, issue-history
+│                          team: install-skills.sh, skills-ready.sh; reporting: factorybench, xfb-path.sh
+├── catalog/               stack-skills.json: vetted skills per stack, at pinned commits
 ├── github/                factory-dispatch.yml, the GitHub Action for a self-hosted runner, and its setup
-├── dashboard/             index.html, runs.js (finished runs), lessons.js (recurring failures and decisions), live.js (run in progress, not committed)
+├── dashboard/             index.html, runs.js, lessons.js, live.js (not committed)
 └── evals/                 skill test cases
-tests/                     node --test tests for factory.js (its helpers, and the whole script with agents stubbed) and for ui-refine-loop
+tests/                     node --test tests for factory.js, the scripts, ui-refine-loop and pr-judge
 docs/images/               screenshots for this README
 ```
 
+A project set up by `factory-init` gets only `.factory/` (profile, product, decisions, design, plans, `init.json`), its stack skills in `.claude/skills/` and `CLAUDE.md` defaults. The skills themselves live in `~/.claude/skills`.
+
 ## Limitations
 
-Factory is a deliberately small baseline. These rules are still enforced by prompts rather than by code:
+Some rules are still enforced by prompts rather than by code:
 
-- **Read-only roles are asked, not forced.** The planner, checker and reviewers are told not to edit; code only catches files changed outside every spec's ownership.
-- **Test-first is self-reported.** The implementer reports its red-green steps; code cannot verify it saw each test fail.
-- **Shared misreadings are narrower, not gone.** Tests come from the agent that wrote the code, and QA and reviewers read them against the spec. QC uses the product without reading the code, but it reads the same contract: a vague criterion is still read one way by everyone.
-- **QC is asked, not forced, to stay blind.** It is not given the diff or the specs and is told not to read the change; code cannot stop it opening a file. It is told to leave the repository as it found it; code stops the run only on the files it reports.
-- **Rebuilt tests may change.** On a rebuild the implementer may edit its own tests. Every test file changed after the first build is recorded and reported to you.
-- **Unattributed failures cost more.** A failing check whose output names no spec file, and for which the checker found no culprit test file, goes back to every spec.
+- **Read-only roles are asked, not forced.** Code catches files changed outside every spec's ownership and changes to protected paths, not a role that reads more than it should.
+- **Test-first is proven only with `testFileCommand`.** Without it, the red-green steps are self-reported, and the run lists the specs it could not prove.
+- **Integration tests are not required.** The implementer stops at the cheapest layer that shows a criterion, so a flow across modules may be covered only by unit tests with mocks, unless QA flags it.
+- **QC covers this issue, not the whole app.** It tries the issue's criteria and the screens clarify listed as must-not-break. A break elsewhere is caught only by the project's own test suite. What QC tries by hand is not saved as a test.
+- **Screen comparison is by eye.** QC compares screenshots as a person would, not pixel by pixel.
+- **Shared misreadings are narrower, not gone.** Everyone reads the same criteria; clarify's grilling and the planner's questions are what keep them unambiguous.
 - **No resume.** A run's state is not saved; when the session ends, the run ends with it.
-- **Issue runs merge without a human on GitHub.** QA, the reviewers, QC, the session's own rerun of the checks and the pull request's CI are the gate. Failed runs are never pushed.
-- **Third-party skills assume a person at the keyboard.** Agents are told nobody will answer, that the spec's interfaces are the agreed seams, and that the brief wins over a skill. Whether they comply is up to the prompt.
+- **Stack skills are vetted by hand.** The catalogue covers a few stacks so far; for the others, init proposes candidates from `find-skills.mjs` for you to vet.
+- **XS Factory Bench keeps only the fields it knows.** The new run-record fields (`risk`, `merge`, `questions`, `flaky`, `tddUnproven`) are sent but not yet stored or shown there.
 
 ## Development
 
 ```sh
-node --test          # the pure helpers in factory/workflow/factory.js, and ui-refine-loop's script and workflow
+node --test          # factory.js helpers and the whole script with agents stubbed, the scripts, ui-refine-loop
 ```
 
 See [CLAUDE.md](CLAUDE.md) for how the script, the role briefs and the tests fit together.

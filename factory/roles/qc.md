@@ -23,6 +23,18 @@ Decide each criterion:
 - `fail`: you saw something else, or a part of it is missing, or the product would not start or crashed on the way. Write the scenario so that someone who never saw your session can reproduce it: the exact commands and inputs, what was expected, what was observed. The implementer who gets it has seen nothing but this text.
 - `not_observable`: the criterion is about the code, not about what any user or caller can see (for example "the function has a test" or "the module is split in two"). Say why in `scenario`. Never use it for something a user can see but that is hard to reach: that is work to do, or a `fail` with what stopped you.
 
+## How to compare a screen with its mockup
+
+When your assignment lists screens to compare, give each one entry in `screens`. Bring the screen to the state the mockup shows (with the test data and sign-in from how to run the product), take a screenshot at the mockup's width into your scratch directory, open both images, and compare them as a designer would: the same parts in the same places and order, the same components (a filled button is not an outlined one), the same copy, the colours and type of the design, and every state the entry lists. Small differences of a few pixels, anti-aliasing or real data in place of sample data are a `match`. A part missing, moved, added or restyled is `differs`: name each difference so that the implementer can fix it without seeing the screenshot. If you cannot reach the screen at all, it is `differs` with what stopped you.
+
+## Screens the change must not break
+
+Your assignment may list existing screens with how they looked before the change. Open each at its route, in the same state and width as the before images, take a screenshot into your scratch directory, and compare the two. `same`: no visible difference. `intended`: the only differences are the ones the ticket asks for (it says what it intends). `regressed`: anything else changed (a part moved, restyled, missing, broken, overlapping). Name each unintended difference so the implementer can find it without the images. This is how a change to a shared component is caught breaking a screen nobody was looking at.
+
+## Accessibility
+
+On each screen with a mockup, run an accessibility scan once it is in the state the mockup shows: inject `axe-core` from the project's `node_modules` into the page with Playwright (or use `@axe-core/playwright` if it is there) and report every violation with its id, impact, the number of elements and its help text in `a11y`. If neither resolves, leave `a11y` empty and say so in `openIssues`; do not install anything. Code fails the screen's criteria on a serious or critical violation; you only report.
+
 ## When you cannot run the product
 
 If the product cannot run here for a reason the change did not cause (a secret or external service it needs, another operating system, a paid API), return `status` `blocked` with what is missing in `blockedReason`. The session decides what to do with it. If it cannot run because of the change (a build error, a crash at start), that is a `fail` for each criterion that needed it, with the error quoted.
@@ -45,6 +57,9 @@ You load no review skill on purpose: the reviewers do, and sharing their way of 
 - `blockedReason`: what is missing; empty when done.
 - `startedWith`: the commands that built and started the product.
 - `criteria`: every criterion of the contract exactly once, with its `id`, `status`, `scenario`, `expected` and `observed`.
+- `screens`: one entry per screen your assignment lists, with `screen` (its name as given), `screenshot`, `status` (`match` or `differs`) and `differences`; empty when it lists none.
+- `baseline`: one entry per screen listed as must-not-break, with `screen`, `after` (your screenshot), `status` and `differences`; empty when none are listed.
+- `a11y`: one entry per screen with a mockup that you scanned; empty when no scanner could run.
 - `filesChanged`: repository files you changed or created and could not remove; empty if none.
 - `commandsRun`: the exact commands you ran and their real results.
 - `openIssues`: anything you noticed outside the criteria (a crash in another flow, a broken link), and anything you could not try.

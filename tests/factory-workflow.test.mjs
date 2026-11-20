@@ -219,3 +219,64 @@ test('a protected file changed outside every spec stops the run, even when ignor
   assert.equal(r.out.outcome, 'blocked')
   assert.match(r.out.reason, /Protected files were changed: tsconfig\.json/)
 })
+
+test('the project profile reaches the agents: stack skills, its instructions, and not QC', async () => {
+  const skillsMore = { ...skills, vitest: '/s/vitest', 'playwright-best-practices': '/s/pw' }
+  const r = await run({ skills: skillsMore, projectSkills: { implementer: ['vitest'], qc: ['playwright-best-practices'] }, projectDocs: { agents: 'CLAUDE.md', decisions: 'DECISIONS.md' } })
+  assert.equal(r.out.outcome, 'passed')
+  assert.match(r.prompt('build S1'), /vitest: \/s\/vitest/)
+  assert.match(r.prompt('build S1'), /read CLAUDE\.md before anything else/)
+  assert.match(r.prompt('qc'), /playwright-best-practices: \/s\/pw/)
+  assert.ok(!r.prompt('qc').includes('CLAUDE.md'))
+})
+
+test('a stack skill the run was not given stops it before any agent', async () => {
+  const r = await run({ projectSkills: { implementer: ['nextjs-conventions'] } })
+  assert.equal(r.out.outcome, 'blocked')
+  assert.deepEqual(r.labels, [])
+  assert.match(r.out.reason, /stack skills are not installed[^.]*nextjs-conventions/)
+})
+
+test('the design reaches the implementer and QC, and a screen unlike its mockup goes back to Build', async () => {
+  const design = { doc: 'DESIGN.md', tokens: 't.css', screens: [{ screen: 'Stats', criteria: ['C1'], mockup: 'docs/mockups/stats.png', states: ['empty'] }] }
+  const differs = { ...pass, screens: [{ screen: 'Stats', screenshot: '/tmp/s.png', status: 'differs', differences: ['totals are above the list, mockup has them below'] }] }
+  const match = { ...pass, screens: [{ screen: 'Stats', screenshot: '/tmp/s.png', status: 'match', differences: [] }] }
+  const r = await run({ contract: { ...contract, design } }, { qcs: [differs, match] })
+  assert.match(r.prompt('build S1'), /Screen "Stats" for C1: mockup docs\/mockups\/stats\.png/)
+  assert.match(r.prompt('qc'), /Screens to compare/)
+  assert.equal(r.out.outcome, 'passed')
+  assert.ok(r.labels.includes('rebuild 1 S1'))
+  assert.match(r.prompt('rebuild 1 S1'), /totals are above the list/)
+})
+
+test('a mockup given as a link stops the run: agents cannot open it', async () => {
+  const design = { doc: 'DESIGN.md', screens: [{ screen: 'Stats', criteria: ['C1'], mockup: 'https://claude.ai/design/abc' }] }
+  const r = await run({ contract: { ...contract, design } })
+  assert.equal(r.out.outcome, 'blocked')
+  assert.match(r.out.reason, /mockup is a link/)
+})
+
+test('a flaky check does not send the change back, and is reported', async () => {
+  const flaky = { results: [{ name: 'test', command: 'run-tests', exitCode: 1, rerunExitCode: 0, outputTail: 'timeout' }], changedFiles: ['wordstats.py'] }
+  const r = await run({}, { checks: [flaky] })
+  assert.equal(r.out.outcome, 'passed')
+  assert.ok(!r.labels.some(l => l.startsWith('rebuild')))
+  assert.match(r.out.reason, /Flaky, fix the test: test/)
+  assert.match(r.prompt('checker'), /run it once more exactly as written/)
+})
+
+test('tests that pass on the base code send the spec back before any review', async () => {
+  const passOnBase = { ...green, baseRuns: [{ spec: 'S1', files: ['tests/test_wordstats.py'], command: 'pytest tests/test_wordstats.py', exitCode: 0, outputTail: '2 passed' }] }
+  const failOnBase = { ...green, baseRuns: [{ spec: 'S1', files: ['tests/test_wordstats.py'], command: 'pytest tests/test_wordstats.py', exitCode: 1, outputTail: 'AttributeError' }] }
+  const r = await run({ contract: { ...contract, testFileCommand: 'pytest {files}' } }, { checks: [passOnBase, failOnBase] })
+  assert.equal(r.out.outcome, 'passed')
+  assert.deepEqual(r.labels.slice(0, 6), ['build S1', 'qa S1', 'checker', 'rebuild 1 S1', 'qa 1 S1', 'checker (round 1)'])
+  assert.match(r.prompt('checker'), /git worktree add --detach <dir> BASE[\s\S]*Command: pytest \{files\}[\s\S]*- S1: tests\/test_wordstats\.py/)
+  assert.match(r.prompt('rebuild 1 S1'), /pass on the base code/)
+})
+
+test('without a test-file command there is no base run, and nothing is held against the spec', async () => {
+  const r = await run()
+  assert.ok(!r.prompt('checker').includes('git worktree add'))
+  assert.equal(r.out.outcome, 'passed')
+})

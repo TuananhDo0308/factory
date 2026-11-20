@@ -9,7 +9,7 @@ import { fileURLToPath } from 'node:url'
 
 const NAMES = [
   'validateSpecs', 'buildLevels', 'matchesIgnore', 'filesOutsideOwnership', 'filesOutsideAssignment',
-  'testsChanged', 'specFiles', 'evaluate', 'checkFailures', 'qcFailures', 'qcText', 'qcLine', 'resultFor', 'routeFailures', 'isolationText', 'MAX_ISOLATION_RUNS', 'failureEntries', 'runRecord', 'specText', 'contractText', 'issueText', 'openQuestions', 'questionsText', 'matchesGlob', 'protectedList', 'protectedFiles', 'PROTECTED', 'sensitiveKinds', 'assessRisk', 'routedModels', 'ROUTING', 'escalation',
+  'testsChanged', 'specFiles', 'evaluate', 'checkFailures', 'qcFailures', 'qcText', 'qcLine', 'resultFor', 'routeFailures', 'isolationText', 'MAX_ISOLATION_RUNS', 'failureEntries', 'runRecord', 'specText', 'contractText', 'issueText', 'openQuestions', 'questionsText', 'matchesGlob', 'protectedList', 'protectedFiles', 'PROTECTED', 'sensitiveKinds', 'assessRisk', 'routedModels', 'ROUTING', 'escalation', 'missingProjectSkills', 'designProblems', 'designText', 'projectNote', 'flakyChecks', 'tddTargets', 'tddFailures', 'migrationFailures', 'repoSkillsFor',
   'scratchDir', 'scratchNote', 'SKILLS', 'requiredSkills', 'missingSkills', 'skillsFor', 'skillsNote', 'optionalSkills', 'conditionalFor', 'MODELS', 'modelFor', 'modelProblems',
 ]
 

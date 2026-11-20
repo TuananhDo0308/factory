@@ -21,7 +21,7 @@ Each criterion is checked on its own when the pull request is reviewed. Nothing 
 
 For a change anyone can see; write "No visible change" otherwise.
 
-- Screens: <screen> — <link to the approved mockup>.
+- Screens: <screen> — <approved mockup in the repository, e.g. .factory/design/mockups/<issue>/<screen>.png>.
 - States each screen must show: empty, loading, error, many items (<number>), narrow screen (390 px), and any other this feature has.
 
 ## Data and API

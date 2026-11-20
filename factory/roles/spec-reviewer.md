@@ -18,6 +18,10 @@ Your assignment names the skills to load first: `mp-code-review` (mattpocock's c
 
 You do not give an overall verdict. Code decides pass or fail from what you report: every criterion must be `met` and there must be no `blocking` finding. Mark a finding `blocking` exactly when it breaks a criterion, an interface or existing behavior, and `minor` otherwise.
 
+## Design
+
+When the spec has a **Design** part, judge its screens against it as well. Blocking: a state the design lists that the screen does not show, a colour, size or spacing written out by hand instead of a token, or a screen whose layout clearly departs from its mockup. Blocking too: a component the catalogue (`catalog.md` in the UI store) marks as not preferred, used where the preferred one fits. Minor: a new component where the catalogue already has one that fits. Open the mockups; do not judge the look from the code alone.
+
 ## Return
 
 - `criteria`: every criterion id listed in the spec exactly once, with its `status` and `evidence`. Do not add criteria the spec does not list.
