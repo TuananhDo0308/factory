@@ -300,7 +300,7 @@ export function ProjectWorkspace({
   }
 
   return (
-    <div className="flex flex-1 flex-col gap-6 p-6">
+    <div className="flex min-w-0 flex-1 flex-col gap-6 p-4 sm:p-6">
       {/* Project Header */}
       <div className="flex flex-wrap items-center justify-between gap-4 border-b pb-4">
         <div className="flex items-center gap-2.5">
@@ -442,15 +442,15 @@ export function ProjectWorkspace({
       )}
 
       {/* Main Tabs */}
-      <Tabs value={activeTab} onValueChange={setActiveTab}>
-        <div className="border-b border-border/70">
-          <TabsList variant="line">
-            <TabsTrigger value="dashboard">Dashboard</TabsTrigger>
-            <TabsTrigger value="issues">Kanban Board ({issues.length})</TabsTrigger>
-            <TabsTrigger value="prototypes">
+      <Tabs value={activeTab} onValueChange={setActiveTab} className="min-w-0">
+        <div className="w-full max-w-full overflow-x-auto no-scrollbar border-b border-border/70">
+          <TabsList variant="line" className="w-max min-w-full justify-start">
+            <TabsTrigger value="dashboard" className="shrink-0">Dashboard</TabsTrigger>
+            <TabsTrigger value="issues" className="shrink-0">Kanban Board ({issues.length})</TabsTrigger>
+            <TabsTrigger value="prototypes" className="shrink-0">
               Prototypes ({board.prototypes?.length ?? 0})
             </TabsTrigger>
-            <TabsTrigger value="context">Context Lake ({contextLake.files.length})</TabsTrigger>
+            <TabsTrigger value="context" className="shrink-0">Context Lake ({contextLake.files.length})</TabsTrigger>
           </TabsList>
         </div>
 

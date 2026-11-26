@@ -58,6 +58,7 @@ export async function POST(request: NextRequest) {
   }
 
   const autoApprove = await getProjectAutoApprove(project.id);
+  const preserveStatus = body.preserveStatus === true;
   const rawDefaultStatus = str(body.defaultStatus) || undefined;
   const defaultStatus =
     project.autoDispatch && autoApprove && rawDefaultStatus === "backlog"
@@ -91,18 +92,31 @@ export async function POST(request: NextRequest) {
     const currentPhase = str(rec.currentPhase || rec.phase) || null;
     const runKey = str(rec.runKey || rec.run) || null;
 
+    const explicitStatus = str(rec.status) || undefined;
+    const existingIssue = await prisma.projectIssue.findUnique({
+      where: { projectId_issueKey: { projectId: project.id, issueKey } },
+      select: { status: true, body: true },
+    });
+
     const triage = classifyIssueTriage({
       title,
       goal,
-      body: issueBody,
+      body: issueBody || existingIssue?.body || "",
       criteriaCount: criteria.length,
       priority: rec.priority,
       complexity: rec.complexity || rec.size,
       tier: rec.tier,
       autonomy: rec.autonomy,
-      status: rec.status ?? defaultStatus,
+      status: explicitStatus ?? defaultStatus,
       engine: project.engine || "antigravity",
     });
+
+    const keepExistingStatus =
+      Boolean(existingIssue) &&
+      !explicitStatus &&
+      (preserveStatus ||
+        ["ready", "in_progress", "in_review", "passed"].includes(existingIssue!.status));
+    const updateStatus = keepExistingStatus ? existingIssue!.status : triage.status;
 
     const modelPlan =
       typeof rec.modelPlan === "object" && rec.modelPlan !== null && !Array.isArray(rec.modelPlan)
@@ -114,7 +128,7 @@ export async function POST(request: NextRequest) {
       update: {
         title: title.slice(0, 240),
         goal: goal.slice(0, 500),
-        body: issueBody,
+        body: issueBody || existingIssue?.body || "",
         criteriaJson: JSON.stringify(criteria),
         dependsOnJson: JSON.stringify(dependsOn),
         priority: triage.priority,
@@ -123,7 +137,7 @@ export async function POST(request: NextRequest) {
         tierScore: triage.tierScore,
         autonomy: triage.autonomy,
         modelPlanJson: JSON.stringify(modelPlan),
-        status: triage.status,
+        status: updateStatus,
         currentPhase: currentPhase ?? undefined,
         runKey: runKey ?? undefined,
         summary: summary ?? undefined,

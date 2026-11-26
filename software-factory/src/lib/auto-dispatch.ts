@@ -1,3 +1,5 @@
+import { existsSync, readFileSync } from "node:fs";
+import { join } from "node:path";
 import { emitFactoryEvent } from "@/lib/events";
 import {
   buildIssueClarifyPrompt,
@@ -93,6 +95,69 @@ export async function autoApproveInReviewIssues(projectId: string): Promise<numb
   return res.count;
 }
 
+type LocalClarifiedPlan = {
+  relativePath: string;
+  base?: string;
+  criteria: Array<{ id: string; text: string }>;
+  specIds: string[];
+};
+
+function loadLocalClarifiedPlan(
+  localPath: string | null | undefined,
+  issueKey: string,
+): LocalClarifiedPlan | null {
+  if (!localPath || !localPath.trim() || !issueKey.trim()) return null;
+  const root = localPath.trim();
+  const candidates = Array.from(
+    new Set([issueKey.trim(), issueKey.trim().toLowerCase(), issueKey.trim().toUpperCase()]),
+  );
+  for (const key of candidates) {
+    const rel = `.factory/plans/${key}.json`;
+    const full = join(root, rel);
+    if (!existsSync(/* turbopackIgnore: true */ full)) continue;
+    try {
+      const parsed = JSON.parse(
+        readFileSync(/* turbopackIgnore: true */ full, "utf8"),
+      ) as Record<string, unknown>;
+      const rawCriteria = Array.isArray(parsed.criteria)
+        ? parsed.criteria
+        : parsed.contract &&
+            typeof parsed.contract === "object" &&
+            Array.isArray((parsed.contract as Record<string, unknown>).criteria)
+          ? ((parsed.contract as Record<string, unknown>).criteria as unknown[])
+          : [];
+      const criteria = rawCriteria
+        .map((c, idx) => {
+          if (typeof c === "string" && c.trim()) {
+            return { id: `C${idx + 1}`, text: c.trim() };
+          }
+          if (c && typeof c === "object") {
+            const rec = c as Record<string, unknown>;
+            const text = typeof rec.text === "string" ? rec.text.trim() : "";
+            const id = typeof rec.id === "string" && rec.id.trim() ? rec.id.trim() : `C${idx + 1}`;
+            if (text) return { id, text };
+          }
+          return null;
+        })
+        .filter((c): c is { id: string; text: string } => c !== null);
+      const specIds = Array.isArray(parsed.specs)
+        ? parsed.specs
+            .map((s) =>
+              s && typeof s === "object" && typeof (s as Record<string, unknown>).id === "string"
+                ? String((s as Record<string, unknown>).id).trim()
+                : "",
+            )
+            .filter(Boolean)
+        : [];
+      const base = typeof parsed.base === "string" && parsed.base.trim() ? parsed.base.trim() : undefined;
+      return { relativePath: rel, base, criteria, specIds };
+    } catch {
+      continue;
+    }
+  }
+  return null;
+}
+
 /**
  * Builds a strict, unattended Factory Build contract prompt matching `sangtruong-rgb/factory`:
  * - Questions are NEVER asked during the build loop (every question belonged in `/factory init` or `/factory clarify`).
@@ -106,6 +171,7 @@ export function buildIssueFactoryPrompt(
   options?: {
     autoApprove?: boolean;
     targetBranch?: string;
+    localPlan?: LocalClarifiedPlan | null;
     prototypes?: Array<{
       slug: string;
       title: string;
@@ -117,7 +183,17 @@ export function buildIssueFactoryPrompt(
     }>;
   },
 ): string {
-  const criteria = safeJsonParse<Array<{ id: string; text: string }>>(issue.criteriaJson, []);
+  const dbCriteria = safeJsonParse<Array<{ id: string; text: string }>>(issue.criteriaJson, []);
+  const planCriteria = options?.localPlan?.criteria ?? [];
+  // Prefer clarified `.factory/plans/<issueKey>.json` criteria when it is present and at least as complete
+  // as the DB draft (prevents stale pre-clarify drafts from causing Planner openQuestions).
+  const criteria =
+    planCriteria.length > 0 &&
+    (dbCriteria.length === 0 ||
+      planCriteria.length >= dbCriteria.length ||
+      planCriteria.map((c) => c.text).join("").length > dbCriteria.map((c) => c.text).join("").length)
+      ? planCriteria
+      : dbCriteria;
   const lines: string[] = [`Build ready ticket ${issue.issueKey}: ${issue.title}`];
 
   if (issue.goal && issue.goal.trim() && issue.goal.trim() !== issue.title.trim()) {
@@ -154,7 +230,7 @@ export function buildIssueFactoryPrompt(
   const syncHint =
     issue.syncMode === "github" && issue.githubIssueNumber
       ? `Linked GitHub issue: #${issue.githubIssueNumber}.`
-      : `Confirmed ready ticket (${issue.issueKey}). Check \`.factory/plans/${issue.issueKey}.json\` (or \`.factory/plans/${issue.issueKey.toLowerCase()}.json\`) and reuse its approved specs if the criteria and touched files are unchanged; otherwise let the workflow planner plan directly from this contract.`;
+      : `Confirmed ready ticket (${issue.issueKey}). Check \`.factory/plans/${issue.issueKey}.json\` (or \`.factory/plans/${issue.issueKey.toLowerCase()}.json\`) — if present and its criteria match + touched files are unchanged since \`base\`, pass its \`specs\`, \`risk\`, and \`surfaces\` directly to \`run_workflow\` to skip re-running the planner; otherwise let the workflow planner plan directly from this contract.`;
 
   const targetBranch = options?.targetBranch || "main";
   const mergeDirective = options?.autoApprove
@@ -167,7 +243,7 @@ export function buildIssueFactoryPrompt(
       "- UNATTENDED FACTORY BUILD RUN — NOBODY CAN ANSWER QUESTIONS DURING THIS RUN.",
       "- Never call `ask_question` / `AskUserQuestion`, never pause waiting for user confirmation, and never switch to interactive `/factory init` or `/factory clarify`.",
       `- ${syncHint}`,
-      `- Set workflow dashboard.id to exact run id "${runKey}", dashboard.issueKey to "${issue.issueKey}", and dashboard.title to "${issue.issueKey}: ${issue.title.replace(/"/g, "'")}" so live specs, agent phases, criteria, and final outcome stream to the Kanban board.`,
+      `- Set workflow args \`runId: "${runKey}"\`, \`issueKey: "${issue.issueKey}"\`, and \`dashboard: { id: "${runKey}", issueKey: "${issue.issueKey}", title: "${issue.issueKey}: ${issue.title.replace(/"/g, "'")}", file: "<skill>/dashboard/live.js" }\` so both isolated per-run \`.factory/runs/${runKey}/state.json\` + \`events.jsonl\` and live dashboard telemetry stream to the Kanban board.`,
       "- Keep `PROTECTED` files protected (do NOT pass `allowProtected: true` unless this ticket explicitly modifies check/CI configuration).",
       "- If `.factory/project.json` or `project-check.mjs` fails, required skills or Playwright browser MCP are missing, or the planner returns `openQuestions`, STOP immediately with workflow outcome `blocked` (never guess and never exit with a prose question as if the run passed).",
       mergeDirective,
@@ -661,9 +737,11 @@ export async function launchIssueFactoryRun(params: {
   const targetBranch = project.defaultBranch || "main";
   const runKey = `${new Date().toISOString().slice(0, 10)}-${issue.issueKey.toLowerCase().replace(/[^a-z0-9]+/g, "")}-${Math.random().toString(36).slice(2, 6)}`;
   const title = `${issue.issueKey}: ${issue.title}`.slice(0, 140);
+  const localPlan = loadLocalClarifiedPlan(project.localPath, issue.issueKey);
   const prompt = buildIssueFactoryPrompt(issue, runKey, {
     autoApprove,
     targetBranch,
+    localPlan,
     prototypes: linkedPrototypes,
   });
 
@@ -678,9 +756,11 @@ export async function launchIssueFactoryRun(params: {
   const useWorktree = isSharedDispatch ? true : params.useWorktree !== false;
   const initialStatus = onlineRunner ? "queued" : "running";
 
-  const parsedCriteria = safeJsonParse<Array<{ id: string; text: string }>>(issue.criteriaJson, []).map(
-    (c) => ({ id: c.id, text: c.text, status: "" }),
-  );
+  const effectiveCriteria =
+    localPlan && localPlan.criteria.length > 0
+      ? localPlan.criteria
+      : safeJsonParse<Array<{ id: string; text: string }>>(issue.criteriaJson, []);
+  const parsedCriteria = effectiveCriteria.map((c) => ({ id: c.id, text: c.text, status: "" }));
 
   const run = await prisma.$transaction(async (tx) => {
     const createdRun = await tx.factoryRun.create({

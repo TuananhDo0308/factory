@@ -2688,7 +2688,8 @@ export function MissionControl({
                         <LockIcon className="size-3.5 shrink-0" />
                         <span>
                           Unattended Factory build loop — read-only live trace. Questions belong in{" "}
-                          <code className="font-mono">/factory init</code> or{" "}
+                          <code className="font-mono">/factory init</code>,{" "}
+                          <code className="font-mono">/ba-ticket</code>, or{" "}
                           <code className="font-mono">/factory clarify</code>.
                         </span>
                       </div>

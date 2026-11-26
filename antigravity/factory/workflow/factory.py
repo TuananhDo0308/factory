@@ -104,11 +104,20 @@ def git_changed_files(repo: str, base: str) -> Optional[List[str]]:
         return None
     seen: Set[str] = set()
     out: List[str] = []
-    for line in diff.stdout.splitlines() + untracked.stdout.splitlines():
+    for line in diff.stdout.splitlines():
         p = norm_path(line)
         if p and p not in seen:
             seen.add(p)
             out.append(p)
+    for line in untracked.stdout.splitlines():
+        p = norm_path(line)
+        if not p or p in seen:
+            continue
+        # Exclude the workflow's own runtime telemetry under `.factory/runs/`
+        if p == ".factory/runs" or p.startswith(".factory/runs/"):
+            continue
+        seen.add(p)
+        out.append(p)
     return out
 
 
@@ -665,6 +674,7 @@ FACTORY_ARTIFACTS = [
     ".factory/product.md",
     ".factory/decisions.md",
     ".factory/plans",
+    ".factory/prototypes",
     ".factory/runs",
     ".factory/design",
     ".factory/init.json",
@@ -2581,6 +2591,79 @@ def write_progress(file_path: str, record_data: Dict[str, Any], log_fn: Optional
             log_fn(f"Could not write dashboard progress {file_path}: {exc}")
 
 
+def run_state_dir(repo: str, run_id: str) -> Optional[str]:
+    """Return `<repo>/.factory/runs/<safe_run_id>` only when `repo` exists on disk."""
+    if is_blank(repo) or not os.path.isdir(repo):
+        return None
+    safe_id = re.sub(r"[^A-Za-z0-9._-]+", "-", str(run_id or "").strip()).strip("-")[:96] or "run"
+    return os.path.join(repo, ".factory", "runs", safe_id)
+
+
+def write_run_state(
+    repo: str,
+    run_id: str,
+    record_data: Dict[str, Any],
+    log_fn: Optional[Callable[..., Any]] = None,
+) -> Optional[str]:
+    """Atomically write isolated per-run progress to `<repo>/.factory/runs/<run_id>/state.json`."""
+    target_dir = run_state_dir(repo, run_id)
+    if not target_dir:
+        return None
+    target_path = os.path.join(target_dir, "state.json")
+    try:
+        os.makedirs(target_dir, exist_ok=True)
+        payload = {
+            **record_data,
+            "updatedAt": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        }
+        content = json.dumps(payload, indent=2) + "\n"
+        fd, tmp_path = tempfile.mkstemp(prefix=".state-", suffix=".tmp", dir=target_dir)
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as fh:
+                fh.write(content)
+            os.replace(tmp_path, target_path)
+        except Exception:
+            if os.path.exists(tmp_path):
+                os.unlink(tmp_path)
+            raise
+        return target_path
+    except Exception as exc:
+        if log_fn:
+            log_fn(f"Could not write per-run state {target_path}: {exc}")
+        return None
+
+
+def append_run_event(
+    repo: str,
+    run_id: str,
+    event: Dict[str, Any],
+    log_fn: Optional[Callable[..., Any]] = None,
+) -> Optional[str]:
+    """Append a structured NDJSON progress event to `<repo>/.factory/runs/<run_id>/events.jsonl`."""
+    target_dir = run_state_dir(repo, run_id)
+    if not target_dir:
+        return None
+    target_path = os.path.join(target_dir, "events.jsonl")
+    try:
+        os.makedirs(target_dir, exist_ok=True)
+        line = json.dumps(
+            {
+                "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                "runId": run_id,
+                **event,
+            },
+            separators=(",", ":"),
+        )
+        with open(target_path, "a", encoding="utf-8") as fh:
+            fh.write(line + "\n")
+            fh.flush()
+        return target_path
+    except Exception as exc:
+        if log_fn:
+            log_fn(f"Could not append run event {target_path}: {exc}")
+        return None
+
+
 # ---------------------------------------------------------------------------
 # The run
 # ---------------------------------------------------------------------------
@@ -2693,7 +2776,8 @@ async def run_factory(
     def record(phase_title: str, outcome: str) -> None:
         progress["phase"] = phase_title
         progress["outcome"] = outcome
-        if not dash:
+        has_local_repo = run_state_dir(repo, run_id) is not None
+        if not dash and not has_local_repo:
             return
         has_valid_contract = (
             isinstance(contract, dict)
@@ -2706,15 +2790,17 @@ async def run_factory(
         issue_obj = issue_arg if isinstance(issue_arg, dict) else {}
         raw_issue_num = issue_obj.get("number")
         issue_number = raw_issue_num if isinstance(raw_issue_num, int) and not isinstance(raw_issue_num, bool) else None
+        dash_dict = dash if isinstance(dash, dict) else {}
         raw_issue_key = (
-            dash.get("issueKey")
+            dash_dict.get("issueKey")
+            or input_args.get("issueKey")
             or issue_obj.get("issueKey")
             or issue_obj.get("key")
             or ""
         )
         run_meta: Dict[str, Any] = {
             "id": run_id,
-            "title": ((contract or {}).get("objective") or "") if is_blank(dash.get("title")) else dash["title"],
+            "title": ((contract or {}).get("objective") or "") if is_blank(dash_dict.get("title")) else dash_dict["title"],
             "agents": started,
             "maxRepairRounds": max_rebuilds,
         }
@@ -2726,18 +2812,62 @@ async def run_factory(
             run_meta["issueNumber"] = issue_number
         snapshot = run_record(run_meta, contract, state, progress)
         snapshot["seconds"] = max(1, round(time.monotonic() - run_started_mono))
-        write_progress(dash["file"], snapshot, log_cb)
+        if dash:
+            write_progress(dash["file"], snapshot, log_cb)
+        if has_local_repo:
+            write_run_state(repo, run_id, snapshot, log_cb)
+            append_run_event(
+                repo,
+                run_id,
+                {
+                    "event": "phase_state",
+                    "phase": phase_title,
+                    "outcome": outcome,
+                    "agents": started,
+                    "seconds": snapshot["seconds"],
+                    "reason": state.get("reason", ""),
+                },
+                log_cb,
+            )
 
     def stop(outcome: str, reason: str) -> Dict[str, Any]:
         state["outcome"] = outcome
         state["reason"] = reason
         log_cb(f"{outcome}: {reason}")
-        if (
+        has_valid_contract = (
             isinstance(contract, dict)
             and isinstance(contract.get("criteria"), list)
             and isinstance(contract.get("checks"), list)
-        ):
+        )
+        if has_valid_contract:
             record(progress["phase"], outcome)
+        elif run_state_dir(repo, run_id) is not None:
+            write_run_state(
+                repo,
+                run_id,
+                {
+                    "id": run_id,
+                    "repo": repo,
+                    "phase": progress["phase"],
+                    "outcome": outcome,
+                    "reason": reason,
+                    "agents": started,
+                    "seconds": max(1, round(time.monotonic() - run_started_mono)),
+                },
+                log_cb,
+            )
+            append_run_event(
+                repo,
+                run_id,
+                {
+                    "event": "run_stop",
+                    "phase": progress["phase"],
+                    "outcome": outcome,
+                    "reason": reason,
+                    "agents": started,
+                },
+                log_cb,
+            )
         return state
 
     runner_tier_only = False
@@ -2745,6 +2875,8 @@ async def run_factory(
     async def spawn(prompt: str, label: str, schema: Dict[str, Any], model_opts: Optional[Dict[str, str]] = None) -> Any:
         nonlocal started, runner_tier_only
         started += 1
+        call_seq = started
+        call_t0 = time.monotonic()
         full_prompt = f"{prompt}\n\n{scratch_note(scratch_dir(scratch, label))}"
         kwargs: Dict[str, Any] = {
             "prompt": full_prompt,
@@ -2752,12 +2884,40 @@ async def run_factory(
             "role": label,
         }
         requested = model_opts.get("model") if model_opts else None
+        chosen: Optional[str] = None
         if requested:
             chosen = workflow_model_tier(requested) if runner_tier_only else requested
             if chosen:
                 kwargs["model"] = chosen
+        active_model = chosen or requested or "inherit"
+        append_run_event(
+            repo,
+            run_id,
+            {
+                "event": "agent_start",
+                "seq": call_seq,
+                "role": label,
+                "model": active_model,
+                "phase": progress["phase"],
+            },
+            log_cb,
+        )
         try:
-            return await agent_fn(**kwargs)
+            res = await agent_fn(**kwargs)
+            append_run_event(
+                repo,
+                run_id,
+                {
+                    "event": "agent_done" if res is not None else "agent_error",
+                    "seq": call_seq,
+                    "role": label,
+                    "model": active_model,
+                    "phase": progress["phase"],
+                    "durationMs": max(0, round((time.monotonic() - call_t0) * 1000)),
+                },
+                log_cb,
+            )
+            return res
         except Exception as exc:
             fallback = workflow_model_tier(requested) if requested and not runner_tier_only else None
             if fallback and fallback != requested and is_model_rejection_error(exc):
@@ -2767,11 +2927,53 @@ async def run_factory(
                     f'retrying with tier "{fallback}" for this run.'
                 )
                 try:
-                    return await agent_fn(**{**kwargs, "model": fallback})
+                    res = await agent_fn(**{**kwargs, "model": fallback})
+                    append_run_event(
+                        repo,
+                        run_id,
+                        {
+                            "event": "agent_done" if res is not None else "agent_error",
+                            "seq": call_seq,
+                            "role": label,
+                            "model": fallback,
+                            "phase": progress["phase"],
+                            "durationMs": max(0, round((time.monotonic() - call_t0) * 1000)),
+                        },
+                        log_cb,
+                    )
+                    return res
                 except Exception as retry_exc:
                     log_cb(f"Agent {label} failed: {retry_exc}")
+                    append_run_event(
+                        repo,
+                        run_id,
+                        {
+                            "event": "agent_error",
+                            "seq": call_seq,
+                            "role": label,
+                            "model": fallback,
+                            "phase": progress["phase"],
+                            "durationMs": max(0, round((time.monotonic() - call_t0) * 1000)),
+                            "error": str(retry_exc)[:400],
+                        },
+                        log_cb,
+                    )
                     return None
             log_cb(f"Agent {label} failed: {exc}")
+            append_run_event(
+                repo,
+                run_id,
+                {
+                    "event": "agent_error",
+                    "seq": call_seq,
+                    "role": label,
+                    "model": active_model,
+                    "phase": progress["phase"],
+                    "durationMs": max(0, round((time.monotonic() - call_t0) * 1000)),
+                    "error": str(exc)[:400],
+                },
+                log_cb,
+            )
             return None
 
     def settle(job: Dict[str, Any], result: Optional[Dict[str, Any]], tag: Optional[Dict[str, Any]] = None) -> str:

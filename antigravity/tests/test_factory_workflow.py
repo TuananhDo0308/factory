@@ -821,6 +821,55 @@ class FactoryWorkflowTests(unittest.TestCase):
             self.assertEqual(payload["title"], "Demo")
             self.assertEqual(payload["outcome"], "passed")
 
+    def test_per_run_state_and_events_written_even_without_dashboard_arg(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            r = asyncio.run(
+                run_workflow(
+                    base_args(
+                        repo=tmp,
+                        runId="2026-11-26-i1-test",
+                        issueKey="I1",
+                    )
+                )
+            )
+            self.assertEqual(r["state"]["outcome"], "passed")
+            run_dir = Path(tmp) / ".factory" / "runs" / "2026-11-26-i1-test"
+            state_file = run_dir / "state.json"
+            events_file = run_dir / "events.jsonl"
+            self.assertTrue(state_file.exists(), "expected per-run state.json to be written")
+            self.assertTrue(events_file.exists(), "expected per-run events.jsonl to be written")
+
+            snapshot = json.loads(state_file.read_text(encoding="utf-8"))
+            self.assertEqual(snapshot["id"], "2026-11-26-i1-test")
+            self.assertEqual(snapshot["issueKey"], "I1")
+            self.assertEqual(snapshot["outcome"], "passed")
+            self.assertIn("updatedAt", snapshot)
+
+            events = [
+                json.loads(line)
+                for line in events_file.read_text(encoding="utf-8").splitlines()
+                if line.strip()
+            ]
+            event_types = [ev["event"] for ev in events]
+            self.assertIn("agent_start", event_types)
+            self.assertIn("agent_done", event_types)
+            self.assertIn("phase_state", event_types)
+            final_phase = [ev for ev in events if ev["event"] == "phase_state"][-1]
+            self.assertEqual(final_phase["outcome"], "passed")
+            self.assertTrue(
+                any(ev["event"] == "agent_start" and ev["role"] == "planner" for ev in events)
+            )
+
+    def test_factory_prototypes_ignored_as_workspace_artifacts(self):
+        self.assertEqual(
+            h.files_outside_ownership(
+                [".factory/prototypes/task-list-i1/index.html", ".factory/runs/r1/state.json", "src/a.js"],
+                [{"filesOwned": ["src/a.js"], "testFiles": []}],
+                [],
+            ),
+            [],
+        )
+
     def test_workflow_never_runs_ba_inside_build_loop(self):
         args = base_args(
             idea="Build a landing page for NovaPulse AI devtool",

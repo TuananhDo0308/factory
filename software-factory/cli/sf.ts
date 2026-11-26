@@ -10,6 +10,7 @@ import { createHash, randomBytes } from "node:crypto";
 import {
   chmodSync,
   closeSync,
+  copyFileSync,
   existsSync,
   type FSWatcher,
   lstatSync,
@@ -28,9 +29,10 @@ import {
 import { homedir, hostname, platform } from "node:os";
 import { basename, dirname, extname, join, resolve } from "node:path";
 import { createInterface } from "node:readline";
+import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 
-const CLI_VERSION = "2026.11.26";
+const CLI_VERSION = "2026.11.26-r2";
 const FACTORY_SKILLS = [
   "factory",
   "factory-init",
@@ -100,6 +102,7 @@ Usage:
   # Local Daemon (Heartbeat + Dashboard File Watcher + Web Command Executor)
   sf daemon [--name <runner-name>] [--max-concurrency <n>] [--interval-ms <n>]
             [--projects-dir <workspace-dir>] [--root <monorepo-dir>] [--allow-root <dir>] [--shared]
+  sf agents [--watch] [--all] [--json]     (alias: sf ps) Track active & recent local AI agents/subagents + tokens
 
   # Mini Context Lake MCP Server (stdio JSON-RPC 2.0)
   sf mcp
@@ -231,6 +234,7 @@ async function sendJson(
   apiPath: string,
   body: Record<string, unknown>,
   method: HttpMethod = "POST",
+  timeoutMs = 20_000,
 ): Promise<{ ok: true; data: unknown } | { ok: false; status: number; error: string }> {
   try {
     const res = await fetch(`${cfg.url}${apiPath}`, {
@@ -240,7 +244,7 @@ async function sendJson(
         authorization: `Bearer ${cfg.token}`,
       },
       body: JSON.stringify(body),
-      signal: AbortSignal.timeout(8000),
+      signal: AbortSignal.timeout(timeoutMs),
     });
     const text = await res.text();
     let data: unknown = null;
@@ -264,13 +268,280 @@ async function sendJson(
   }
 }
 
+function isRetryableHttpFailure(status: number): boolean {
+  return status === 0 || status >= 500 || status === 429;
+}
+
+async function sendJsonWithRetry(
+  cfg: SfConfig,
+  apiPath: string,
+  body: Record<string, unknown>,
+  method: HttpMethod = "POST",
+  opts?: { retries?: number; retryDelayMs?: number; spoolOnFail?: boolean; timeoutMs?: number },
+): Promise<{ ok: true; data: unknown } | { ok: false; status: number; error: string; spooled?: boolean }> {
+  const maxRetries = Math.max(0, opts?.retries ?? 2);
+  const baseDelayMs = Math.max(100, opts?.retryDelayMs ?? 600);
+  const timeoutMs = opts?.timeoutMs ?? 20_000;
+  let lastRes: { ok: false; status: number; error: string } = {
+    ok: false,
+    status: 0,
+    error: "unknown error",
+  };
+  for (let attempt = 0; attempt <= maxRetries; attempt += 1) {
+    const res = await sendJson(cfg, apiPath, body, method, timeoutMs);
+    if (res.ok) return res;
+    lastRes = res;
+    if (!isRetryableHttpFailure(res.status) || attempt === maxRetries) break;
+    await new Promise((r) => setTimeout(r, baseDelayMs * (attempt + 1)));
+  }
+  if (opts?.spoolOnFail && isRetryableHttpFailure(lastRes.status)) {
+    try {
+      writeSpool(apiPath, body, method);
+      return { ...lastRes, spooled: true };
+    } catch {
+      // Ignore spool write error.
+    }
+  }
+  return lastRes;
+}
+
 async function getJson(cfg: SfConfig, apiPath: string) {
   const res = await fetch(`${cfg.url}${apiPath}`, {
     headers: { authorization: `Bearer ${cfg.token}` },
-    signal: AbortSignal.timeout(8000),
+    signal: AbortSignal.timeout(15_000),
   });
   const data = await res.json().catch(() => null);
   return { ok: res.ok, status: res.status, data };
+}
+
+export type AgyTokenTotals = {
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens: number;
+};
+
+/**
+ * Computes the unreported token residual for Antigravity `event: "result"` without double-counting
+ * earlier turns in resumed (`agy --resume`) conversations.
+ *
+ * Antigravity's `result.usage` is cumulative across ALL turns of a `conversation_id`, whereas
+ * `step_update` `DONE` usage reports only the current turn. Subtracting `(priorCumulative + turnReported)`
+ * prevents quadratic O(N^2) inflation across multi-turn Clarify/Init/BA sessions.
+ */
+export function computeAgyResultTokenDelta(params: {
+  resultUsage: AgyTokenTotals;
+  priorCumulative: AgyTokenTotals;
+  turnReported: AgyTokenTotals;
+}): {
+  remIn: number;
+  remOut: number;
+  remCache: number;
+  nextCumulative: AgyTokenTotals;
+} {
+  const alreadyIn = params.priorCumulative.inputTokens + params.turnReported.inputTokens;
+  const alreadyOut = params.priorCumulative.outputTokens + params.turnReported.outputTokens;
+  const alreadyCache = params.priorCumulative.cacheReadTokens + params.turnReported.cacheReadTokens;
+
+  const remIn = Math.max(0, params.resultUsage.inputTokens - alreadyIn);
+  const remOut = Math.max(0, params.resultUsage.outputTokens - alreadyOut);
+  const remCache = Math.max(0, params.resultUsage.cacheReadTokens - alreadyCache);
+
+  return {
+    remIn,
+    remOut,
+    remCache,
+    nextCumulative: {
+      inputTokens: Math.max(alreadyIn, params.resultUsage.inputTokens),
+      outputTokens: Math.max(alreadyOut, params.resultUsage.outputTokens),
+      cacheReadTokens: Math.max(alreadyCache, params.resultUsage.cacheReadTokens),
+    },
+  };
+}
+
+export function sanitizeRunDirKey(runKey: string): string {
+  return runKey.replace(/[^A-Za-z0-9._-]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 96) || "run";
+}
+
+/**
+ * Copies uncommitted `.factory/{plans,prototypes,design/mockups}` artifacts from the main checkout
+ * into an isolated git worktree so unattended Factory builds see plans & prototypes written by
+ * interactive `/factory clarify` or `/ba-ticket` sessions on `main`.
+ */
+export function copyUncommittedFactoryArtifacts(baseCwd: string, workCwd: string): string[] {
+  const absBase = resolve(baseCwd);
+  const absWork = resolve(workCwd);
+  if (absBase === absWork || !existsSync(absBase) || !existsSync(absWork)) return [];
+
+  const relRoots = [".factory/plans", ".factory/prototypes", ".factory/design/mockups"];
+  const copied: string[] = [];
+
+  function syncDirRecursive(srcDir: string, dstDir: string, relPrefix: string) {
+    if (!existsSync(srcDir)) return;
+    let entries: string[];
+    try {
+      entries = readdirSync(srcDir);
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      if (entry === ".DS_Store") continue;
+      const srcPath = join(srcDir, entry);
+      const dstPath = join(dstDir, entry);
+      const relPath = `${relPrefix}/${entry}`;
+      let srcStat;
+      try {
+        srcStat = lstatSync(srcPath);
+      } catch {
+        continue;
+      }
+      if (srcStat.isSymbolicLink()) continue;
+      if (srcStat.isDirectory()) {
+        syncDirRecursive(srcPath, dstPath, relPath);
+      } else if (srcStat.isFile()) {
+        let shouldCopy = !existsSync(dstPath);
+        if (!shouldCopy) {
+          try {
+            const dstStat = statSync(dstPath);
+            if (srcStat.mtimeMs > dstStat.mtimeMs + 10) shouldCopy = true;
+          } catch {
+            shouldCopy = true;
+          }
+        }
+        if (shouldCopy) {
+          try {
+            mkdirSync(dirname(dstPath), { recursive: true });
+            copyFileSync(srcPath, dstPath);
+            copied.push(relPath);
+          } catch {
+            // Skip unreadable artifact file.
+          }
+        }
+      }
+    }
+  }
+
+  for (const rel of relRoots) {
+    syncDirRecursive(join(absBase, rel), join(absWork, rel), rel);
+  }
+  return copied;
+}
+
+export function readPerRunStateFile(
+  searchDirs: string[],
+  runKey: string,
+): {
+  outcome?: string;
+  reason?: string;
+  mergeDecision?: string;
+  risk?: string;
+  record: Record<string, unknown>;
+  path: string;
+} | null {
+  if (!runKey.trim()) return null;
+  const safeId = sanitizeRunDirKey(runKey);
+  const uniqueDirs = Array.from(new Set(searchDirs.filter((d) => Boolean(d && d.trim())).map((d) => resolve(d))));
+  for (const dir of uniqueDirs) {
+    const candidate = join(dir, ".factory", "runs", safeId, "state.json");
+    if (!existsSync(candidate)) continue;
+    try {
+      const parsed = JSON.parse(readFileSync(candidate, "utf8")) as Record<string, unknown>;
+      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) continue;
+      const outcome = typeof parsed.outcome === "string" ? parsed.outcome.trim() : undefined;
+      const reason = typeof parsed.reason === "string" ? parsed.reason.trim() : undefined;
+      const mergeObj =
+        parsed.merge && typeof parsed.merge === "object"
+          ? (parsed.merge as Record<string, unknown>)
+          : null;
+      const mergeDecision =
+        mergeObj && typeof mergeObj.decision === "string" ? mergeObj.decision.trim() : undefined;
+      const riskObj =
+        parsed.risk && typeof parsed.risk === "object"
+          ? (parsed.risk as Record<string, unknown>)
+          : null;
+      const risk = riskObj && typeof riskObj.level === "string" ? riskObj.level.trim() : undefined;
+      return { outcome, reason, mergeDecision, risk, record: parsed, path: candidate };
+    } catch {
+      // Ignore partial write.
+    }
+  }
+  return null;
+}
+
+export function readLocalPlanForSync(
+  repoDir: string,
+  issueKeyHint: string | undefined,
+  modifiedAfterMs: number,
+): Array<Record<string, unknown>> {
+  const plansDir = join(resolve(repoDir), ".factory", "plans");
+  if (!existsSync(plansDir)) return [];
+  let files: string[];
+  try {
+    files = readdirSync(plansDir).filter((f) => f.endsWith(".json"));
+  } catch {
+    return [];
+  }
+  const results: Array<Record<string, unknown>> = [];
+  const normalizedHint = (issueKeyHint || "").trim().toUpperCase();
+  for (const file of files) {
+    const fullPath = join(plansDir, file);
+    const stem = file.slice(0, -5);
+    const matchesHint = Boolean(normalizedHint && stem.toUpperCase() === normalizedHint);
+    let mtimeMs = 0;
+    try {
+      mtimeMs = statSync(fullPath).mtimeMs;
+    } catch {
+      continue;
+    }
+    if (!matchesHint && mtimeMs < modifiedAfterMs - 1500) continue;
+    try {
+      const parsed = JSON.parse(readFileSync(fullPath, "utf8")) as Record<string, unknown>;
+      const rawCriteria = Array.isArray(parsed.criteria)
+        ? parsed.criteria
+        : parsed.contract &&
+            typeof parsed.contract === "object" &&
+            Array.isArray((parsed.contract as Record<string, unknown>).criteria)
+          ? ((parsed.contract as Record<string, unknown>).criteria as unknown[])
+          : [];
+      const criteria = rawCriteria
+        .map((c, idx) => {
+          if (typeof c === "string" && c.trim()) return { id: `C${idx + 1}`, text: c.trim() };
+          if (c && typeof c === "object") {
+            const rec = c as Record<string, unknown>;
+            const text = typeof rec.text === "string" ? rec.text.trim() : "";
+            const id = typeof rec.id === "string" && rec.id.trim() ? rec.id.trim() : `C${idx + 1}`;
+            if (text) return { id, text };
+          }
+          return null;
+        })
+        .filter((c): c is { id: string; text: string } => c !== null);
+      if (criteria.length === 0) continue;
+      const key =
+        (typeof parsed.issueKey === "string" && parsed.issueKey.trim()) ||
+        (normalizedHint && matchesHint ? normalizedHint : stem.toUpperCase());
+      const objective =
+        (typeof parsed.objective === "string" && parsed.objective.trim()) ||
+        (parsed.contract &&
+        typeof parsed.contract === "object" &&
+        typeof (parsed.contract as Record<string, unknown>).objective === "string"
+          ? String((parsed.contract as Record<string, unknown>).objective).trim()
+          : "");
+      const title =
+        (typeof parsed.title === "string" && parsed.title.trim()) ||
+        objective.slice(0, 120) ||
+        `Ticket ${key}`;
+      const specCount = Array.isArray(parsed.specs) ? parsed.specs.length : 0;
+      results.push({
+        issueKey: key,
+        title,
+        goal: objective || title,
+        criteria,
+        summary: `Clarified plan synced from .factory/plans/${file} (${criteria.length} criteria${specCount > 0 ? `, ${specCount} spec(s)` : ""})`,
+      });
+    } catch {
+      // Ignore invalid JSON.
+    }
+  }
+  return results;
 }
 
 async function flushSpool(cfg: SfConfig): Promise<{ sent: number; remaining: number }> {
@@ -1229,14 +1500,49 @@ function readNewTextFromOffset(
   }
 }
 
+function readRootTranscriptUsage(convId: string): AgyTokenTotals {
+  const totals: AgyTokenTotals = { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0 };
+  if (!convId.trim()) return totals;
+  const brainDir = resolveAgyBrainDir(convId.trim().toLowerCase());
+  if (!brainDir) return totals;
+  const transcriptPath = join(brainDir, ".system_generated", "logs", "transcript.jsonl");
+  if (!existsSync(transcriptPath)) return totals;
+  try {
+    const raw = readFileSync(transcriptPath, "utf8");
+    for (const line of raw.split("\n")) {
+      const trimmed = line.trim();
+      if (!trimmed || !trimmed.startsWith("{")) continue;
+      try {
+        const entry = JSON.parse(trimmed) as Record<string, unknown>;
+        if (entry.type !== "PLANNER_RESPONSE") continue;
+        totals.inputTokens += Number(entry.input_tokens || 0);
+        totals.outputTokens += Number(entry.output_tokens || 0);
+        totals.cacheReadTokens += Number(entry.cache_read_tokens || 0);
+      } catch {
+        // Ignore malformed line.
+      }
+    }
+  } catch {
+    // Ignore unreadable transcript.
+  }
+  return totals;
+}
+
 function createAgySubagentTracker(opts: {
   runKey: string;
   baseCtx: Record<string, unknown>;
   defaultPhase: string;
   enqueuePost: (path: string, body: Record<string, unknown>) => void;
   onActivity?: () => void;
+  onLog?: (msg: string) => void;
 }) {
-  const { runKey, baseCtx, defaultPhase, enqueuePost, onActivity } = opts;
+  const { runKey, baseCtx, defaultPhase, enqueuePost, onActivity, onLog } = opts;
+
+  type BgTaskState = {
+    desc: string;
+    logPath?: string;
+    lastSize: number;
+  };
 
   type TrackedConv = {
     convId: string;
@@ -1254,8 +1560,13 @@ function createAgySubagentTracker(opts: {
     lastSentModel: string;
     lastSentSummary: string;
     pendingSubagentSpawns: Array<{ role: string; typeName: string }>;
-    runningBgTasks: Map<number, string>;
+    runningBgTasks: Map<number, BgTaskState>;
     stepsEmitted: number;
+    inputTokens: number;
+    outputTokens: number;
+    cacheReadTokens: number;
+    costUsd: number;
+    loggedDone: boolean;
   };
 
   let rootConvId: string | null = null;
@@ -1318,6 +1629,13 @@ function createAgySubagentTracker(opts: {
           existing.summary = summaryText;
         }
         flushAgentUpdate(existing);
+        if ((existing.status === "passed" || existing.status === "failed") && !existing.loggedDone) {
+          existing.loggedDone = true;
+          const icon = existing.status === "passed" ? "✓" : "✗";
+          onLog?.(
+            `${icon} subagent ${existing.meta.name} (${existing.status}${existing.model ? ` · ${existing.model}` : ""}, ${existing.stepsEmitted} steps, in=${existing.inputTokens.toLocaleString()} out=${existing.outputTokens.toLocaleString()})`,
+          );
+        }
       }
       return existing;
     }
@@ -1339,11 +1657,19 @@ function createAgySubagentTracker(opts: {
       pendingSubagentSpawns: [],
       runningBgTasks: new Map(),
       stepsEmitted: 0,
+      inputTokens: 0,
+      outputTokens: 0,
+      cacheReadTokens: 0,
+      costUsd: 0,
+      loggedDone: initialStatus !== "working",
     };
     convs.set(convId, created);
     if (!isRoot) {
       flushAgentUpdate(created, true);
       onActivity?.();
+      onLog?.(
+        `+ subagent ${meta.name} (${meta.role}${meta.phase ? ` · ${meta.phase}` : ""}) conv=${convId.slice(0, 8)}`,
+      );
     }
     return created;
   }
@@ -1519,8 +1845,56 @@ function createAgySubagentTracker(opts: {
         }
       }
 
-      // Root's own steps are already streamed live from `agy --output-format stream-json`.
-      if (st.isRoot) continue;
+      // Root's own tool calls & responses are streamed live from `agy --output-format stream-json`,
+      // EXCEPT `thinking` (stream-json omits reasoning text) and `SYSTEM_MESSAGE` subagent completions.
+      if (st.isRoot) {
+        if (entryType === "PLANNER_RESPONSE") {
+          const rootThinking = typeof entry.thinking === "string" ? entry.thinking.trim() : "";
+          if (rootThinking) {
+            sawActivity = true;
+            enqueuePost("/api/v1/runs/step", {
+              run: runKey,
+              ...baseCtx,
+              idempotent: true,
+              keepAgentStatus: true,
+              createdAt: entryCreatedAt,
+              step: `think-root-${shortId}-${stepIdx}`,
+              phase: currentWorkflowPhase,
+              status: "info",
+              role: "orchestrator",
+              agent: "orchestrator",
+              model: typeof entry.model === "string" && entry.model ? entry.model : undefined,
+              label: "Thinking",
+              summary: rootThinking.slice(0, 4000),
+              data: {
+                kind: "thinking",
+                subagentConvId: st.convId,
+                agentName: "Session Orchestrator",
+              },
+            });
+          }
+        } else if (entryType === "SYSTEM_MESSAGE") {
+          const subSenderMatch =
+            /\bsender=([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})(?!\/task-)/i.exec(
+              content,
+            );
+          if (subSenderMatch?.[1]) {
+            const childSt = convs.get(subSenderMatch[1].toLowerCase());
+            if (childSt && !childSt.isRoot && childSt.status === "working") {
+              childSt.status = "passed";
+              if (childSt.activity.startsWith("Spawned")) childSt.activity = "Completed";
+              flushAgentUpdate(childSt);
+              if (!childSt.loggedDone) {
+                childSt.loggedDone = true;
+                onLog?.(
+                  `✓ subagent ${childSt.meta.name} (passed${childSt.model ? ` · ${childSt.model}` : ""}, ${childSt.stepsEmitted} steps, in=${childSt.inputTokens.toLocaleString()} out=${childSt.outputTokens.toLocaleString()})`,
+                );
+              }
+            }
+          }
+        }
+        continue;
+      }
       sawActivity = true;
 
       if (entryType === "PLANNER_RESPONSE") {
@@ -1530,6 +1904,10 @@ function createAgySubagentTracker(opts: {
         const outTok = Number(entry.output_tokens || 0);
         const cacheTok = Number(entry.cache_read_tokens || 0);
         const costUsd = estimateCostUsd("antigravity", st.model || "hydrogen", inTok, outTok, cacheTok);
+        st.inputTokens += inTok;
+        st.outputTokens += outTok;
+        st.cacheReadTokens += cacheTok;
+        st.costUsd += costUsd;
         let usageAttributed = false;
 
         const takeUsage = () => {
@@ -1668,14 +2046,16 @@ function createAgySubagentTracker(opts: {
           const logMatch = /Task logs are available at:\s*file:\/\/(\S+)/i.exec(content);
           const taskLogPath = logMatch?.[1];
           let logTail = "";
+          let logSize = 0;
           if (taskLogPath && existsSync(taskLogPath)) {
             try {
-              logTail = readFileSync(taskLogPath, "utf8").slice(-2000);
+              logSize = statSync(taskLogPath).size;
+              logTail = readFileSync(taskLogPath, "utf8").slice(-3000);
             } catch {
               // Ignore transient read error.
             }
           }
-          st.runningBgTasks.set(stepIdx, taskDesc);
+          st.runningBgTasks.set(stepIdx, { desc: taskDesc, logPath: taskLogPath, lastSize: logSize });
           st.activity = `Running: ${taskDesc}`.slice(0, 150);
           st.stepsEmitted += 1;
           enqueuePost("/api/v1/runs/step", {
@@ -1706,7 +2086,15 @@ function createAgySubagentTracker(opts: {
         } else if (content.includes("Task is complete.")) {
           st.status = "passed";
           st.activity = "Completed";
-          for (const [taskIdx, taskDesc] of st.runningBgTasks) {
+          for (const [taskIdx, taskState] of st.runningBgTasks) {
+            let finalTail = "";
+            if (taskState.logPath && existsSync(taskState.logPath)) {
+              try {
+                finalTail = readFileSync(taskState.logPath, "utf8").slice(-3000);
+              } catch {
+                // Ignore read error.
+              }
+            }
             enqueuePost("/api/v1/runs/step", {
               run: runKey,
               ...baseCtx,
@@ -1721,16 +2109,24 @@ function createAgySubagentTracker(opts: {
               agent: st.meta.agentKey,
               agentName: st.meta.name,
               model: st.model || undefined,
-              label: `Finished: ${taskDesc}`.slice(0, 155),
+              label: `Finished: ${taskState.desc}`.slice(0, 155),
               data: {
                 kind: "tool_call",
                 tool: "run_command",
+                output: finalTail || undefined,
+                taskLogPath: taskState.logPath,
                 subagentConvId: st.convId,
                 agentName: st.meta.name,
               },
             });
           }
           st.runningBgTasks.clear();
+          if (!st.loggedDone) {
+            st.loggedDone = true;
+            onLog?.(
+              `✓ subagent ${st.meta.name} (passed${st.model ? ` · ${st.model}` : ""}, ${st.stepsEmitted} steps, in=${st.inputTokens.toLocaleString()} out=${st.outputTokens.toLocaleString()})`,
+            );
+          }
         }
         continue;
       }
@@ -1748,15 +2144,29 @@ function createAgySubagentTracker(opts: {
             childSt.status = "passed";
             if (childSt.activity.startsWith("Spawned")) childSt.activity = "Completed";
             flushAgentUpdate(childSt);
+            if (!childSt.loggedDone) {
+              childSt.loggedDone = true;
+              onLog?.(
+                `✓ subagent ${childSt.meta.name} (passed${childSt.model ? ` · ${childSt.model}` : ""}, ${childSt.stepsEmitted} steps, in=${childSt.inputTokens.toLocaleString()} out=${childSt.outputTokens.toLocaleString()})`,
+              );
+            }
           }
         }
         if (st.runningBgTasks.size > 0) {
           const senderMatch = new RegExp(`sender=${st.convId}/task-(\\d+)`, "i").exec(content);
           if (senderMatch?.[1]) {
             const taskIdx = Number(senderMatch[1]);
-            const taskDesc = st.runningBgTasks.get(taskIdx);
-            if (taskDesc) {
+            const taskState = st.runningBgTasks.get(taskIdx);
+            if (taskState) {
               st.runningBgTasks.delete(taskIdx);
+              let finalTail = "";
+              if (taskState.logPath && existsSync(taskState.logPath)) {
+                try {
+                  finalTail = readFileSync(taskState.logPath, "utf8").slice(-3000);
+                } catch {
+                  // Ignore read error.
+                }
+              }
               enqueuePost("/api/v1/runs/step", {
                 run: runKey,
                 ...baseCtx,
@@ -1772,10 +2182,12 @@ function createAgySubagentTracker(opts: {
                 agent: st.meta.agentKey,
                 agentName: st.meta.name,
                 model: st.model || undefined,
-                label: `Finished: ${taskDesc}`.slice(0, 155),
+                label: `Finished: ${taskState.desc}`.slice(0, 155),
                 data: {
                   kind: "tool_call",
                   tool: "run_command",
+                  output: finalTail || undefined,
+                  taskLogPath: taskState.logPath,
                   subagentConvId: st.convId,
                   agentName: st.meta.name,
                 },
@@ -1793,6 +2205,53 @@ function createAgySubagentTracker(opts: {
     return discoveredAny;
   }
 
+  function pollRunningBgTasks(st: TrackedConv) {
+    if (st.isRoot || st.runningBgTasks.size === 0) return;
+    const shortId = st.convId.slice(0, 8);
+    for (const [taskIdx, taskState] of st.runningBgTasks) {
+      if (!taskState.logPath || !existsSync(taskState.logPath)) continue;
+      let size = 0;
+      try {
+        size = statSync(taskState.logPath).size;
+      } catch {
+        continue;
+      }
+      if (size <= taskState.lastSize) continue;
+      taskState.lastSize = size;
+      let logTail = "";
+      try {
+        logTail = readFileSync(taskState.logPath, "utf8").slice(-3000);
+      } catch {
+        continue;
+      }
+      onActivity?.();
+      enqueuePost("/api/v1/runs/step", {
+        run: runKey,
+        ...baseCtx,
+        upsert: true,
+        idempotent: true,
+        keepAgentStatus: true,
+        step: `bgtask-${shortId}-${taskIdx}`,
+        phase: st.meta.phase || currentWorkflowPhase,
+        status: "started",
+        role: st.meta.role,
+        spec: st.meta.specId,
+        agent: st.meta.agentKey,
+        agentName: st.meta.name,
+        model: st.model || undefined,
+        label: `Running: ${taskState.desc}`.slice(0, 155),
+        data: {
+          kind: "tool_call",
+          tool: "run_command",
+          output: logTail || undefined,
+          taskLogPath: taskState.logPath,
+          subagentConvId: st.convId,
+          agentName: st.meta.name,
+        },
+      });
+    }
+  }
+
   function syncOnce() {
     if (!rootConvId || !runKey) return;
     for (let pass = 0; pass < 4; pass += 1) {
@@ -1801,6 +2260,7 @@ function createAgySubagentTracker(opts: {
         if (!st.brainDir) st.brainDir = resolveAgyBrainDir(st.convId);
         if (scanTaskLogs(st)) discovered = true;
         if (drainTranscript(st)) discovered = true;
+        pollRunningBgTasks(st);
       }
       if (!discovered) break;
     }
@@ -1881,6 +2341,10 @@ function createAgySubagentTracker(opts: {
         status: st.status,
         model: st.model,
         stepsEmitted: st.stepsEmitted,
+        inputTokens: st.inputTokens,
+        outputTokens: st.outputTokens,
+        cacheReadTokens: st.cacheReadTokens,
+        costUsd: st.costUsd,
       }));
     const stepsEmitted = agents.reduce((acc, a) => acc + a.stepsEmitted, 0);
     return { subagentCount: agents.length, stepsEmitted, agents };
@@ -2912,17 +3376,18 @@ async function cmdDaemon(args: string[]): Promise<number> {
     runKey: string,
     mode: string,
     branch?: string,
-  ): { workCwd: string; worktreeBranch?: string; created: boolean } {
+  ): { workCwd: string; worktreeBranch?: string; created: boolean; copiedFactoryFiles: string[] } {
     if (!runKey || !existsSync(join(baseCwd, ".git"))) {
-      return { workCwd: baseCwd, created: false };
+      return { workCwd: baseCwd, created: false, copiedFactoryFiles: [] };
     }
     const safeKey = runKey.replace(/[^a-zA-Z0-9._-]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 48);
-    if (!safeKey) return { workCwd: baseCwd, created: false };
+    if (!safeKey) return { workCwd: baseCwd, created: false, copiedFactoryFiles: [] };
     const worktreesRoot = join(baseCwd, ".agents", "worktrees");
     const worktreeDir = join(worktreesRoot, `${mode}-${safeKey}`);
     const worktreeBranch = `factory/${safeKey}`;
     if (existsSync(worktreeDir)) {
-      return { workCwd: worktreeDir, worktreeBranch, created: false };
+      const copiedFactoryFiles = copyUncommittedFactoryArtifacts(baseCwd, worktreeDir);
+      return { workCwd: worktreeDir, worktreeBranch, created: false, copiedFactoryFiles };
     }
     try {
       mkdirSync(worktreesRoot, { recursive: true });
@@ -2941,9 +3406,10 @@ async function cmdDaemon(args: string[]): Promise<number> {
           { stdio: "ignore", timeout: 15000 },
         );
       }
-      return { workCwd: worktreeDir, worktreeBranch, created: true };
+      const copiedFactoryFiles = copyUncommittedFactoryArtifacts(baseCwd, worktreeDir);
+      return { workCwd: worktreeDir, worktreeBranch, created: true, copiedFactoryFiles };
     } catch {
-      return { workCwd: baseCwd, created: false };
+      return { workCwd: baseCwd, created: false, copiedFactoryFiles: [] };
     }
   }
 
@@ -3006,6 +3472,11 @@ async function cmdDaemon(args: string[]): Promise<number> {
     autonomy: string;
     mode: string;
     cwd: string;
+    issueKey?: string;
+    reportedInputTokens?: number;
+    reportedOutputTokens?: number;
+    reportedCacheReadTokens?: number;
+    updatedAt?: string;
   };
 
   const sessionsFile = join(sfDir(), "sessions.json");
@@ -3076,7 +3547,20 @@ async function cmdDaemon(args: string[]): Promise<number> {
     engine: "antigravity" | "claude",
     runKey: string,
     startedAfterMs: number,
+    searchDirs: string[] = [],
   ): { outcome?: string; reason?: string; mergeDecision?: string; risk?: string } | null {
+    // 0. Isolated per-run state.json written by workflow/factory.py takes top precedence
+    //    so concurrent runs or omitted dashboard.file never lose or overwrite their verdict.
+    const perRun = readPerRunStateFile(searchDirs, runKey);
+    if (perRun && perRun.outcome) {
+      return {
+        outcome: perRun.outcome,
+        reason: perRun.reason,
+        mergeDecision: perRun.mergeDecision,
+        risk: perRun.risk,
+      };
+    }
+
     const extractFields = (rec: Record<string, unknown>) => {
       const outcome = typeof rec.outcome === "string" ? rec.outcome.trim() : undefined;
       const reason = typeof rec.reason === "string" ? rec.reason.trim() : undefined;
@@ -3680,10 +4164,11 @@ async function cmdDaemon(args: string[]): Promise<number> {
     repoRoot?: string;
     projectId?: string;
     missionId?: string;
+    issueKey?: string;
     spec: ReturnType<typeof buildCliSpawnSpec>;
     isResume?: boolean;
   }) {
-    const { cmdId, runKey, cwd, repoRoot, projectId, missionId, spec, isResume } = params;
+    const { cmdId, runKey, cwd, repoRoot, projectId, missionId, issueKey, spec, isResume } = params;
     const basePhase =
       spec.mode === "ba"
         ? "BA Planning"
@@ -3728,6 +4213,23 @@ async function cmdDaemon(args: string[]): Promise<number> {
       }).catch(() => {});
     }
 
+    const prevSavedSession = runKey ? sessionMap[runKey] : undefined;
+    let activeConvId = prevSavedSession?.sessionId || "";
+    let priorConvUsage: AgyTokenTotals = { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0 };
+    if (isResume && spec.engine === "antigravity" && prevSavedSession?.sessionId) {
+      if (typeof prevSavedSession.reportedInputTokens === "number") {
+        priorConvUsage = {
+          inputTokens: prevSavedSession.reportedInputTokens,
+          outputTokens: prevSavedSession.reportedOutputTokens || 0,
+          cacheReadTokens: prevSavedSession.reportedCacheReadTokens || 0,
+        };
+      } else {
+        // Backfill prior cumulative usage from existing root transcript before spawning `--resume`
+        // so upgraded daemons never double-count older multi-turn sessions either.
+        priorConvUsage = readRootTranscriptUsage(prevSavedSession.sessionId);
+      }
+    }
+
     const runStartedAtMs = Date.now();
     const child = spawn(spec.binary, spec.args, {
       cwd,
@@ -3756,16 +4258,145 @@ async function cmdDaemon(args: string[]): Promise<number> {
     const agyLastFlushMs = new Map<number, number>();
     const agyLastFlushLen = new Map<number, number>();
     const agyStreamingInFlight = new Set<number>();
+    let lastPostWarnMs = 0;
 
-    // Strict FIFO chain for all non-coalesced posts so step sequence & finalization never race.
+    // Strict FIFO chain for all non-coalesced posts with retry + spool fallback so transient
+    // network timeouts or serverless cold starts never drop steps or leave runs stuck.
     let postChain: Promise<unknown> = Promise.resolve();
     function enqueuePost(path: string, body: Record<string, unknown>) {
       postChain = postChain
         .then(async () => {
-          const res = await sendJson(cfg!, path, body);
-          if (res.ok) lastServerHeartbeatMs = Date.now();
+          const res = await sendJsonWithRetry(cfg!, path, body, "POST", {
+            retries: 2,
+            retryDelayMs: 500,
+            spoolOnFail: true,
+          });
+          if (res.ok) {
+            lastServerHeartbeatMs = Date.now();
+          } else {
+            const now = Date.now();
+            if (now - lastPostWarnMs > 10_000) {
+              lastPostWarnMs = now;
+              console.error(
+                `sf daemon [${runKey || "run"}]: POST ${path} failed (${res.error})${res.spooled ? " — spooled for retry" : ""}`,
+              );
+            }
+          }
         })
         .catch(() => {});
+    }
+
+    // Tail isolated per-run progress files written by `workflow/factory.py`:
+    // `<cwd|repoRoot>/.factory/runs/<safeRunKey>/{state.json,events.jsonl}`
+    const perRunSearchDirs = Array.from(new Set([resolve(cwd), resolve(resolvedRepo)]));
+    const perRunSafeId = runKey ? sanitizeRunDirKey(runKey) : "";
+    let perRunStateLastMtime = 0;
+    let perRunEventsOffset = 0;
+    let perRunEventsRemainder = "";
+    let perRunEventsPath = "";
+    const perRunActiveAgents = new Set<string>();
+
+    function syncPerRunProgress() {
+      if (!runKey || !perRunSafeId) return;
+      for (const dir of perRunSearchDirs) {
+        const statePath = join(dir, ".factory", "runs", perRunSafeId, "state.json");
+        if (existsSync(statePath)) {
+          try {
+            const st = statSync(statePath);
+            if (st.mtimeMs > perRunStateLastMtime) {
+              const parsed = JSON.parse(readFileSync(statePath, "utf8")) as Record<string, unknown>;
+              if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+                perRunStateLastMtime = st.mtimeMs;
+                lastStreamActivityMs = Date.now();
+                enqueuePost("/api/v1/runs/sync-live", {
+                  engine: spec.engine,
+                  source: "live",
+                  ...baseCtx,
+                  records: [parsed],
+                });
+              }
+            }
+          } catch {
+            // Ignore partial/transient write.
+          }
+        }
+
+        const eventsPath = join(dir, ".factory", "runs", perRunSafeId, "events.jsonl");
+        if (!existsSync(eventsPath)) continue;
+        if (perRunEventsPath && perRunEventsPath !== eventsPath) continue;
+        perRunEventsPath = eventsPath;
+        const { text, nextOffset } = readNewTextFromOffset(eventsPath, perRunEventsOffset);
+        if (!text) continue;
+        perRunEventsOffset = nextOffset;
+        const combined = perRunEventsRemainder + text;
+        const lines = combined.split("\n");
+        perRunEventsRemainder = lines.pop() ?? "";
+        for (const rawLine of lines) {
+          const trimmed = rawLine.trim();
+          if (!trimmed || !trimmed.startsWith("{")) continue;
+          let ev: Record<string, unknown>;
+          try {
+            ev = JSON.parse(trimmed) as Record<string, unknown>;
+          } catch {
+            continue;
+          }
+          const evType = String(ev.event || "");
+          const evPhase = String(ev.phase || basePhase);
+          const evRole = String(ev.role || "");
+          const evModel = String(ev.model || "");
+          const evSeq = Number(ev.seq || 0);
+          lastStreamActivityMs = Date.now();
+
+          if (evType === "agent_start" && evRole) {
+            perRunActiveAgents.add(evRole);
+            const meta = parseAgyWorkflowAgentMeta(evRole, evPhase, `wf-${evSeq}`);
+            console.log(
+              `sf daemon [${runKey}]: ▶ [${evPhase}] ${meta.name}${evModel ? ` (${evModel})` : ""}`,
+            );
+            enqueuePost("/api/v1/runs/agent", {
+              run: runKey,
+              ...baseCtx,
+              agentKey: meta.agentKey,
+              name: meta.name,
+              preserveExistingName: meta.preserveExistingName,
+              role: meta.role,
+              specId: meta.specId,
+              level: meta.level,
+              model: evModel && evModel !== "inherit" ? evModel : undefined,
+              status: "working",
+              activity: `${evPhase}: running ${evRole}`.slice(0, 150),
+            });
+          } else if ((evType === "agent_done" || evType === "agent_error") && evRole) {
+            perRunActiveAgents.delete(evRole);
+            const meta = parseAgyWorkflowAgentMeta(evRole, evPhase, `wf-${evSeq}`);
+            const durSec = Math.max(0, Math.round(Number(ev.durationMs || 0) / 1000));
+            const icon = evType === "agent_done" ? "✓" : "✗";
+            console.log(
+              `sf daemon [${runKey}]: ${icon} [${evPhase}] ${meta.name} (${durSec}s${ev.error ? ` · ${String(ev.error).slice(0, 80)}` : ""})`,
+            );
+            enqueuePost("/api/v1/runs/agent", {
+              run: runKey,
+              ...baseCtx,
+              agentKey: meta.agentKey,
+              name: meta.name,
+              preserveExistingName: meta.preserveExistingName,
+              role: meta.role,
+              specId: meta.specId,
+              level: meta.level,
+              model: evModel && evModel !== "inherit" ? evModel : undefined,
+              status: evType === "agent_done" ? "passed" : "failed",
+              activity: evType === "agent_done" ? `Completed (${durSec}s)` : `Failed (${durSec}s)`,
+              summary: typeof ev.error === "string" && ev.error ? ev.error.slice(0, 500) : undefined,
+            });
+          } else if (evType === "phase_state") {
+            const evOutcome = String(ev.outcome || "running");
+            const evAgents = Number(ev.agents || 0);
+            console.log(
+              `sf daemon [${runKey}]: ◆ phase=${evPhase} outcome=${evOutcome} agents=${evAgents}`,
+            );
+          }
+        }
+      }
     }
 
     // Track every subagent spawned by `run_workflow` or `invoke_subagent` (recursively)
@@ -3779,6 +4410,9 @@ async function cmdDaemon(args: string[]): Promise<number> {
             enqueuePost,
             onActivity: () => {
               lastStreamActivityMs = Date.now();
+            },
+            onLog: (msg) => {
+              console.log(`sf daemon [${runKey}]: ${msg}`);
             },
           })
         : null;
@@ -3808,21 +4442,23 @@ async function cmdDaemon(args: string[]): Promise<number> {
       return `Writing response… (${charCount} chars)`;
     }
 
-    // Periodic thinking & liveness heartbeat so extended reasoning or long subagent/tool
-    // executions keep live status fresh without masking true indefinite hangs (>10m idle).
+    // Periodic thinking & liveness heartbeat: always poll per-run files & subagents, and keep
+    // `lastHeartbeatAt` alive whenever the child CLI process is still running so long `run_workflow`
+    // phases never get falsely marked stalled after 10 minutes.
     const liveHeartbeatTimer = runKey
       ? setInterval(() => {
           const nowMs = Date.now();
-          const hasSubagents = Boolean(agySubagentTracker?.hasActiveSubagents());
+          const childAlive = child.exitCode === null && !child.killed;
+          syncPerRunProgress();
+          agySubagentTracker?.syncOnce();
+          const hasSubagents =
+            Boolean(agySubagentTracker?.hasActiveSubagents()) || perRunActiveAgents.size > 0;
           if (hasSubagents) {
-            agySubagentTracker?.syncOnce();
             void syncWatchedFiles().catch(() => {});
           }
-          if (hasSubagents || activeToolRunning) {
-            // Keep run.lastHeartbeatAt fresh while real subagent/stream progress happened recently,
-            // without overwriting orchestrator's current activity label.
-            const recentProgress = nowMs - lastStreamActivityMs < 10 * 60_000;
-            if (recentProgress && nowMs - lastServerHeartbeatMs >= 45_000) {
+          if (childAlive && (hasSubagents || activeToolRunning)) {
+            if (nowMs - lastServerHeartbeatMs >= 45_000) {
+              const activeNames = Array.from(perRunActiveAgents).slice(0, 3);
               enqueuePost("/api/v1/runs/agent", {
                 run: runKey,
                 ...baseCtx,
@@ -3831,6 +4467,9 @@ async function cmdDaemon(args: string[]): Promise<number> {
                 role: "orchestrator",
                 model: spec.model,
                 status: "working",
+                ...(activeNames.length > 0
+                  ? { activity: `Workflow running: ${activeNames.join(", ")}`.slice(0, 150) }
+                  : {}),
               });
             }
             return;
@@ -3847,7 +4486,7 @@ async function cmdDaemon(args: string[]): Promise<number> {
             status: "working",
             activity: `Thinking… (${thinkSec}s)`,
           });
-        }, 5000)
+        }, 3000)
       : null;
 
     function flushAgyStreamStep(stepIdx: number) {
@@ -3901,7 +4540,12 @@ async function cmdDaemon(args: string[]): Promise<number> {
               : "";
 
       if (convId && runKey) {
+        if (activeConvId && activeConvId.toLowerCase() !== convId.toLowerCase()) {
+          priorConvUsage = { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0 };
+        }
+        activeConvId = convId;
         agySubagentTracker?.attachRoot(convId, true);
+        const existingSaved = sessionMap[runKey];
         saveSession(runKey, {
           engine: "antigravity",
           sessionId: convId,
@@ -3909,6 +4553,14 @@ async function cmdDaemon(args: string[]): Promise<number> {
           autonomy: spec.autonomy,
           mode: spec.mode,
           cwd,
+          issueKey: issueKey || existingSaved?.issueKey,
+          reportedInputTokens:
+            existingSaved?.sessionId === convId ? existingSaved.reportedInputTokens : undefined,
+          reportedOutputTokens:
+            existingSaved?.sessionId === convId ? existingSaved.reportedOutputTokens : undefined,
+          reportedCacheReadTokens:
+            existingSaved?.sessionId === convId ? existingSaved.reportedCacheReadTokens : undefined,
+          updatedAt: new Date().toISOString(),
         });
       }
 
@@ -4101,11 +4753,46 @@ async function cmdDaemon(args: string[]): Promise<number> {
           blockedByPermission = true;
           deniedActionsSummary = `Headless Antigravity denied tool permission (${denied.join(", ")}). Switch Autonomy to Medium or High and retry.`;
         }
-        // Only send residual token delta if `result.usage` exceeds already-reported step totals.
+        // Compute unreported residual against cumulative conversation usage (prior turns + this turn)
+        // so resumed multi-turn `agy --resume` sessions NEVER double-count earlier turns!
         const usage = (res.usage || {}) as Record<string, unknown>;
-        const remIn = Math.max(0, Number(usage.input_tokens || 0) - totalReportedIn);
-        const remOut = Math.max(0, Number(usage.output_tokens || 0) - totalReportedOut);
-        const remCache = Math.max(0, Number(usage.cache_read_tokens || 0) - totalReportedCache);
+        const delta = computeAgyResultTokenDelta({
+          resultUsage: {
+            inputTokens: Number(usage.input_tokens || 0),
+            outputTokens: Number(usage.output_tokens || 0),
+            cacheReadTokens: Number(usage.cache_read_tokens || 0),
+          },
+          priorCumulative: priorConvUsage,
+          turnReported: {
+            inputTokens: totalReportedIn,
+            outputTokens: totalReportedOut,
+            cacheReadTokens: totalReportedCache,
+          },
+        });
+        const { remIn, remOut, remCache, nextCumulative } = delta;
+        priorConvUsage = nextCumulative;
+        if (runKey && (activeConvId || convId)) {
+          saveSession(runKey, {
+            engine: "antigravity",
+            sessionId: convId || activeConvId,
+            model: spec.model,
+            autonomy: spec.autonomy,
+            mode: spec.mode,
+            cwd,
+            issueKey: issueKey || sessionMap[runKey]?.issueKey,
+            reportedInputTokens: nextCumulative.inputTokens,
+            reportedOutputTokens: nextCumulative.outputTokens,
+            reportedCacheReadTokens: nextCumulative.cacheReadTokens,
+            updatedAt: new Date().toISOString(),
+          });
+        }
+        const turnIn = totalReportedIn + remIn;
+        const turnOut = totalReportedOut + remOut;
+        const turnCache = totalReportedCache + remCache;
+        const turnCost = estimateCostUsd("antigravity", spec.model, turnIn, turnOut, turnCache);
+        console.log(
+          `sf daemon [${runKey || "run"}]: tokens turn(in=${turnIn.toLocaleString()} out=${turnOut.toLocaleString()} cache=${turnCache.toLocaleString()} ~$${turnCost.toFixed(4)}) conv_total(in=${nextCumulative.inputTokens.toLocaleString()} out=${nextCumulative.outputTokens.toLocaleString()})`,
+        );
         if (runKey && !emittedAssistantResponse && finalResponseText) {
           const remCost = estimateCostUsd("antigravity", spec.model, remIn, remOut, remCache);
           emittedAssistantResponse = true;
@@ -4436,30 +5123,39 @@ async function cmdDaemon(args: string[]): Promise<number> {
 
     child.on("error", async (err) => {
       if (liveHeartbeatTimer) clearInterval(liveHeartbeatTimer);
+      syncPerRunProgress();
       agySubagentTracker?.stop();
       if (runKey) activeChildren.delete(runKey);
       activeRuns = Math.max(0, activeRuns - 1);
       const message = `Failed to spawn ${spec.binary}: ${err.message}`;
       console.error(`sf daemon: ${message}`);
-      await sendJson(
+      await sendJsonWithRetry(
         cfg!,
         `/api/v1/runners/commands/${cmdId}`,
         { status: "failed", error: message },
         "PATCH",
+        { retries: 2, spoolOnFail: true },
       ).catch(() => {});
       if (runKey) {
-        await sendJson(cfg!, "/api/v1/runs/finish", {
-          run: runKey,
-          ...baseCtx,
-          outcome: "failed",
-          summary: message,
-        }).catch(() => {});
+        await sendJsonWithRetry(
+          cfg!,
+          "/api/v1/runs/finish",
+          {
+            run: runKey,
+            ...baseCtx,
+            outcome: "failed",
+            summary: message,
+          },
+          "POST",
+          { retries: 3, spoolOnFail: true },
+        ).catch(() => {});
       }
     });
 
     child.on("close", async (code, signal) => {
       if (liveHeartbeatTimer) clearInterval(liveHeartbeatTimer);
       if (lineBuf.trim()) processNdjsonLine(lineBuf);
+      syncPerRunProgress();
       agySubagentTracker?.stop();
       if (runKey) activeChildren.delete(runKey);
       activeRuns = Math.max(0, activeRuns - 1);
@@ -4480,11 +5176,12 @@ async function cmdDaemon(args: string[]): Promise<number> {
       console.log(
         `sf daemon: ${spec.binary} finished (code=${code ?? "null"}, signal=${signal ?? "none"}${blockedByPermission ? ", blocked=permission" : ""})`,
       );
-      await sendJson(
+      await sendJsonWithRetry(
         cfg!,
         `/api/v1/runners/commands/${cmdId}`,
         ok || wasPaused ? { status: "done" } : { status: "failed", error: errorTail },
         "PATCH",
+        { retries: 2, spoolOnFail: true },
       ).catch(() => {});
 
       await syncWatchedFiles().catch(() => {});
@@ -4493,56 +5190,92 @@ async function cmdDaemon(args: string[]): Promise<number> {
 
       // In BA Ticket Planning / Clarify mode (or any interactive turn returning an `sf-tickets` block),
       // extract drafted/refined tickets and sync them onto the Project Kanban Board.
-      if (
-        ok &&
-        !isUnattendedFactory &&
-        finalResponseText &&
-        (spec.mode === "ba" || spec.mode === "clarify" || /```sf-tickets/i.test(finalResponseText))
-      ) {
-        const extractedTickets = extractBaTicketsFromText(finalResponseText);
+      // If Clarify wrote `.factory/plans/<issueKey>.json` without emitting `sf-tickets`, auto-sync
+      // its updated criteria so Build runs never receive stale pre-clarify drafts.
+      if (ok && !isUnattendedFactory) {
+        let extractedTickets =
+          finalResponseText &&
+          (spec.mode === "ba" || spec.mode === "clarify" || /```sf-tickets/i.test(finalResponseText))
+            ? extractBaTicketsFromText(finalResponseText)
+            : [];
+        let syncedFromLocalPlan = false;
+        if (extractedTickets.length === 0 && spec.mode === "clarify") {
+          const hintKey =
+            issueKey ||
+            sessionMap[runKey]?.issueKey ||
+            (/\bclarify-(i\d+)\b/i.exec(runKey)?.[1]?.toUpperCase() ?? undefined);
+          extractedTickets = readLocalPlanForSync(repoRoot || cwd, hintKey, runStartedAtMs);
+          syncedFromLocalPlan = extractedTickets.length > 0;
+        }
         if (extractedTickets.length > 0) {
-          const syncRes = await sendJson(cfg!, "/api/v1/issues/sync", {
-            projectId: projectId || undefined,
-            repo: repoRoot || cwd,
-            missionId: missionId || undefined,
-            defaultStatus: "backlog",
-            issues: extractedTickets,
-          }).catch(() => ({ ok: false as const, status: 0, error: "sync failed" }));
+          const syncRes = await sendJsonWithRetry(
+            cfg!,
+            "/api/v1/issues/sync",
+            {
+              projectId: projectId || undefined,
+              repo: repoRoot || cwd,
+              missionId: missionId || undefined,
+              defaultStatus: "backlog",
+              preserveStatus: spec.mode === "clarify" || syncedFromLocalPlan,
+              issues: extractedTickets,
+            },
+            "POST",
+            { retries: 2, spoolOnFail: true },
+          ).catch(() => ({ ok: false as const, status: 0, error: "sync failed" }));
 
           if (syncRes.ok) {
             const keys = extractedTickets
               .map((t, idx) => String(t.issueKey || t.key || `I${idx + 1}`))
               .slice(0, 30);
             console.log(
-              `sf daemon: synced ${extractedTickets.length} ticket(s) (${keys.join(", ")}) to Kanban Board`,
+              `sf daemon: synced ${extractedTickets.length} ticket(s) (${keys.join(", ")})${syncedFromLocalPlan ? " from .factory/plans" : ""} to Kanban Board`,
             );
             if (runKey) {
-              await sendJson(cfg!, "/api/v1/runs/step", {
-                run: runKey,
-                projectId: projectId || undefined,
-                repo: repoRoot || cwd,
-                step: spec.mode === "clarify" ? "clarify-ticket-synced" : "ba-tickets-synced",
-                phase: spec.mode === "clarify" ? "Clarify" : "BA Planning",
-                status: "passed",
-                role: "orchestrator",
-                agent: "orchestrator",
-                label: `Synced ${extractedTickets.length} ticket(s) to Kanban Board`,
-                summary: `Updated ${keys.join(", ")} — ready for review & approval.`,
-                data: { kind: "ba_tickets", count: extractedTickets.length, issueKeys: keys },
-              }).catch(() => {});
-
-              if (spec.mode === "ba") {
-                await sendJson(cfg!, "/api/v1/runs/interaction", {
+              await sendJsonWithRetry(
+                cfg!,
+                "/api/v1/runs/step",
+                {
                   run: runKey,
                   projectId: projectId || undefined,
                   repo: repoRoot || cwd,
-                  type: "plan_approval",
-                  title: `Confirm ${extractedTickets.length} BA ticket(s) (${keys.join(", ")})`,
-                  prompt:
-                    "Review the drafted tickets below or on the Kanban Board. Reply in chat to refine them, or click Confirm & Auto-Run.",
-                  agentKey: "orchestrator",
-                  payload: { issueKeys: keys, count: extractedTickets.length },
-                }).catch(() => {});
+                  step: spec.mode === "clarify" ? "clarify-ticket-synced" : "ba-tickets-synced",
+                  phase: spec.mode === "clarify" ? "Clarify" : "BA Planning",
+                  status: "passed",
+                  role: "orchestrator",
+                  agent: "orchestrator",
+                  label: syncedFromLocalPlan
+                    ? `Auto-synced clarified plan (${keys.join(", ")}) to Kanban Board`
+                    : `Synced ${extractedTickets.length} ticket(s) to Kanban Board`,
+                  summary: `Updated ${keys.join(", ")} — ready for review & approval.`,
+                  data: {
+                    kind: "ba_tickets",
+                    count: extractedTickets.length,
+                    issueKeys: keys,
+                    source: syncedFromLocalPlan ? "local_plan" : "sf_tickets",
+                  },
+                },
+                "POST",
+                { retries: 2, spoolOnFail: true },
+              ).catch(() => {});
+
+              if (spec.mode === "ba") {
+                await sendJsonWithRetry(
+                  cfg!,
+                  "/api/v1/runs/interaction",
+                  {
+                    run: runKey,
+                    projectId: projectId || undefined,
+                    repo: repoRoot || cwd,
+                    type: "plan_approval",
+                    title: `Confirm ${extractedTickets.length} BA ticket(s) (${keys.join(", ")})`,
+                    prompt:
+                      "Review the drafted tickets below or on the Kanban Board. Reply in chat to refine them, or click Confirm & Auto-Run.",
+                    agentKey: "orchestrator",
+                    payload: { issueKeys: keys, count: extractedTickets.length },
+                  },
+                  "POST",
+                  { retries: 2, spoolOnFail: true },
+                ).catch(() => {});
               }
             }
           } else {
@@ -4613,7 +5346,10 @@ async function cmdDaemon(args: string[]): Promise<number> {
 
       if (runKey && !wasPaused) {
         if (isUnattendedFactory) {
-          const wf = readWorkflowOutcomeForRun(spec.engine, runKey, runStartedAtMs);
+          const wf = readWorkflowOutcomeForRun(spec.engine, runKey, runStartedAtMs, [
+            cwd,
+            repoRoot || cwd,
+          ]);
           const wfOutcome =
             wf?.outcome === "passed" || wf?.outcome === "failed" || wf?.outcome === "blocked"
               ? wf.outcome
@@ -4622,29 +5358,51 @@ async function cmdDaemon(args: string[]): Promise<number> {
           const reportedOutcome = blockedByPermission
             ? "blocked"
             : wfOutcome ?? (ok ? "passed" : "failed");
-          await sendJson(cfg!, "/api/v1/runs/finish", {
-            run: runKey,
-            projectId: projectId || undefined,
-            repo: repoRoot || cwd,
-            outcome: reportedOutcome,
-            workflowOutcome: wfOutcome,
-            workflowConfirmed,
-            mergeDecision: wf?.mergeDecision,
-            risk: wf?.risk,
-            summary: wf?.reason || finalSummary,
-            skipVerdictStep: reportedOutcome === "passed" && ok && emittedAssistantResponse,
-            respectPendingInteraction: false,
-          }).catch(() => {});
+          const finishRes = await sendJsonWithRetry(
+            cfg!,
+            "/api/v1/runs/finish",
+            {
+              run: runKey,
+              projectId: projectId || undefined,
+              repo: repoRoot || cwd,
+              outcome: reportedOutcome,
+              workflowOutcome: wfOutcome,
+              workflowConfirmed,
+              mergeDecision: wf?.mergeDecision,
+              risk: wf?.risk,
+              summary: wf?.reason || finalSummary,
+              skipVerdictStep: reportedOutcome === "passed" && ok && emittedAssistantResponse,
+              respectPendingInteraction: false,
+            },
+            "POST",
+            { retries: 3, spoolOnFail: true },
+          ).catch(() => ({ ok: false as const, status: 0, error: "finish error", spooled: false }));
+          if (!finishRes.ok) {
+            console.error(
+              `sf daemon [${runKey}]: /api/v1/runs/finish failed (${finishRes.error})${finishRes.spooled ? " — spooled for retry" : ""}`,
+            );
+          }
         } else {
-          await sendJson(cfg!, "/api/v1/runs/finish", {
-            run: runKey,
-            projectId: projectId || undefined,
-            repo: repoRoot || cwd,
-            outcome: blockedByPermission ? "blocked" : ok ? "passed" : "failed",
-            summary: finalSummary,
-            skipVerdictStep: ok && emittedAssistantResponse,
-            respectPendingInteraction: true,
-          }).catch(() => {});
+          const finishRes = await sendJsonWithRetry(
+            cfg!,
+            "/api/v1/runs/finish",
+            {
+              run: runKey,
+              projectId: projectId || undefined,
+              repo: repoRoot || cwd,
+              outcome: blockedByPermission ? "blocked" : ok ? "passed" : "failed",
+              summary: finalSummary,
+              skipVerdictStep: ok && emittedAssistantResponse,
+              respectPendingInteraction: true,
+            },
+            "POST",
+            { retries: 3, spoolOnFail: true },
+          ).catch(() => ({ ok: false as const, status: 0, error: "finish error", spooled: false }));
+          if (!finishRes.ok) {
+            console.error(
+              `sf daemon [${runKey}]: /api/v1/runs/finish failed (${finishRes.error})${finishRes.spooled ? " — spooled for retry" : ""}`,
+            );
+          }
         }
       }
     });
@@ -4882,6 +5640,10 @@ async function cmdDaemon(args: string[]): Promise<number> {
         repoRoot: cwd,
         projectId: resolvedProjectId,
         missionId: typeof cmd.payload.missionId === "string" ? cmd.payload.missionId : undefined,
+        issueKey:
+          (typeof cmd.payload.issueKey === "string" && cmd.payload.issueKey.trim()) ||
+          saved?.issueKey ||
+          undefined,
         spec,
         isResume: true,
       });
@@ -4954,18 +5716,30 @@ async function cmdDaemon(args: string[]): Promise<number> {
         const wt = prepareWorktree(baseCwd, runKey, spec.mode, branchArg);
         execCwd = wt.workCwd;
         if (wt.worktreeBranch && wt.workCwd !== baseCwd) {
-          console.log(`sf daemon: isolated git worktree ${wt.worktreeBranch} -> ${wt.workCwd}`);
-          await sendJson(cfg!, "/api/v1/runs/step", {
-            run: runKey,
-            repo: baseCwd,
-            step: "git-worktree",
-            phase: "Setup",
-            status: "passed",
-            role: "orchestrator",
-            agent: "orchestrator",
-            label: `Worktree ${wt.worktreeBranch}`,
-            summary: `${wt.created ? "Created" : "Reused"} isolated git worktree at ${wt.workCwd}`,
-          }).catch(() => {});
+          const syncedNote =
+            wt.copiedFactoryFiles.length > 0
+              ? ` (copied ${wt.copiedFactoryFiles.length} uncommitted .factory/ plan/prototype file(s))`
+              : "";
+          console.log(
+            `sf daemon: isolated git worktree ${wt.worktreeBranch} -> ${wt.workCwd}${syncedNote}`,
+          );
+          await sendJsonWithRetry(
+            cfg!,
+            "/api/v1/runs/step",
+            {
+              run: runKey,
+              repo: baseCwd,
+              step: "git-worktree",
+              phase: "Setup",
+              status: "passed",
+              role: "orchestrator",
+              agent: "orchestrator",
+              label: `Worktree ${wt.worktreeBranch}`,
+              summary: `${wt.created ? "Created" : "Reused"} isolated git worktree at ${wt.workCwd}${syncedNote}`,
+            },
+            "POST",
+            { retries: 2, spoolOnFail: true },
+          ).catch(() => {});
         }
       }
       await runStreamedCli({
@@ -4975,6 +5749,10 @@ async function cmdDaemon(args: string[]): Promise<number> {
         repoRoot: baseCwd,
         projectId: resolvedProjectId,
         missionId: typeof cmd.payload.missionId === "string" ? cmd.payload.missionId : undefined,
+        issueKey:
+          typeof cmd.payload.issueKey === "string" && cmd.payload.issueKey.trim()
+            ? cmd.payload.issueKey.trim()
+            : undefined,
         spec,
       });
       return;
@@ -5336,6 +6114,429 @@ async function cmdIssues(args: string[]): Promise<number> {
   return 2;
 }
 
+type LocalAgentInspectEntry = {
+  convId: string;
+  runKey?: string;
+  mode?: string;
+  issueKey?: string;
+  cwd?: string;
+  source: "antigravity-cli" | "antigravity";
+  active: boolean;
+  updatedAt: string;
+  model: string;
+  lastActivity: string;
+  rootUsage: AgyTokenTotals;
+  subagents: Array<{
+    convId: string;
+    name: string;
+    role: string;
+    status: string;
+    model: string;
+    lastActivity: string;
+    usage: AgyTokenTotals;
+  }>;
+  totalUsage: AgyTokenTotals;
+  estimatedCostUsd: number;
+};
+
+function inspectBrainTranscript(brainDir: string): {
+  model: string;
+  lastActivity: string;
+  usage: AgyTokenTotals;
+  updatedMs: number;
+  childIds: Map<string, { name: string; role: string; status: string }>;
+} {
+  const usage: AgyTokenTotals = { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0 };
+  let model = "";
+  let lastActivity = "";
+  let updatedMs = 0;
+  const childIds = new Map<string, { name: string; role: string; status: string }>();
+
+  const transcriptPath = join(brainDir, ".system_generated", "logs", "transcript.jsonl");
+  if (existsSync(transcriptPath)) {
+    try {
+      updatedMs = Math.max(updatedMs, statSync(transcriptPath).mtimeMs);
+      const raw = readFileSync(transcriptPath, "utf8");
+      const pendingSpawns: Array<{ role: string; typeName: string }> = [];
+      for (const line of raw.split("\n")) {
+        const trimmed = line.trim();
+        if (!trimmed || !trimmed.startsWith("{")) continue;
+        let entry: Record<string, unknown>;
+        try {
+          entry = JSON.parse(trimmed) as Record<string, unknown>;
+        } catch {
+          continue;
+        }
+        const entryType = String(entry.type || "");
+        const content = typeof entry.content === "string" ? entry.content : "";
+        if (entryType === "PLANNER_RESPONSE") {
+          if (typeof entry.model === "string" && entry.model) model = entry.model;
+          usage.inputTokens += Number(entry.input_tokens || 0);
+          usage.outputTokens += Number(entry.output_tokens || 0);
+          usage.cacheReadTokens += Number(entry.cache_read_tokens || 0);
+          if (Array.isArray(entry.tool_calls) && entry.tool_calls.length > 0) {
+            for (const rawTc of entry.tool_calls) {
+              const tc = (rawTc || {}) as Record<string, unknown>;
+              const name = String(tc.name || "tool");
+              const parsedArgs = parseAgyToolArgs(tc.args);
+              lastActivity = summarizeToolParams(name, parsedArgs).slice(0, 100);
+              if (name === "invoke_subagent") {
+                pendingSpawns.push({
+                  role: String(parsedArgs.Role || parsedArgs.role || ""),
+                  typeName: String(parsedArgs.TypeName || parsedArgs.typeName || "subagent"),
+                });
+              }
+            }
+          } else if (content.trim()) {
+            lastActivity = content.trim().replace(/\s+/g, " ").slice(0, 100);
+          }
+        } else if (entryType === "GENERIC" && content.includes("Created the following subagent")) {
+          const m = SUBAGENT_CREATED_CONV_RE.exec(content);
+          if (m?.[1]) {
+            const cid = m[1].toLowerCase();
+            const hint = pendingSpawns.shift();
+            if (!childIds.has(cid)) {
+              childIds.set(cid, {
+                name: hint?.role || hint?.typeName || `subagent-${cid.slice(0, 6)}`,
+                role: hint?.typeName || "subagent",
+                status: "working",
+              });
+            }
+          }
+        } else if (entryType === "GENERIC" && content.includes("Task is complete.")) {
+          lastActivity = "Completed";
+        } else if (entryType === "SYSTEM_MESSAGE") {
+          const sm =
+            /\bsender=([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})(?!\/task-)/i.exec(
+              content,
+            );
+          if (sm?.[1]) {
+            const prev = childIds.get(sm[1].toLowerCase());
+            if (prev) prev.status = "passed";
+          }
+        }
+      }
+    } catch {
+      // Ignore unreadable transcript.
+    }
+  }
+
+  const tasksDir = join(brainDir, ".system_generated", "tasks");
+  if (existsSync(tasksDir)) {
+    try {
+      for (const f of readdirSync(tasksDir).filter((x) => x.endsWith(".log")).sort()) {
+        const full = join(tasksDir, f);
+        try {
+          updatedMs = Math.max(updatedMs, statSync(full).mtimeMs);
+          const text = readFileSync(full, "utf8");
+          for (const rawLine of text.split(/\r?\n/)) {
+            const m = WORKFLOW_AGENT_RE.exec(rawLine);
+            if (!m) continue;
+            const label = m[2].trim();
+            const st = m[3].toLowerCase();
+            const cid = m[4].toLowerCase();
+            const mapped =
+              st === "done"
+                ? "passed"
+                : st === "failed" || st === "error" || st === "blocked"
+                  ? "failed"
+                  : "working";
+            const meta = parseAgyWorkflowAgentMeta(label, "Build", cid);
+            childIds.set(cid, { name: meta.name, role: meta.role, status: mapped });
+          }
+        } catch {
+          // Ignore unreadable task log.
+        }
+      }
+    } catch {
+      // Ignore unreadable tasks dir.
+    }
+  }
+
+  return { model, lastActivity, usage, updatedMs, childIds };
+}
+
+function listActiveLocalAiProcesses(): Array<{ pid: number; etime: string; engine: string; cmd: string }> {
+  try {
+    const out = execFileSync("ps", ["-eo", "pid=,etime=,command="], {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+      timeout: 3000,
+    });
+    const rows: Array<{ pid: number; etime: string; engine: string; cmd: string }> = [];
+    for (const rawLine of out.split("\n")) {
+      const line = rawLine.trim();
+      if (!line) continue;
+      const m = /^(\d+)\s+(\S+)\s+(.+)$/.exec(line);
+      if (!m) continue;
+      const pid = Number(m[1]);
+      if (pid === process.pid) continue;
+      const etime = m[2];
+      const cmd = m[3];
+      if (/\bagy\b/.test(cmd) && !/\bps\b/.test(cmd)) {
+        rows.push({ pid, etime, engine: "antigravity", cmd: cmd.slice(0, 120) });
+      } else if (/\bclaude\b/.test(cmd) && cmd.includes("stream-json")) {
+        rows.push({ pid, etime, engine: "claude", cmd: cmd.slice(0, 120) });
+      } else if (cmd.includes("sf.ts") && /\bdaemon\b/.test(cmd)) {
+        rows.push({ pid, etime, engine: "sf-daemon", cmd: cmd.slice(0, 120) });
+      }
+    }
+    return rows;
+  } catch {
+    return [];
+  }
+}
+
+function collectLocalAgents(showAll: boolean): {
+  processes: Array<{ pid: number; etime: string; engine: string; cmd: string }>;
+  sessions: LocalAgentInspectEntry[];
+} {
+  const processes = listActiveLocalAiProcesses();
+  const sessionsFile = join(sfDir(), "sessions.json");
+  let sessionMap: Record<
+    string,
+    { engine?: string; sessionId?: string; mode?: string; issueKey?: string; cwd?: string }
+  > = {};
+  if (existsSync(sessionsFile)) {
+    try {
+      sessionMap = JSON.parse(readFileSync(sessionsFile, "utf8")) as typeof sessionMap;
+    } catch {
+      sessionMap = {};
+    }
+  }
+  const byConvId = new Map<
+    string,
+    { runKey: string; mode?: string; issueKey?: string; cwd?: string }
+  >();
+  for (const [rk, entry] of Object.entries(sessionMap)) {
+    if (entry?.sessionId) {
+      byConvId.set(entry.sessionId.toLowerCase(), {
+        runKey: rk,
+        mode: entry.mode,
+        issueKey: entry.issueKey,
+        cwd: entry.cwd,
+      });
+    }
+  }
+
+  const brainRoots: Array<{ dir: string; source: "antigravity-cli" | "antigravity" }> = [
+    { dir: join(homedir(), ".gemini", "antigravity-cli", "brain"), source: "antigravity-cli" },
+    { dir: join(homedir(), ".gemini", "antigravity", "brain"), source: "antigravity" },
+  ];
+
+  const allBrainDirs = new Map<string, { dir: string; source: "antigravity-cli" | "antigravity"; mtimeMs: number }>();
+  const cutoffMs = showAll ? 0 : Date.now() - 24 * 60 * 60_000;
+
+  for (const root of brainRoots) {
+    if (!existsSync(root.dir)) continue;
+    let names: string[];
+    try {
+      names = readdirSync(root.dir);
+    } catch {
+      continue;
+    }
+    for (const name of names) {
+      if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(name)) continue;
+      const full = join(root.dir, name);
+      const tPath = join(full, ".system_generated", "logs", "transcript.jsonl");
+      if (!existsSync(tPath)) continue;
+      try {
+        const mtimeMs = statSync(tPath).mtimeMs;
+        if (mtimeMs < cutoffMs) continue;
+        const cid = name.toLowerCase();
+        if (!allBrainDirs.has(cid)) {
+          allBrainDirs.set(cid, { dir: full, source: root.source, mtimeMs });
+        }
+      } catch {
+        continue;
+      }
+    }
+  }
+
+  // First pass: inspect all brains to identify which UUIDs are children of another brain.
+  const inspected = new Map<
+    string,
+    ReturnType<typeof inspectBrainTranscript> & { dir: string; source: "antigravity-cli" | "antigravity" }
+  >();
+  const childConvSet = new Set<string>();
+  for (const [cid, info] of allBrainDirs) {
+    const data = inspectBrainTranscript(info.dir);
+    inspected.set(cid, { ...data, dir: info.dir, source: info.source });
+    for (const childId of data.childIds.keys()) {
+      childConvSet.add(childId);
+    }
+  }
+
+  const nowMs = Date.now();
+  const entries: LocalAgentInspectEntry[] = [];
+  for (const [cid, root] of inspected) {
+    if (childConvSet.has(cid) && !byConvId.has(cid)) continue;
+    const linked = byConvId.get(cid);
+    const subagents: LocalAgentInspectEntry["subagents"] = [];
+    let latestMs = root.updatedMs;
+    let totalIn = root.usage.inputTokens;
+    let totalOut = root.usage.outputTokens;
+    let totalCache = root.usage.cacheReadTokens;
+    let totalCost = estimateCostUsd(
+      "antigravity",
+      root.model || "neon",
+      root.usage.inputTokens,
+      root.usage.outputTokens,
+      root.usage.cacheReadTokens,
+    );
+
+    // Collect recursive children (BFS)
+    const queue = Array.from(root.childIds.entries());
+    const visited = new Set<string>([cid]);
+    while (queue.length > 0) {
+      const [childId, childMeta] = queue.shift()!;
+      if (visited.has(childId)) continue;
+      visited.add(childId);
+      const childDir = resolveAgyBrainDir(childId);
+      const childData =
+        inspected.get(childId) || (childDir ? inspectBrainTranscript(childDir) : null);
+      const cUsage: AgyTokenTotals = childData?.usage ?? {
+        inputTokens: 0,
+        outputTokens: 0,
+        cacheReadTokens: 0,
+      };
+      const cModel = childData?.model || "";
+      if (childData && childData.updatedMs > latestMs) latestMs = childData.updatedMs;
+      totalIn += cUsage.inputTokens;
+      totalOut += cUsage.outputTokens;
+      totalCache += cUsage.cacheReadTokens;
+      totalCost += estimateCostUsd(
+        "antigravity",
+        cModel || "carbon",
+        cUsage.inputTokens,
+        cUsage.outputTokens,
+        cUsage.cacheReadTokens,
+      );
+      const childActive = Boolean(childData && nowMs - childData.updatedMs < 30_000);
+      subagents.push({
+        convId: childId,
+        name: childMeta.name,
+        role: childMeta.role,
+        status: childActive ? "working" : childMeta.status,
+        model: cModel,
+        lastActivity: childData?.lastActivity || "",
+        usage: cUsage,
+      });
+      if (childData) {
+        for (const nested of childData.childIds.entries()) {
+          if (!visited.has(nested[0])) queue.push(nested);
+        }
+      }
+    }
+
+    const active =
+      nowMs - latestMs < 30_000 ||
+      subagents.some((s) => s.status === "working") ||
+      processes.some((p) => p.engine === "antigravity" && p.cmd.includes(cid));
+
+    entries.push({
+      convId: cid,
+      runKey: linked?.runKey,
+      mode: linked?.mode,
+      issueKey: linked?.issueKey,
+      cwd: linked?.cwd,
+      source: root.source,
+      active,
+      updatedAt: latestMs > 0 ? new Date(latestMs).toISOString() : "",
+      model: root.model || "antigravity",
+      lastActivity: root.lastActivity,
+      rootUsage: root.usage,
+      subagents,
+      totalUsage: {
+        inputTokens: totalIn,
+        outputTokens: totalOut,
+        cacheReadTokens: totalCache,
+      },
+      estimatedCostUsd: totalCost,
+    });
+  }
+
+  entries.sort((a, b) => {
+    if (a.active !== b.active) return a.active ? -1 : 1;
+    return b.updatedAt.localeCompare(a.updatedAt);
+  });
+
+  return { processes, sessions: entries.slice(0, showAll ? 50 : 12) };
+}
+
+async function cmdAgents(args: string[]): Promise<number> {
+  const { values } = parseArgs({
+    args,
+    options: {
+      watch: { type: "boolean", default: false },
+      all: { type: "boolean", default: false },
+      json: { type: "boolean", default: false },
+    },
+    strict: true,
+  });
+
+  const renderOnce = () => {
+    const data = collectLocalAgents(Boolean(values.all));
+    if (values.json) {
+      console.log(JSON.stringify(data, null, 2));
+      return;
+    }
+    if (values.watch) {
+      process.stdout.write("\x1bc");
+    }
+    console.log(
+      `Software Factory Local Agent Tracker (v${CLI_VERSION}) · ${new Date().toLocaleTimeString()}`,
+    );
+    console.log("");
+    if (data.processes.length > 0) {
+      console.log(`Active OS Processes (${data.processes.length}):`);
+      for (const p of data.processes) {
+        console.log(`  [PID ${p.pid}] ${p.engine.padEnd(11)} ${p.etime.padStart(8)}  ${p.cmd}`);
+      }
+    } else {
+      console.log("Active OS Processes: none");
+    }
+    console.log("");
+    if (data.sessions.length === 0) {
+      console.log("No recent Antigravity sessions found (pass --all to include older than 24h).");
+      return;
+    }
+    console.log(`Antigravity Sessions & Subagent Trees (${data.sessions.length}):`);
+    for (const s of data.sessions) {
+      const badge = s.active ? "● ACTIVE" : "○ idle  ";
+      const header = s.runKey
+        ? `${s.runKey}${s.mode ? ` [${s.mode}]` : ""}`
+        : `${s.source}:${s.convId.slice(0, 8)}`;
+      const tokStr = `in=${s.totalUsage.inputTokens.toLocaleString()} out=${s.totalUsage.outputTokens.toLocaleString()} cache=${s.totalUsage.cacheReadTokens.toLocaleString()} (~$${s.estimatedCostUsd.toFixed(4)})`;
+      console.log(`  ${badge}  ${header}  (${s.model})  ${tokStr}`);
+      if (s.lastActivity) {
+        console.log(`            conv=${s.convId.slice(0, 8)}  last: ${s.lastActivity}`);
+      }
+      for (const sub of s.subagents) {
+        const subIcon = sub.status === "working" ? "▶" : sub.status === "failed" ? "✗" : "✓";
+        const subTok = `in=${sub.usage.inputTokens.toLocaleString()} out=${sub.usage.outputTokens.toLocaleString()}`;
+        console.log(
+          `            └─ ${subIcon} ${sub.name} (${sub.role}${sub.model ? ` · ${sub.model}` : ""})  ${subTok}${sub.lastActivity ? `  · ${sub.lastActivity.slice(0, 60)}` : ""}`,
+        );
+      }
+    }
+  };
+
+  renderOnce();
+  if (!values.watch) return 0;
+
+  await new Promise<void>((resolveStop) => {
+    const timer = setInterval(renderOnce, 2000);
+    const stop = () => {
+      clearInterval(timer);
+      resolveStop();
+    };
+    process.on("SIGINT", stop);
+    process.on("SIGTERM", stop);
+  });
+  return 0;
+}
+
 async function cmdFlush(): Promise<number> {
   const cfg = loadConfig();
   if (!cfg) {
@@ -5369,6 +6570,7 @@ async function main(argv: string[]): Promise<number> {
     if (cmd === "issues") return await cmdIssues(rest);
     if (cmd === "sync-live") return await cmdSyncLive(rest);
     if (cmd === "sync-subagents") return await cmdSyncSubagents(rest);
+    if (cmd === "agents" || cmd === "ps") return await cmdAgents(rest);
     if (cmd === "daemon") return await cmdDaemon(rest);
     if (cmd === "mcp") return await cmdMcp();
     if (cmd === "flush") return await cmdFlush();
@@ -5380,4 +6582,16 @@ async function main(argv: string[]): Promise<number> {
   }
 }
 
-process.exit(await main(process.argv.slice(2)));
+const isDirectCliInvocation = (() => {
+  try {
+    const entry = process.argv[1];
+    if (!entry) return false;
+    return realpathSync(entry) === realpathSync(fileURLToPath(import.meta.url));
+  } catch {
+    return false;
+  }
+})();
+
+if (isDirectCliInvocation) {
+  process.exit(await main(process.argv.slice(2)));
+}

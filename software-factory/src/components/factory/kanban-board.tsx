@@ -578,7 +578,8 @@ export function KanbanBoard({
             </EmptyMedia>
             <EmptyTitle>No tickets on the board yet</EmptyTitle>
             <EmptyDescription>
-              Run <code className="font-mono">/factory init</code> once per project, use BA or{" "}
+              Run <code className="font-mono">/factory init</code> once per project, use{" "}
+              <code className="font-mono">/ba-ticket</code> or{" "}
               <code className="font-mono">/factory clarify</code> to turn ideas into ready 1-PR
               tickets with <code className="font-mono">C1..Cn</code> criteria, then let the
               unattended Factory loop build through{" "}
