@@ -153,34 +153,35 @@ export function PrototypeStudio({
     prototype.status,
   );
 
-  const iframeRef = React.useRef<HTMLIFrameElement | null>(null);
-  const fullscreenIframeRef = React.useRef<HTMLIFrameElement | null>(null);
-
-  React.useEffect(() => {
+  const [prevProtoKey, setPrevProtoKey] = React.useState(
+    `${prototype.id}:${prototype.binding}:${prototype.status}`,
+  );
+  if (prevProtoKey !== `${prototype.id}:${prototype.binding}:${prototype.status}`) {
+    setPrevProtoKey(`${prototype.id}:${prototype.binding}:${prototype.status}`);
     setLocalBinding(prototype.binding);
     setLocalStatus(prototype.status);
-  }, [prototype.id, prototype.binding, prototype.status]);
+  }
 
-  React.useEffect(() => {
+  const screensKey = screens.map((s) => s.id).join(",");
+  const [prevScreensKey, setPrevScreensKey] = React.useState(screensKey);
+  if (prevScreensKey !== screensKey) {
+    setPrevScreensKey(screensKey);
     if (screens.length > 0 && !screens.some((s) => s.id === activeScreenId)) {
       setActiveScreenId(screens[0].id);
     }
-  }, [screens, activeScreenId]);
+  }
 
-  const initialScreenForDoc = React.useRef(screens[0]?.id ?? "");
-  React.useEffect(() => {
-    initialScreenForDoc.current = screens[0]?.id ?? "";
-  }, [prototype.slug, prototype.htmlContent, screens]);
+  const iframeRef = React.useRef<HTMLIFrameElement | null>(null);
+  const fullscreenIframeRef = React.useRef<HTMLIFrameElement | null>(null);
 
+  const firstScreenId = screens[0]?.id ?? "";
   const sandboxDoc = React.useMemo(
     () =>
       buildSandboxedPrototypeDocument(prototype.htmlContent, {
-        initialScreenId: initialScreenForDoc.current,
+        initialScreenId: firstScreenId,
         theme: protoTheme,
       }),
-    // Only rebuild srcDoc when the HTML itself changes (screen & theme switch smoothly via postMessage)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [prototype.htmlContent],
+    [prototype.htmlContent, firstScreenId, protoTheme],
   );
 
   const postToFrames = React.useCallback((payload: Record<string, unknown>) => {

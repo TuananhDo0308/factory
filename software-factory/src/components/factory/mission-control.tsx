@@ -1205,7 +1205,7 @@ export function MissionControl({
   // Interactive Prototype preview -> reveals right-side Prototype Studio
   const [selectedPrototype, setSelectedPrototype] = React.useState<PrototypeViewModel | null>(null);
 
-  const runPrototypes = run.prototypes ?? [];
+  const runPrototypes = React.useMemo(() => run.prototypes ?? [], [run.prototypes]);
   const activePrototype = React.useMemo<PrototypeViewModel | null>(() => {
     if (!selectedPrototype) return null;
     const freshDb = runPrototypes.find(

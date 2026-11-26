@@ -304,12 +304,14 @@ export function KanbanBoard({
   const baSessionHref = `/sessions?project=${encodeURIComponent(project.id)}&skill=ba-ticket`;
   const [viewMode, setViewMode] = React.useState<"board" | "table">("board");
   const [selectedIssueId, setSelectedIssueId] = React.useState<string | null>(null);
+  const [prevSelectedIssueId, setPrevSelectedIssueId] = React.useState<string | null>(null);
   const [selectedProtoIdx, setSelectedProtoIdx] = React.useState<number>(0);
   const [busyKey, setBusyKey] = React.useState<string | null>(null);
 
-  React.useEffect(() => {
+  if (prevSelectedIssueId !== selectedIssueId) {
+    setPrevSelectedIssueId(selectedIssueId);
     setSelectedProtoIdx(0);
-  }, [selectedIssueId]);
+  }
 
   const selectedIssue = React.useMemo(
     () => board.issues.find((i) => i.id === selectedIssueId) ?? null,
