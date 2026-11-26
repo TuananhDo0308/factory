@@ -10,7 +10,7 @@ const input = args
 let contract = input.contract
 // How many times one spec may be sent back to Build, by QA or by review
 // (super-board's rebuild cap). A spec past it fails the run.
-const maxRebuilds = Number.isInteger(input.maxRebuilds) ? input.maxRebuilds : 2
+const maxRebuilds = Number.isInteger(input.maxRebuilds) ? input.maxRebuilds : 4
 const maxSpecRevisions = Number.isInteger(input.maxSpecRevisions) ? input.maxSpecRevisions : 2
 // QC runs unless the caller turns it off with `qc: false`, for a change no user
 // can see (the session says why in its report).

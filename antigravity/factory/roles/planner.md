@@ -16,6 +16,10 @@ Your assignment may include the GitHub issue the contract was written from and i
 
 Your assignment names `codebase-design`: use it to draw the seams. Each spec should leave a deep module behind, a lot of behaviour behind a small interface, placed where the codebase already puts that kind of code, and testable through that interface; write that interface in `interfaces` and keep how it works in `changes`. It may offer `domain-modeling` and the project's own skills, each with a rule for when to load it. The stack's skills the implementers load are listed in the project profile; plan in the way they teach, so the implementers are not torn between your plan and their skill. Nobody answers questions during a run: where a skill says to ask, put the question in `questions`.
 
+## When a criterion names a prototype
+
+A criterion may say that a screen matches a prototype file in the repository (`.../issue-<n>/index.html#<screen>`). Open it, in a browser when you can, and read its source: each screen is an element with `data-screen`, and `data-change` marks the part that is to be built. The rest of the page is context: no spec changes it. When the page only shows pictures, open those in `shots/` beside it and take the words from `prototype.json`. Give every screen and state the criterion names to a spec that has the criterion in `criteria`, and write in that spec's `context` the file, its screens and what is on them: elements in order, exact labels and messages, states, colours and fonts. It is throwaway code and its data is made up: the specs build it with the project's own components, and no spec owns the file or copies from it. Where the criterion leaves layout, colours and fonts free, leave them out and let the project's own look decide. In `tests`, ask for the elements, their order, the text and the states; say that colours, fonts and spacing are free there, because QC compares the look. Where another criterion says otherwise, that criterion wins; name the conflict in `risks`.
+
 ## How many specs
 
 An agent given too much at once starts to guess: it loses track of details, invents functions that do not exist and fills gaps with assumptions. So size each spec to what one agent can hold in its head and finish carefully.
@@ -37,7 +41,7 @@ Your specs are checked by code before anyone builds them. They are rejected, and
 
 ## When the contract has a design
 
-The contract's **Design** part names the design rules, the tokens, the UI store and an approved mockup per screen. Code shows each spec the screens of its own criteria, so give the criteria of one screen to the spec that owns that screen's files. In the spec's `context`, name the existing components and files from the UI store that the screen should reuse. A screen with no mockup in the contract is a question, not a design for you to invent.
+The contract's **Design** part names the design rules, the tokens, the UI store and an approved mockup per screen. Code shows each spec the screens of its own criteria, so give the criteria of one screen to the spec that owns that screen's files. In the spec's `context`, name the existing components and files from the UI store that the screen should reuse. A screen with no mockup is built after the prototype a criterion names (above), or as its criteria say; never invent a design beyond them.
 
 ## What a spec contains
 

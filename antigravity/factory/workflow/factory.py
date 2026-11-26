@@ -2620,7 +2620,7 @@ async def run_factory(
 
     contract = input_args.get("contract")
     raw_max_rebuilds = input_args.get("maxRebuilds")
-    max_rebuilds = raw_max_rebuilds if isinstance(raw_max_rebuilds, int) and not isinstance(raw_max_rebuilds, bool) else 2
+    max_rebuilds = raw_max_rebuilds if isinstance(raw_max_rebuilds, int) and not isinstance(raw_max_rebuilds, bool) else 4
     raw_max_spec_revs = input_args.get("maxSpecRevisions")
     max_spec_revisions = (
         raw_max_spec_revs

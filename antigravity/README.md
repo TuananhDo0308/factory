@@ -67,8 +67,8 @@ Install the Factory skill for Gemini Antigravity from https://github.com/sangtru
 1. Clone the repository (git clone --depth 1) into a temporary directory.
 2. If ~/.gemini/config/skills/factory, ~/.gemini/config/skills/factory-init, ~/.gemini/config/skills/factory-clarify, ~/.gemini/config/skills/ba-ticket, ~/.gemini/config/skills/dev-subissues, ~/.gemini/config/skills/ui-refine-loop or ~/.gemini/config/skills/pr-judge already exists, stop, tell me what it is (directory or symlink, and where it points) and ask me before replacing it. Never overwrite without my consent.
 3. Copy the factory/, factory-init/, factory-clarify/, ba-ticket/, dev-subissues/, ui-refine-loop/ and pr-judge/ folders of the repository to the folders of the same names under ~/.gemini/config/skills (step 2 applies to all seven).
-4. Run: bash ~/.gemini/config/skills/factory/scripts/install-skills.sh
-   It installs the skills the agent team loads at pinned commits into ~/.gemini/config/skills, and leaves any skill that is already there untouched.
+4. Copy the repository's third-party/ folder to ~/.gemini/config/skills/third-party, run: bash ~/.gemini/config/skills/factory/scripts/install-skills.sh, then delete ~/.gemini/config/skills/third-party.
+   It installs the skills the agent team loads (mattpocock/skills, obra/superpowers, super-board, antfu/skills, anthropics/knowledge-work-plugins, currents-dev) from the repository's copies in third-party/ (their sources, commits and licenses are in its README) into ~/.gemini/config/skills, and leaves any skill that is already there untouched.
 5. Run: bash ~/.gemini/config/skills/factory/scripts/skills-ready.sh "$HOME"
    It must exit 0. If it exits 10, it prints the names of the missing skills: tell me.
 6. Delete the temporary directory.
@@ -87,7 +87,9 @@ cp -r /tmp/factory-src/ba-ticket       ~/.gemini/config/skills/ba-ticket
 cp -r /tmp/factory-src/dev-subissues   ~/.gemini/config/skills/dev-subissues
 cp -r /tmp/factory-src/ui-refine-loop  ~/.gemini/config/skills/ui-refine-loop
 cp -r /tmp/factory-src/pr-judge        ~/.gemini/config/skills/pr-judge
-bash ~/.gemini/config/skills/factory/scripts/install-skills.sh        # team skills, pinned commits, never overwrites
+cp -r /tmp/factory-src/third-party     ~/.gemini/config/skills/third-party
+bash ~/.gemini/config/skills/factory/scripts/install-skills.sh        # team skills from third-party/, never overwrites
+rm -rf ~/.gemini/config/skills/third-party
 bash ~/.gemini/config/skills/factory/scripts/skills-ready.sh "$HOME"  # must exit 0
 rm -rf /tmp/factory-src
 ```
@@ -194,7 +196,7 @@ flowchart TD
    Code raises the planner's rating, never lowers it: files about auth, sessions, permissions, payments or billing make the run `high` with surface `security`; a migration makes it `high` with surface `data`; dependency manifests, lockfiles or CI files make it at least `medium`; UI files add surface `ui`. Surface `security` adds `pr-security-review` to the reviewers.
 
    QC runs every round whatever the risk (turn it off with `qc: false` for a change nobody can see). It tries each criterion through the product's real entry point (a screen by hand, one click at a time with Playwright MCP's browser tools, never a script it writes first; a run with a screen stops at the start without them), compares each new screen with its approved mockup, compares each must-not-break screen with its screenshot from before the build (a change the ticket does not ask for is a `regression`, sent back to the specs that own UI files), and scans each screen with axe: a serious or critical violation fails the screen's criteria. QC changing a file stops the run.
-7. **Back to Build**: each failure goes to the spec whose files it concerns, which gets a new implementer session (on Gemini 4 Neon High) and QA again. A spec may go back `maxRebuilds` times (default 2) before the run fails.
+7. **Back to Build**: each failure goes to the spec whose files it concerns, which gets a new implementer session (on Gemini 4 Neon High) and QA again. A spec may go back `maxRebuilds` times (default 4) before the run fails.
 8. **Merge decision** *(code)*: a passing run gets `merge: { decision, reasons }`. It is `person` when the change touches auth, money, a migration, a dependency or CI, was rated `high`, changes a visible screen, or rewrote tests after the first build (the list is the profile's `escalate`). Otherwise `auto`.
 9. **Verify and merge** *(your chat session)*: reruns the checks itself (and CI's test jobs in a Linux container when Docker is there), pushes, and opens a pull request that closes the issue. It squash-merges only when the decision is `auto` and CI is green; otherwise it leaves the pull request open with the reasons in a comment and the label `factory-review`. It never uses `--admin`.
 10. **Report and lessons** *(your chat session)*: the run record (outcome, failure log, risk and why it was raised, merge decision, questions, flaky checks, specs whose tests could not be proven) goes to the dashboard. A mistake the team made in 3 of the last 10 runs becomes a proposed rule for you to accept or reject.

@@ -46,3 +46,25 @@ test('kinds are summed, most issues first', () => {
   assert.deepEqual(k[0], { kind: 'crud', issues: 2, straight: 1, questions: 0, regressions: 0 })
   assert.equal(k[1].kind, 'other')
 })
+
+test('an issue is tracked when it is labelled factory, has status: ready, or once had it', async () => {
+  const { tracked } = await import('../factory/scripts/issue-history.mjs')
+  assert.equal(tracked({ labels: ['factory'] }, []), true)
+  assert.equal(tracked({ labels: ['type: chore', 'status: ready'] }, []), true)
+  assert.equal(tracked({ labels: ['status: needs-criteria'] }, ['status: needs-criteria', 'status: ready', 'status: needs-criteria']), true)
+  assert.equal(tracked({ labels: ['status: needs-criteria'] }, ['status: needs-criteria']), false)
+})
+
+test('status: needs-criteria counts as sent back only after the issue had status: ready', () => {
+  const ticket = { ...issue, labels: ['type: enhancement', 'status: ready'] }
+  assert.equal(summarize(ticket, ['status: needs-criteria', 'status: ready'], {}).needsInfo, 0, 'the first needs-criteria is how ba-ticket creates it')
+  const back = summarize(ticket, ['status: needs-criteria', 'status: ready', 'status: needs-criteria', 'status: ready'], {})
+  assert.equal(back.needsInfo, 1)
+  assert.equal(back.score, 'bumpy')
+  assert.equal(summarize(ticket, ['needs-info', 'status: ready', 'status: needs-criteria'], {}).needsInfo, 2)
+})
+
+test('the kind comes from a kind/ label, else from a type: label', () => {
+  assert.equal(summarize({ ...issue, labels: ['type: enhancement', 'status: ready'] }, [], {}).kind, 'enhancement')
+  assert.equal(summarize({ ...issue, labels: ['factory'] }, [], {}).kind, 'other')
+})

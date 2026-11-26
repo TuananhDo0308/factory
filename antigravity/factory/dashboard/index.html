@@ -181,7 +181,7 @@ td .pill { color: var(--on-fill); border-color: var(--on-fill); font-size: 13px;
       <div class="row f-build"><b>Build</b><span>test-first implementer, then QA, per spec</span></div>
       <div class="row f-check"><b>Check</b><span>checker runs the commands</span></div>
       <div class="row f-review"><b>Review + QC</b><span>1 whole change + 1 per spec; QC uses the product</span></div>
-      <div class="row f-repair"><b>Back to Build</b><span>a spec QA, review or QC fails is rebuilt · at most 2 times</span></div>
+      <div class="row f-repair"><b>Back to Build</b><span>a spec QA, review or QC fails is rebuilt · at most 4 times</span></div>
       <div class="row f-result" id="last-run"><b>Latest run</b><span>loading</span></div>
     </div>
   </section>
@@ -228,7 +228,7 @@ td .pill { color: var(--on-fill); border-color: var(--on-fill); font-size: 13px;
           <svg aria-hidden="true" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M13 6l6 6-6 6"></path></svg>
           <div class="step fill f-review"><i>4</i><b>Review + QC</b><span>1 whole change + 1 per spec; once the checks pass, QC starts the product and tries each criterion</span></div>
           <svg aria-hidden="true" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M4 9h13a3 3 0 0 1 0 6H4M8 5L4 9l4 4"></path></svg>
-          <div class="step fill f-repair dashed"><i>5</i><b>Back to Build</b><span>on failure: the specs concerned are rebuilt, go through QA again, then check, review and QC again · at most 2 times per spec</span></div>
+          <div class="step fill f-repair dashed"><i>5</i><b>Back to Build</b><span>on failure: the specs concerned are rebuilt, go through QA again, then check, review and QC again · at most 4 times per spec</span></div>
         </div>
       </div>
       <svg aria-hidden="true" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M13 6l6 6-6 6"></path></svg>
@@ -274,7 +274,7 @@ td .pill { color: var(--on-fill); border-color: var(--on-fill); font-size: 13px;
       <li><span class="mono">evaluate()</span><span>Passed: every check exits 0, every criterion met by every reviewer and seen working by QC (or not observable), no blocking finding, nothing sent back by QA. QC runs only once the checks pass; QC blocked, or leaving files in the repository, stops the run</span></li>
       <li><span class="mono">routeFailures()</span><span>Each failure goes back to the implementer of the spec it concerns: the owner of the file, the specs of the criterion, the owner of the test file the checker found breaking a failing check's tests, or else the specs named in its output</span></li>
       <li><span class="mono">testsChanged()</span><span>Every test file an implementer changes after the first build is recorded and reported</span></li>
-      <li><span class="mono">maxRebuilds</span><span>A spec goes back to Build at most 2 times, from QA, review or QC; past that the run fails</span></li>
+      <li><span class="mono">maxRebuilds</span><span>A spec goes back to Build at most 4 times, from QA, review or QC; past that the run fails</span></li>
       <li><span class="mono">runRecord()</span><span>What this dashboard shows is built from the raw results, not written by an agent</span></li>
       <li><span class="mono">failureEntries()</span><span>Every failure that sent a spec back to Build, or ended the run, is filed with the run in its failure log: what it was, where it pointed, which specs answered for it</span></li>
     </ul>
