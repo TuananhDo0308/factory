@@ -18,6 +18,7 @@ import {
   CopyIcon,
   CpuIcon,
   ExternalLinkIcon,
+  EyeIcon,
   FileCodeIcon,
   FileImageIcon,
   FileTextIcon,
@@ -106,9 +107,30 @@ import {
   TicketsBlockCard,
   type ParsedChatTicket,
 } from "@/components/factory/markdown-content";
+import {
+  AskedQuestionsSummary,
+  QuestionSelectorDock,
+} from "@/components/factory/question-selector-dock";
+import {
+  PrototypeChatCard,
+  PrototypeStudio,
+  toPrototypeViewModel,
+  type PrototypeViewModel,
+} from "@/components/factory/prototype-viewer";
 import { useFactoryStream } from "@/components/factory/use-factory-stream";
 import { effortBarsForModel, formatModelLabel } from "@/lib/models";
 import { isFactoryInitIssue } from "@/lib/init-issue-shared";
+import {
+  splitAssistantPrototypeBlocks,
+  type SerializedPrototype,
+} from "@/lib/prototypes";
+import {
+  extractQuestionSetFromAssistantText,
+  extractQuestionsFromInteractionPayload,
+  parseQuestionsJson,
+  splitAssistantQuestionsBlock,
+  type ParsedQuestionSet,
+} from "@/lib/questions";
 import { detectSkillFromPrompt, findSkillByIdOrMode } from "@/lib/skills";
 import type { RunDetailData } from "@/lib/workspace-data";
 
@@ -275,6 +297,30 @@ function groupTimelineSteps(steps: TimelineStep[]): TimelineGroup[] {
     }
   }
   return groups;
+}
+
+function findActiveQuestionTurn(
+  mode: string,
+  status: string,
+  steps: TimelineStep[],
+  selectedAgentId: string | null,
+): { stepId: string; questionSet: ParsedQuestionSet } | null {
+  if (mode === "factory" || mode === "mission" || selectedAgentId !== null) return null;
+  if (status === "running" || status === "queued") return null;
+
+  const groups = groupTimelineSteps(steps);
+  for (let i = groups.length - 1; i >= 0; i -= 1) {
+    const grp = groups[i];
+    if (grp.type === "human") break;
+    if (grp.type !== "assistant") continue;
+    const summary = grp.step.summary;
+    if (!summary) continue;
+    const qs = extractQuestionSetFromAssistantText(summary);
+    if (qs && qs.questions.length > 0) {
+      return { stepId: grp.step.id, questionSet: qs };
+    }
+  }
+  return null;
 }
 
 function TraceActivityItem({
@@ -464,9 +510,10 @@ function TraceActivityItem({
 }
 
 function cleanPromptDisplay(raw: string): string {
-  // Hide internal boilerplate tracking / unattended build contract appended automatically by dispatch
+  // Hide internal boilerplate tracking / unattended build / interactive question contracts appended automatically
   const stripped = raw
     .replace(/\n*Software Factory (?:Tracking|Unattended Build) Contract:[\s\S]*$/i, "")
+    .replace(/\n*Interactive Questions Contract:[\s\S]*$/i, "")
     .trim();
   return stripped || raw.trim();
 }
@@ -629,6 +676,10 @@ function AssistantMessageCard({
   ticketStatusByKey,
   onSelectTicket,
   fallbackTickets,
+  isActiveQuestionStep = false,
+  dbPrototypes = [],
+  selectedPrototypeSlug = null,
+  onSelectPrototype,
 }: {
   step: TimelineStep;
   runActive: boolean;
@@ -636,11 +687,27 @@ function AssistantMessageCard({
   ticketStatusByKey?: Record<string, string>;
   onSelectTicket?: (ticket: ParsedChatTicket) => void;
   fallbackTickets?: ParsedChatTicket[];
+  isActiveQuestionStep?: boolean;
+  dbPrototypes?: SerializedPrototype[];
+  selectedPrototypeSlug?: string | null;
+  onSelectPrototype?: (vm: PrototypeViewModel) => void;
 }) {
   const [copied, setCopied] = React.useState(false);
   const text = step.summary || "";
   const isStreaming = runActive && step.status === "started";
-  const parsed = React.useMemo(() => splitAssistantTicketsBlock(text), [text]);
+  const parsedQuestionsBlock = React.useMemo(() => splitAssistantQuestionsBlock(text), [text]);
+  const parsedProtoBlocks = React.useMemo(
+    () => splitAssistantPrototypeBlocks(parsedQuestionsBlock.prose),
+    [parsedQuestionsBlock.prose],
+  );
+  const parsed = React.useMemo(
+    () => splitAssistantTicketsBlock(parsedProtoBlocks.prose),
+    [parsedProtoBlocks.prose],
+  );
+  const parsedQuestionSet = React.useMemo(() => {
+    if (!parsedQuestionsBlock.questionsJson || parsedQuestionsBlock.questionsStreaming) return null;
+    return parseQuestionsJson(parsedQuestionsBlock.questionsJson);
+  }, [parsedQuestionsBlock.questionsJson, parsedQuestionsBlock.questionsStreaming]);
   const parsedTickets = React.useMemo(() => {
     if (!parsed.ticketsJson || parsed.ticketsStreaming) return null;
     const direct = parseTicketsJson("sf-tickets", parsed.ticketsJson);
@@ -710,15 +777,70 @@ function AssistantMessageCard({
               ticketStatusByKey={ticketStatusByKey}
               onSelectTicket={onSelectTicket}
             />
-          ) : !parsed.ticketsJson ? (
+          ) : !parsed.ticketsJson &&
+            !parsedQuestionsBlock.questionsJson &&
+            parsedProtoBlocks.prototypes.length === 0 &&
+            !parsedProtoBlocks.prototypeStreaming ? (
             <span className="text-xs italic text-muted-foreground">Empty response</span>
           ) : null}
+
+          {parsedProtoBlocks.prototypeStreaming && (
+            <div className="flex items-center gap-2 rounded-lg border bg-muted/40 px-3.5 py-2.5 text-xs text-foreground">
+              <Spinner className="size-3.5 text-primary" />
+              <span>
+                Building interactive HTML prototype
+                {parsedProtoBlocks.streamingTitle
+                  ? ` (${parsedProtoBlocks.streamingTitle})…`
+                  : "…"}
+              </span>
+            </div>
+          )}
+
+          {parsedProtoBlocks.prototypes.map((proto, pIdx) => {
+            const dbMatch =
+              dbPrototypes.find(
+                (d) =>
+                  d.slug.toLowerCase() === proto.slug.toLowerCase() ||
+                  (proto.htmlPath && d.localPath && d.localPath.endsWith(proto.htmlPath)) ||
+                  d.title.toLowerCase() === proto.title.toLowerCase(),
+              ) ?? null;
+            return (
+              <PrototypeChatCard
+                key={`${proto.slug}-${pIdx}`}
+                prototype={proto}
+                resolvedDbPrototype={dbMatch}
+                isSelected={
+                  selectedPrototypeSlug?.toLowerCase() ===
+                  (dbMatch?.slug ?? proto.slug).toLowerCase()
+                }
+                onOpen={(vm) => onSelectPrototype?.(vm)}
+              />
+            );
+          })}
 
           {parsed.isTruncatedLegacy && !parsedTickets && (
             <p className="text-xs text-muted-foreground">
               The summary from this earlier run exceeded the old buffer cap, and all drafted tickets are synced to Kanban.
             </p>
           )}
+
+          {parsedQuestionsBlock.questionsJson !== null &&
+            (parsedQuestionsBlock.questionsStreaming ? (
+              <div className="flex items-center gap-2 rounded-lg border bg-muted/40 px-3.5 py-2.5 text-xs text-foreground">
+                <Spinner className="size-3.5 text-primary" />
+                <span>
+                  Preparing interactive options
+                  {parsedQuestionsBlock.questionCount > 0
+                    ? ` (${parsedQuestionsBlock.questionCount})…`
+                    : "…"}
+                </span>
+              </div>
+            ) : parsedQuestionSet ? (
+              <AskedQuestionsSummary
+                questions={parsedQuestionSet.questions}
+                isPendingBelow={isActiveQuestionStep}
+              />
+            ) : null)}
 
           {parsed.ticketsJson !== null &&
             (parsed.ticketsStreaming ? (
@@ -1056,6 +1178,19 @@ export function MissionControl({
   // BA / ticket selection -> reveals right-side Issue Detail inspector
   const [selectedTicket, setSelectedTicket] = React.useState<ParsedChatTicket | null>(null);
   const [selectedIssueId, setSelectedIssueId] = React.useState<string | null>(null);
+  // Interactive Prototype preview -> reveals right-side Prototype Studio
+  const [selectedPrototype, setSelectedPrototype] = React.useState<PrototypeViewModel | null>(null);
+
+  const runPrototypes = run.prototypes ?? [];
+  const activePrototype = React.useMemo<PrototypeViewModel | null>(() => {
+    if (!selectedPrototype) return null;
+    const freshDb = runPrototypes.find(
+      (p) =>
+        (selectedPrototype.id && p.id === selectedPrototype.id) ||
+        p.slug.toLowerCase() === selectedPrototype.slug.toLowerCase(),
+    );
+    return freshDb ? toPrototypeViewModel(freshDb) : selectedPrototype;
+  }, [selectedPrototype, runPrototypes]);
 
   // Sticky auto-scroll for Chat timeline
   const chatScrollContainerRef = React.useRef<HTMLDivElement | null>(null);
@@ -1233,12 +1368,14 @@ export function MissionControl({
     const dbMatch = (run.projectDraftIssues || []).find(
       (i) => i.issueKey.toUpperCase() === ticket.issueKey.toUpperCase(),
     );
+    setSelectedPrototype(null);
     setSelectedIssueId(dbMatch?.id ?? null);
     setSelectedTicket(ticket);
   }
 
   function handleSelectDbIssue(issueId: string) {
     const dbMatch = (run.projectDraftIssues || []).find((i) => i.id === issueId);
+    setSelectedPrototype(null);
     setSelectedIssueId(issueId);
     setSelectedTicket(
       dbMatch
@@ -1254,6 +1391,12 @@ export function MissionControl({
           }
         : null,
     );
+  }
+
+  function handleSelectPrototype(vm: PrototypeViewModel) {
+    setSelectedIssueId(null);
+    setSelectedTicket(null);
+    setSelectedPrototype(vm);
   }
 
   async function handleUpdateInspectedStatus(issueId: string, status: string) {
@@ -1323,7 +1466,14 @@ export function MissionControl({
   const isUnattendedBuild = run.mode === "factory" || run.mode === "mission";
   const isInitMode = run.mode === "init" || (run.issue ? isFactoryInitIssue(run.issue) : false);
   const showLeftRail = !isBaMode && !isInitMode && !isClarifyMode && run.agents.length > 1;
-  const showRightPane = isBaMode ? Boolean(inspectedIssue) : inspectorOpen;
+  const showRightPane = Boolean(activePrototype) || (isBaMode ? Boolean(inspectedIssue) : inspectorOpen);
+
+  const timelineGroups = groupTimelineSteps(filteredSteps);
+
+  const activeQuestionTurn = React.useMemo(
+    () => findActiveQuestionTurn(run.mode, run.status, run.steps, selectedAgentId),
+    [run.mode, run.status, run.steps, selectedAgentId],
+  );
   const dbFallbackTickets = React.useMemo<ParsedChatTicket[]>(
     () =>
       (run.projectDraftIssues || []).map((iss) => ({
@@ -1379,9 +1529,35 @@ export function MissionControl({
     }
   }
 
+  async function handleSubmitQuestionAnswers(formattedMessage: string) {
+    const trimmed = formattedMessage.trim();
+    if (!trimmed) return;
+    setBusy(true);
+    try {
+      const res = await fetch(`/api/sessions/${run.id}/steer`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          message: trimmed,
+          agentKey: selectedAgent?.agentKey,
+        }),
+      });
+      if (!res.ok) {
+        toast.error("Failed to send answers");
+        return;
+      }
+      toast.success("Answers sent — resuming session");
+      await refreshRun();
+      scrollChatToBottom(true);
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function handleResolveInteraction(
     interactionId: string,
     decision: "approved" | "answered" | "dismissed",
+    overrideMessage?: string,
   ) {
     setBusy(true);
     try {
@@ -1391,7 +1567,7 @@ export function MissionControl({
         body: JSON.stringify({
           interactionId,
           decision,
-          message: answerDrafts[interactionId] || "",
+          message: overrideMessage ?? answerDrafts[interactionId] ?? "",
         }),
       });
       if (!res.ok) {
@@ -1401,6 +1577,7 @@ export function MissionControl({
       setAnswerDrafts((prev) => ({ ...prev, [interactionId]: "" }));
       toast.success(`Interaction ${decision}`);
       await refreshRun();
+      scrollChatToBottom(true);
     } finally {
       setBusy(false);
     }
@@ -1820,12 +1997,33 @@ export function MissionControl({
                   </Button>
                 </div>
               )}
+              {runPrototypes.length > 0 && viewMode === "chat" && (
+                <Button
+                  type="button"
+                  variant={activePrototype ? "secondary" : "outline"}
+                  size="sm"
+                  onClick={() => {
+                    if (activePrototype) {
+                      setSelectedPrototype(null);
+                    } else {
+                      handleSelectPrototype(toPrototypeViewModel(runPrototypes[0]));
+                    }
+                  }}
+                  title="Toggle interactive HTML Prototype Studio"
+                >
+                  <EyeIcon data-icon="inline-start" />
+                  Prototype ({runPrototypes.length})
+                </Button>
+              )}
               {!isBaMode && viewMode === "chat" && (
                 <Button
                   type="button"
-                  variant={inspectorOpen ? "secondary" : "outline"}
+                  variant={inspectorOpen && !activePrototype ? "secondary" : "outline"}
                   size="sm"
-                  onClick={() => setInspectorOpen((prev) => !prev)}
+                  onClick={() => {
+                    setSelectedPrototype(null);
+                    setInspectorOpen((prev) => !prev);
+                  }}
                   title="Toggle Specs, PRs, Files, and Models inspector"
                 >
                   <PanelRightIcon data-icon="inline-start" />
@@ -2050,7 +2248,6 @@ export function MissionControl({
                           </Empty>
                         ) : (
                           (() => {
-                            const timelineGroups = groupTimelineSteps(filteredSteps);
                             const agentNameById = new Map(run.agents.map((a) => [a.id, a.name]));
                             const agentStatusById = new Map(run.agents.map((a) => [a.id, a.status]));
                             const runActive =
@@ -2103,6 +2300,12 @@ export function MissionControl({
                                         ticketStatusByKey={ticketStatusByKey}
                                         onSelectTicket={handleSelectChatTicket}
                                         fallbackTickets={isBaMode ? dbFallbackTickets : undefined}
+                                        isActiveQuestionStep={
+                                          activeQuestionTurn?.stepId === group.step.id
+                                        }
+                                        dbPrototypes={runPrototypes}
+                                        selectedPrototypeSlug={activePrototype?.slug ?? null}
+                                        onSelectPrototype={handleSelectPrototype}
                                       />
                                     );
                                   }
@@ -2387,56 +2590,95 @@ export function MissionControl({
                 {/* Inline Pending Interaction Action Card (interactive sessions only; never on unattended Factory builds) */}
                 {!isUnattendedBuild &&
                   pendingInteractions.length > 0 &&
-                  !(run.mode === "ba" && run.projectDraftIssues?.length > 0) && (
-                  <div className="border-t bg-muted/40 px-4 py-3">
-                    {pendingInteractions.slice(0, 1).map((inter) => (
-                      <div
-                        key={inter.id}
-                        className="flex flex-col gap-2.5 rounded-lg border bg-card p-3"
-                      >
-                        <div className="flex items-start justify-between gap-2">
-                          <div className="flex items-start gap-2">
-                            <AlertCircleIcon className="mt-0.5 size-4 shrink-0 text-primary" />
-                            <div className="flex flex-col gap-0.5">
-                              <span className="text-sm font-medium">{inter.title}</span>
-                              {inter.prompt && (
-                                <p className="whitespace-pre-wrap text-xs text-muted-foreground">
-                                  {inter.prompt}
-                                </p>
-                              )}
+                  !(run.mode === "ba" && run.projectDraftIssues?.length > 0) &&
+                  (() => {
+                    const inter = pendingInteractions[0];
+                    const interactionQuestions = extractQuestionsFromInteractionPayload(
+                      inter.payload,
+                      inter.title,
+                    );
+                    if (interactionQuestions && interactionQuestions.length > 0) {
+                      return (
+                        <QuestionSelectorDock
+                          key={`inter-${inter.id}`}
+                          questionSet={{
+                            source: "sf-questions",
+                            questions: interactionQuestions,
+                          }}
+                          busy={busy}
+                          onSubmit={(reply) =>
+                            handleResolveInteraction(inter.id, "answered", reply)
+                          }
+                        />
+                      );
+                    }
+                    return (
+                      <div className="border-t bg-muted/40 px-4 py-3">
+                        <div className="mx-auto flex w-full max-w-3xl flex-col gap-2.5 rounded-lg border bg-card p-3">
+                          <div className="flex items-start justify-between gap-2">
+                            <div className="flex items-start gap-2">
+                              <AlertCircleIcon className="mt-0.5 size-4 shrink-0 text-primary" />
+                              <div className="flex flex-col gap-0.5">
+                                <span className="text-sm font-medium">{inter.title}</span>
+                                {inter.prompt && (
+                                  <p className="whitespace-pre-wrap text-xs text-muted-foreground">
+                                    {inter.prompt}
+                                  </p>
+                                )}
+                              </div>
                             </div>
+                            <Badge variant="outline">{inter.type}</Badge>
                           </div>
-                          <Badge variant="outline">{inter.type}</Badge>
-                        </div>
 
-                        <div className="flex items-center gap-2">
-                          <Input
-                            placeholder="Type your answer or feedback..."
-                            value={answerDrafts[inter.id] || ""}
-                            onChange={(e) =>
-                              setAnswerDrafts((prev) => ({ ...prev, [inter.id]: e.target.value }))
-                            }
-                          />
-                          <Button
-                            size="sm"
-                            disabled={busy}
-                            onClick={() => void handleResolveInteraction(inter.id, "approved")}
-                          >
-                            Approve &amp; Resume
-                          </Button>
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            disabled={busy}
-                            onClick={() => void handleResolveInteraction(inter.id, "dismissed")}
-                          >
-                            Dismiss
-                          </Button>
+                          <div className="flex items-center gap-2">
+                            <Input
+                              placeholder="Type your answer or feedback..."
+                              value={answerDrafts[inter.id] || ""}
+                              onChange={(e) =>
+                                setAnswerDrafts((prev) => ({
+                                  ...prev,
+                                  [inter.id]: e.target.value,
+                                }))
+                              }
+                            />
+                            <Button
+                              size="sm"
+                              disabled={busy}
+                              onClick={() => void handleResolveInteraction(inter.id, "approved")}
+                            >
+                              Approve &amp; Resume
+                            </Button>
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              disabled={busy}
+                              onClick={() => void handleResolveInteraction(inter.id, "dismissed")}
+                            >
+                              Dismiss
+                            </Button>
+                          </div>
                         </div>
                       </div>
-                    ))}
-                  </div>
-                )}
+                    );
+                  })()}
+
+                {/* Docked Interactive Question Selector (above composer for unanswered AI question waves) */}
+                {!isUnattendedBuild &&
+                  activeQuestionTurn &&
+                  !(
+                    pendingInteractions.length > 0 &&
+                    extractQuestionsFromInteractionPayload(
+                      pendingInteractions[0].payload,
+                      pendingInteractions[0].title,
+                    )
+                  ) && (
+                    <QuestionSelectorDock
+                      key={activeQuestionTurn.stepId}
+                      questionSet={activeQuestionTurn.questionSet}
+                      busy={busy}
+                      onSubmit={handleSubmitQuestionAnswers}
+                    />
+                  )}
 
                 {/* Bottom Steer Composer (interactive sessions only; unattended Factory builds are read-only) */}
                 {isUnattendedBuild ? (
@@ -2488,9 +2730,65 @@ export function MissionControl({
               <>
                 <ResizableHandle />
 
-                {/* RIGHT PANE: Issue Detail Inspector (BA when ticket clicked) or Tabbed Inspector */}
-                <ResizablePanel id="inspector" defaultSize="30%" minSize="22%">
-                  {isBaMode && inspectedIssue ? (
+                {/* RIGHT PANE: Interactive Prototype Studio, Issue Detail Inspector (BA), or Tabbed Inspector */}
+                <ResizablePanel
+                  id="inspector"
+                  defaultSize={activePrototype ? "46%" : "30%"}
+                  minSize="24%"
+                >
+                  {activePrototype ? (
+                    <div className="flex h-full flex-col border-l bg-sidebar/20">
+                      <div className="flex items-center justify-between gap-2 border-b bg-card px-3 py-2">
+                        <div className="flex min-w-0 items-center gap-1.5 overflow-x-auto">
+                          <SparklesIcon className="size-3.5 shrink-0 text-primary" />
+                          {runPrototypes.length > 1 ? (
+                            runPrototypes.map((p) => (
+                              <Button
+                                key={p.id}
+                                type="button"
+                                size="xs"
+                                variant={
+                                  p.slug.toLowerCase() === activePrototype.slug.toLowerCase()
+                                    ? "secondary"
+                                    : "ghost"
+                                }
+                                onClick={() => handleSelectPrototype(toPrototypeViewModel(p))}
+                              >
+                                {p.title}
+                              </Button>
+                            ))
+                          ) : (
+                            <span className="truncate text-xs font-medium text-foreground">
+                              Prototype Studio
+                            </span>
+                          )}
+                        </div>
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="icon-xs"
+                          className="shrink-0"
+                          title="Close Prototype Studio"
+                          onClick={() => setSelectedPrototype(null)}
+                        >
+                          <XIcon />
+                        </Button>
+                      </div>
+                      <div className="min-h-0 flex-1 p-2">
+                        <PrototypeStudio
+                          key={`${activePrototype.id ?? activePrototype.slug}-v${activePrototype.version ?? 1}`}
+                          prototype={activePrototype}
+                          projectId={run.project.id}
+                          canWrite={!isUnattendedBuild}
+                          compact
+                          onUpdated={() => void refreshRun()}
+                          onSteer={
+                            !isUnattendedBuild ? handleSubmitQuestionAnswers : undefined
+                          }
+                        />
+                      </div>
+                    </div>
+                  ) : isBaMode && inspectedIssue ? (
                     <div className="flex h-full flex-col border-l bg-sidebar/20">
                       <div className="flex items-start justify-between gap-2 border-b px-3.5 py-3">
                         <div className="flex min-w-0 flex-col gap-1">
@@ -2596,6 +2894,39 @@ export function MissionControl({
                               </Button>
                             </div>
                           )}
+
+                          {/* Linked Interactive Prototype (when BA built one for this ticket) */}
+                          {(() => {
+                            const linkedProto = runPrototypes.find((p) =>
+                              p.issueKeys.some(
+                                (k) => k.toUpperCase() === inspectedIssue.issueKey.toUpperCase(),
+                              ),
+                            );
+                            if (!linkedProto) return null;
+                            return (
+                              <div className="flex items-center justify-between gap-2 rounded-md border border-primary/30 bg-primary/5 px-3 py-2 text-xs">
+                                <div className="flex min-w-0 flex-col gap-0.5">
+                                  <span className="truncate font-medium text-foreground">
+                                    {linkedProto.title}
+                                  </span>
+                                  <span className="font-mono text-[10px] text-muted-foreground">
+                                    {linkedProto.manifest.screens.length || 1} states · binding:{" "}
+                                    {linkedProto.binding}
+                                  </span>
+                                </div>
+                                <Button
+                                  type="button"
+                                  size="xs"
+                                  onClick={() =>
+                                    handleSelectPrototype(toPrototypeViewModel(linkedProto))
+                                  }
+                                >
+                                  <EyeIcon data-icon="inline-start" />
+                                  Preview
+                                </Button>
+                              </div>
+                            );
+                          })()}
 
                           {/* Goal */}
                           {inspectedIssue.goal && (
@@ -2995,7 +3326,16 @@ export function MissionControl({
                         const isImage =
                           /\.(png|jpe?g|webp|svg)$/i.test(art.pathOrUrl) ||
                           (art.mimeType || "").startsWith("image/");
-                        const fileHref = `/api/artifacts/file?id=${encodeURIComponent(art.id)}`;
+                        const protoId =
+                          art.kind === "prototype" && typeof art.meta?.prototypeId === "string"
+                            ? art.meta.prototypeId
+                            : null;
+                        const matchedProto = protoId
+                          ? runPrototypes.find((p) => p.id === protoId) ?? null
+                          : null;
+                        const fileHref = matchedProto
+                          ? `/api/prototypes/${encodeURIComponent(matchedProto.id)}/raw`
+                          : `/api/artifacts/file?id=${encodeURIComponent(art.id)}`;
                         return (
                           <div key={art.id} className="flex flex-col gap-2 rounded-lg border p-2.5 text-xs">
                             <div className="flex items-center justify-between gap-2">
@@ -3009,6 +3349,19 @@ export function MissionControl({
                               </span>
                               <Badge variant="secondary">{art.kind}</Badge>
                             </div>
+                            {matchedProto && (
+                              <Button
+                                type="button"
+                                size="xs"
+                                variant="secondary"
+                                onClick={() =>
+                                  handleSelectPrototype(toPrototypeViewModel(matchedProto))
+                                }
+                              >
+                                <EyeIcon data-icon="inline-start" />
+                                Open Interactive Preview
+                              </Button>
+                            )}
                             {isImage && (
                               // eslint-disable-next-line @next/next/no-img-element
                               <img

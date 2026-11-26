@@ -4,6 +4,7 @@ import { emitFactoryEvent } from "@/lib/events";
 import type { LiveJsSpec } from "@/lib/live-sync";
 import { prisma } from "@/lib/prisma";
 import { serializeProjectIssue } from "@/lib/project-stats";
+import { serializePrototype } from "@/lib/prototype-server";
 import {
   accessibleProjectsWhere,
   getAccessibleRunners,
@@ -361,20 +362,48 @@ export async function getRunDetail(userId: string, runId: string) {
       interactions: { orderBy: { createdAt: "desc" } },
       artifacts: { orderBy: { createdAt: "desc" } },
       pullRequests: { orderBy: { updatedAt: "desc" } },
+      prototypes: { orderBy: { updatedAt: "desc" } },
     },
   });
 
   if (!run) return null;
 
-  const projectDraftIssues =
+  const [projectDraftIssues, projectPrototypes] = await Promise.all([
     run.mode === "ba"
-      ? (
-          await prisma.projectIssue.findMany({
+      ? prisma.projectIssue
+          .findMany({
             where: { projectId: run.projectId },
             orderBy: [{ priority: "asc" }, { createdAt: "asc" }],
           })
-        ).map(serializeProjectIssue)
-      : [];
+          .then((rows) => rows.map(serializeProjectIssue))
+      : Promise.resolve([]),
+    run.mode === "ba" || run.mode === "clarify" || run.issue
+      ? prisma.projectPrototype
+          .findMany({
+            where: { projectId: run.projectId },
+            orderBy: { updatedAt: "desc" },
+            take: 30,
+          })
+          .then((rows) => rows.map(serializePrototype))
+      : Promise.resolve([]),
+  ]);
+
+  const seenProtoIds = new Set<string>();
+  const combinedPrototypes = [...run.prototypes.map(serializePrototype), ...projectPrototypes].filter(
+    (p) => {
+      if (seenProtoIds.has(p.id)) return false;
+      if (
+        run.mode !== "ba" &&
+        p.runId !== run.id &&
+        run.issue &&
+        !p.issueKeys.some((k) => k.toUpperCase() === run.issue!.issueKey.toUpperCase())
+      ) {
+        return false;
+      }
+      seenProtoIds.add(p.id);
+      return true;
+    },
+  );
 
   return {
     id: run.id,
@@ -399,6 +428,7 @@ export async function getRunDetail(userId: string, runId: string) {
     specLine: run.specLine,
     specs: safeJsonParse<LiveJsSpec[]>(run.specsJson, []),
     projectDraftIssues,
+    prototypes: combinedPrototypes,
     criteria: safeJsonParse<Array<{ id: string; text: string; status?: string }>>(
       run.criteriaJson,
       [],

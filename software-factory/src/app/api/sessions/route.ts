@@ -269,6 +269,7 @@ export async function POST(request: NextRequest) {
       `[Software Factory Project Context]`,
       `Project: ${project.name} (slug: "${project.slug}", branch: "${targetBranch}"${project.localPath ? `, path: ${project.localPath}` : ""})`,
       `To inspect live issues (including full body & criteria), runs, inbox, or lessons, ALWAYS use the \`software-factory\` MCP tools (\`sf_list_issues\`, \`sf_list_runs\`, \`sf_workspace_summary\`, \`sf_get_inbox\`, \`sf_get_lessons\`) or \`sf issues list --project ${project.slug} --json\`. NEVER open or query \`dev.db\` with \`sqlite3\`.`,
+      `This chat runs headless over Software Factory (do NOT call interactive-only \`ask_question\` / \`AskUserQuestion\`). Whenever you need to ask the user multiple-choice questions, end your reply with a fenced \`\`\`sf-questions JSON block ({ "questions": [{ "id": "Q1", "header": "Topic", "question": "...", "multiSelect": false, "options": [{ "label": "...", "description": "...", "recommended": true }], "allowOther": true }] }) so the UI renders clickable options.`,
     ];
     if (projectIssues.length > 0) {
       ctxLines.push("Current Kanban issues:");

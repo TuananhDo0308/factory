@@ -39,6 +39,11 @@ export async function POST(request: NextRequest) {
   });
   if (!run) return NextResponse.json({ error: "Run not found" }, { status: 404 });
 
+  const rawContentText =
+    typeof body.contentText === "string" ? body.contentText.slice(0, 1_500_000) : null;
+  const rawContentBase64 =
+    typeof body.contentBase64 === "string" ? body.contentBase64.slice(0, 3_000_000) : null;
+
   const artifact = await prisma.runArtifact.create({
     data: {
       runId: run.id,
@@ -46,6 +51,8 @@ export async function POST(request: NextRequest) {
       title: title.slice(0, 180),
       pathOrUrl: pathOrUrl.slice(0, 2000),
       mimeType: str(body.mimeType) || null,
+      contentText: rawContentText,
+      contentBase64: rawContentBase64,
       metaJson: body.meta !== undefined ? JSON.stringify(body.meta) : null,
     },
   });

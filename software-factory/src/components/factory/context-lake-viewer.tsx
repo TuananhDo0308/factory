@@ -4,6 +4,7 @@ import * as React from "react";
 import {
   CheckIcon,
   ChevronRightIcon,
+  CloudIcon,
   Code2Icon,
   CopyIcon,
   EyeIcon,
@@ -12,6 +13,9 @@ import {
   FileTextIcon,
   FolderIcon,
   FolderOpenIcon,
+  HardDriveIcon,
+  LaptopIcon,
+  RefreshCwIcon,
   SearchIcon,
   WrapTextIcon,
 } from "lucide-react";
@@ -32,6 +36,7 @@ import {
 } from "@/components/ui/empty";
 import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { Spinner } from "@/components/ui/spinner";
 import { MarkdownContent } from "@/components/factory/markdown-content";
 import { cn } from "@/lib/utils";
 
@@ -39,6 +44,8 @@ export type ContextLakeFile = {
   path: string;
   content: string;
   bytes: number;
+  source?: string;
+  updatedAt?: string;
 };
 
 type FileKind = "markdown" | "json" | "code";
@@ -348,7 +355,29 @@ function FileTreeBranch({
   );
 }
 
-export function ContextLakeViewer({ files }: { files: ContextLakeFile[] }) {
+function sourceLabel(source?: string): { text: string; icon: "local" | "daemon" | "github" } {
+  if (source === "github") return { text: "GitHub", icon: "github" };
+  if (source === "daemon") return { text: "Runner sync", icon: "daemon" };
+  return { text: "Local disk", icon: "local" };
+}
+
+export function ContextLakeViewer({
+  files,
+  source = "none",
+  syncedAt = null,
+  githubFullName = null,
+  canWrite = false,
+  syncing = false,
+  onSync,
+}: {
+  files: ContextLakeFile[];
+  source?: "local" | "daemon" | "github" | "none";
+  syncedAt?: string | null;
+  githubFullName?: string | null;
+  canWrite?: boolean;
+  syncing?: boolean;
+  onSync?: () => Promise<void> | void;
+}) {
   const [selectedPath, setSelectedPath] = React.useState<string>(files[0]?.path ?? "");
   const [query, setQuery] = React.useState("");
   const [expandedFolders, setExpandedFolders] = React.useState<Record<string, boolean>>({});
@@ -414,14 +443,37 @@ export function ContextLakeViewer({ files }: { files: ContextLakeFile[] }) {
           <EmptyMedia variant="icon">
             <FileCodeIcon />
           </EmptyMedia>
-          <EmptyTitle>No .factory/ context files found on disk</EmptyTitle>
+          <EmptyTitle>No Context Lake files synced yet</EmptyTitle>
           <EmptyDescription>
-            Set a valid local repository path and run{" "}
-            <code className="font-mono">/factory init</code> to populate{" "}
-            <code className="font-mono">project.json</code>,{" "}
-            <code className="font-mono">CODING_STANDARDS.md</code>, and UI catalog.
+            Remote deployments (like Vercel) cannot read your local folder directly.{" "}
+            {githubFullName ? (
+              <>
+                Click <strong>Sync Context</strong> to pull{" "}
+                <code className="font-mono">.factory/</code> &amp; docs from{" "}
+                <code className="font-mono">{githubFullName}</code>, or keep{" "}
+                <code className="font-mono">sf daemon</code> running locally to push uncommitted
+                files automatically.
+              </>
+            ) : (
+              <>
+                Keep <code className="font-mono">sf daemon</code> running on your machine (or run{" "}
+                <code className="font-mono">sf sync-context</code>) after{" "}
+                <code className="font-mono">/factory init</code> to sync{" "}
+                <code className="font-mono">.factory/</code> files to the cloud database.
+              </>
+            )}
           </EmptyDescription>
         </EmptyHeader>
+        {canWrite && onSync && (
+          <Button size="sm" disabled={syncing} onClick={() => void onSync()}>
+            {syncing ? (
+              <Spinner data-icon="inline-start" />
+            ) : (
+              <RefreshCwIcon data-icon="inline-start" />
+            )}
+            Sync Context Now
+          </Button>
+        )}
       </Empty>
     );
   }
@@ -429,11 +481,41 @@ export function ContextLakeViewer({ files }: { files: ContextLakeFile[] }) {
   const activeParts = activeFile ? splitFilePath(activeFile.path) : { dir: "", name: "" };
   const canPreview = activeKind === "markdown" || (activeKind === "json" && formattedJson !== null);
   const showingPreview = canPreview && viewMode === "preview";
+  const srcMeta = sourceLabel(source);
 
   return (
     <div className="flex min-h-[540px] flex-col overflow-hidden rounded-lg border bg-card md:h-[calc(100vh-230px)] md:flex-row">
       {/* LEFT SIDEBAR: Nested Collapsible Folder Tree (mirrors App Sidebar style) */}
       <aside className="flex w-full shrink-0 flex-col border-b bg-sidebar text-sidebar-foreground md:w-64 md:border-r md:border-b-0 lg:w-72">
+        <div className="flex items-center justify-between gap-2 border-b border-sidebar-border px-2.5 py-2">
+          <div
+            className="flex min-w-0 items-center gap-1.5 text-[11px] text-muted-foreground"
+            title={syncedAt ? `Last synced: ${new Date(syncedAt).toLocaleString()}` : undefined}
+          >
+            {srcMeta.icon === "github" ? (
+              <CloudIcon className="size-3.5 shrink-0 text-primary" />
+            ) : srcMeta.icon === "daemon" ? (
+              <LaptopIcon className="size-3.5 shrink-0 text-primary" />
+            ) : (
+              <HardDriveIcon className="size-3.5 shrink-0 text-muted-foreground" />
+            )}
+            <span className="truncate font-medium text-foreground/85">{srcMeta.text}</span>
+          </div>
+          {canWrite && onSync && (
+            <Button
+              type="button"
+              size="xs"
+              variant="ghost"
+              disabled={syncing}
+              onClick={() => void onSync()}
+              title="Refresh Context Lake from local daemon or GitHub"
+            >
+              {syncing ? <Spinner data-icon="inline-start" /> : <RefreshCwIcon data-icon="inline-start" />}
+              Sync
+            </Button>
+          )}
+        </div>
+
         {files.length >= 5 && (
           <div className="border-b border-sidebar-border p-2">
             <div className="relative">

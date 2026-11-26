@@ -160,7 +160,7 @@ export async function POST(request: NextRequest) {
 
   // Always deliver control commands (pause/resume/steer) immediately, plus start commands up to capacity.
   // Match commands explicitly addressed to this runner (including shared team commands) OR unassigned commands owned by this user.
-  const controlTypes = ["pause_run", "resume_run", "answer_interaction", "retry_phase"];
+  const controlTypes = ["pause_run", "resume_run", "answer_interaction", "retry_phase", "sync_context"];
   const runnerCmdFilter = {
     OR: [
       { runnerMachineId: runner.id },

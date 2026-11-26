@@ -14,8 +14,8 @@ export const SESSION_SKILLS: SessionSkillOption[] = [
     slash: "/ba-ticket",
     aliases: ["/ba-ticket", "/ba"],
     mode: "ba",
-    label: "BA Create Tickets",
-    description: "Break idea into 1-PR Kanban tickets with C1..Cn criteria",
+    label: "BA & Prototype",
+    description: "Clarify scope, generate clickable HTML prototype & 1-PR tickets (C1..Cn)",
     defaultWorktree: false,
   },
   {

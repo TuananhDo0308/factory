@@ -133,6 +133,8 @@ model Project {
   pullRequests   PullRequest[]
   lessons        Lesson[]
   runnerCommands RunnerCommand[]
+  contextFiles   ProjectContextFile[]
+  prototypes     ProjectPrototype[]
 
   @@unique([userId, slug])
   @@unique([userId, githubRepoId])
@@ -305,6 +307,7 @@ model FactoryRun {
   artifacts    RunArtifact[]
   pullRequests PullRequest[]
   commands     RunnerCommand[]
+  prototypes   ProjectPrototype[]
 
   @@unique([projectId, runKey])
   @@index([projectId, startedAt])
@@ -392,18 +395,63 @@ model RunInteraction {
 }
 
 model RunArtifact {
-  id        String   @id @default(cuid())
-  runId     String
-  kind      String // "plan" | "mockup" | "qc_shot" | "baseline_diff" | "axe" | "pr_judge" | "walkthrough" | "diff" | "log"
-  title     String
-  pathOrUrl String
-  mimeType  String?
-  metaJson  String?
-  createdAt DateTime @default(now())
+  id            String   @id @default(cuid())
+  runId         String
+  kind          String // "plan" | "mockup" | "prototype" | "qc_shot" | "baseline_diff" | "axe" | "pr_judge" | "walkthrough" | "diff" | "log"
+  title         String
+  pathOrUrl     String
+  mimeType      String?
+  contentText   String?
+  contentBase64 String?
+  metaJson      String?
+  createdAt     DateTime @default(now())
 
   run FactoryRun @relation(fields: [runId], references: [id], onDelete: Cascade)
 
   @@index([runId, kind])
+}
+
+model ProjectContextFile {
+  id        String   @id @default(cuid())
+  projectId String
+  path      String
+  content   String
+  bytes     Int
+  sha       String?
+  source    String   @default("daemon") // "daemon" | "github" | "local"
+  updatedAt DateTime @updatedAt
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@unique([projectId, path])
+  @@index([projectId])
+}
+
+model ProjectPrototype {
+  id            String   @id @default(cuid())
+  projectId     String
+  runId         String?
+  slug          String
+  title         String
+  kind          String   @default("ticket") // "first_screen" | "ticket" | "whole_flow" | "existing"
+  binding       String   @default("flow") // "flow" | "look"
+  status        String   @default("draft") // "draft" | "approved" | "superseded"
+  issueKeysJson String   @default("[]")
+  htmlContent   String
+  manifestJson  String   @default("{}")
+  localPath     String?
+  branchName    String?
+  commitSha     String?
+  version       Int      @default(1)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  project Project     @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  run     FactoryRun? @relation(fields: [runId], references: [id], onDelete: SetNull)
+
+  @@unique([projectId, slug])
+  @@index([projectId, updatedAt])
+  @@index([runId])
 }
 
 model PullRequest {

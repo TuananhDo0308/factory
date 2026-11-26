@@ -3,6 +3,8 @@ import { syncProjectInitStatus } from "@/lib/init-issue";
 import type { LiveJsSpec } from "@/lib/live-sync";
 import { prisma } from "@/lib/prisma";
 import { serializeProjectIssue, type SerializedProjectIssue } from "@/lib/project-stats";
+import { serializePrototype } from "@/lib/prototype-server";
+import type { SerializedPrototype } from "@/lib/prototypes";
 import { getAccessibleRunners } from "@/lib/team-access";
 import { isRunnerOnline, safeJsonParse } from "@/lib/workspace-data";
 
@@ -60,6 +62,7 @@ export type BoardIssueRunSummary = {
 
 export type EnrichedBoardIssue = SerializedProjectIssue & {
   latestRun: BoardIssueRunSummary | null;
+  prototypes: SerializedPrototype[];
 };
 
 export type ActiveBaRunSummary = {
@@ -80,6 +83,7 @@ export type ProjectBoardSnapshot = {
   autoApprove: boolean;
   maxConcurrency: number;
   issues: EnrichedBoardIssue[];
+  prototypes: SerializedPrototype[];
   activeRunByIssueId: Record<string, { runId: string; triggeredBy: string }>;
   activeInitRun: ActiveBaRunSummary | null;
   activeBaRun: ActiveBaRunSummary | null;
@@ -179,6 +183,10 @@ export async function getProjectBoardSnapshot(params: {
             },
           },
         },
+        prototypes: {
+          orderBy: { updatedAt: "desc" },
+          take: 50,
+        },
       },
     }),
     getAccessibleRunners(params.viewerUserId, {
@@ -189,10 +197,16 @@ export async function getProjectBoardSnapshot(params: {
 
   if (!project) return null;
 
+  const serializedPrototypes = project.prototypes.map(serializePrototype);
+
   const activeRunByIssueId: Record<string, { runId: string; triggeredBy: string }> = {};
 
   const enrichedIssues: EnrichedBoardIssue[] = project.issues.map((iss) => {
     const base = serializeProjectIssue(iss);
+    const issueKeyUpper = iss.issueKey.toUpperCase();
+    const issuePrototypes = serializedPrototypes.filter((p) =>
+      p.issueKeys.some((k) => k.toUpperCase() === issueKeyUpper),
+    );
     const latest = iss.runs[0] ?? null;
 
     if (
@@ -298,7 +312,7 @@ export async function getProjectBoardSnapshot(params: {
       };
     }
 
-    return { ...base, latestRun };
+    return { ...base, latestRun, prototypes: issuePrototypes };
   });
 
   // Find latest active/pending Init & BA sessions for banner visibility on the Kanban board
@@ -362,6 +376,7 @@ export async function getProjectBoardSnapshot(params: {
     autoApprove,
     maxConcurrency: project.maxConcurrency,
     issues: enrichedIssues,
+    prototypes: serializedPrototypes,
     activeRunByIssueId,
     activeInitRun,
     activeBaRun,

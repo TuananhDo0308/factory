@@ -103,7 +103,19 @@ export async function autoApproveInReviewIssues(projectId: string): Promise<numb
 export function buildIssueFactoryPrompt(
   issue: IssueLike,
   runKey: string,
-  options?: { autoApprove?: boolean; targetBranch?: string },
+  options?: {
+    autoApprove?: boolean;
+    targetBranch?: string;
+    prototypes?: Array<{
+      slug: string;
+      title: string;
+      binding: string;
+      status: string;
+      localPath: string | null;
+      branchName: string | null;
+      screens: Array<{ id: string; title: string; criteria: string[] }>;
+    }>;
+  },
 ): string {
   const criteria = safeJsonParse<Array<{ id: string; text: string }>>(issue.criteriaJson, []);
   const lines: string[] = [`Build ready ticket ${issue.issueKey}: ${issue.title}`];
@@ -120,6 +132,23 @@ export function buildIssueFactoryPrompt(
 
   if (issue.body && issue.body.trim()) {
     lines.push(`Ticket Specification & Scope:\n${issue.body.trim()}`);
+  }
+
+  if (options?.prototypes && options.prototypes.length > 0) {
+    const protoLines: string[] = ["Approved UI Prototype(s) (build & judge screens against these):"];
+    for (const p of options.prototypes) {
+      const bindNote =
+        p.binding === "look"
+          ? "binding=look (match layout, colours, typography, elements, copy, and states)"
+          : "binding=flow (match elements, order, copy, interactions, and states using the product's styling)";
+      const loc = p.localPath || (p.branchName ? `branch ${p.branchName}` : `prototype://${p.slug}`);
+      protoLines.push(`- ${p.title} [${p.status}, ${bindNote}] — ${loc}`);
+      for (const sc of p.screens) {
+        const critStr = sc.criteria.length > 0 ? ` (${sc.criteria.join(", ")})` : "";
+        protoLines.push(`  - #${sc.id}: ${sc.title}${critStr}`);
+      }
+    }
+    lines.push(protoLines.join("\n"));
   }
 
   const syncHint =
@@ -591,6 +620,34 @@ export async function launchIssueFactoryRun(params: {
   }
 
   const autoApprove = await getProjectAutoApprove(project.id);
+  const projectPrototypes = await prisma.projectPrototype.findMany({
+    where: { projectId: project.id, status: { not: "superseded" } },
+    orderBy: { updatedAt: "desc" },
+    take: 20,
+  });
+  const issueKeyUpper = issue.issueKey.toUpperCase();
+  const linkedPrototypes = projectPrototypes
+    .filter((p) =>
+      safeJsonParse<string[]>(p.issueKeysJson, []).some((k) => k.toUpperCase() === issueKeyUpper),
+    )
+    .map((p) => {
+      const manifest = safeJsonParse<{
+        screens?: Array<{ id: string; title: string; criteria?: string[] }>;
+      }>(p.manifestJson, {});
+      return {
+        slug: p.slug,
+        title: p.title,
+        binding: p.binding,
+        status: p.status,
+        localPath: p.localPath,
+        branchName: p.branchName,
+        screens: (manifest.screens ?? []).map((sc) => ({
+          id: sc.id,
+          title: sc.title,
+          criteria: Array.isArray(sc.criteria) ? sc.criteria : [],
+        })),
+      };
+    });
   const engine =
     params.engine === "claude"
       ? "claude"
@@ -604,7 +661,11 @@ export async function launchIssueFactoryRun(params: {
   const targetBranch = project.defaultBranch || "main";
   const runKey = `${new Date().toISOString().slice(0, 10)}-${issue.issueKey.toLowerCase().replace(/[^a-z0-9]+/g, "")}-${Math.random().toString(36).slice(2, 6)}`;
   const title = `${issue.issueKey}: ${issue.title}`.slice(0, 140);
-  const prompt = buildIssueFactoryPrompt(issue, runKey, { autoApprove, targetBranch });
+  const prompt = buildIssueFactoryPrompt(issue, runKey, {
+    autoApprove,
+    targetBranch,
+    prototypes: linkedPrototypes,
+  });
 
   const onlineRunner = await pickOnlineRunner({
     triggeredByUserId: params.triggeredByUserId,

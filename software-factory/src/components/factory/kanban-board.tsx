@@ -67,6 +67,10 @@ import {
   StatusDot,
 } from "@/components/factory/factory-primitives";
 import { MarkdownContent } from "@/components/factory/markdown-content";
+import {
+  PrototypeStudio,
+  toPrototypeViewModel,
+} from "@/components/factory/prototype-viewer";
 import type { EnrichedBoardIssue, ProjectBoardSnapshot } from "@/lib/board-data";
 import { isFactoryInitIssue } from "@/lib/init-issue-shared";
 
@@ -291,7 +295,12 @@ export function KanbanBoard({
   const baSessionHref = `/sessions?project=${encodeURIComponent(project.id)}&skill=ba-ticket`;
   const [viewMode, setViewMode] = React.useState<"board" | "table">("board");
   const [selectedIssueId, setSelectedIssueId] = React.useState<string | null>(null);
+  const [selectedProtoIdx, setSelectedProtoIdx] = React.useState<number>(0);
   const [busyKey, setBusyKey] = React.useState<string | null>(null);
+
+  React.useEffect(() => {
+    setSelectedProtoIdx(0);
+  }, [selectedIssueId]);
 
   const selectedIssue = React.useMemo(
     () => board.issues.find((i) => i.id === selectedIssueId) ?? null,
@@ -704,12 +713,23 @@ export function KanbanBoard({
                                 </>
                               )}
                             </div>
-                            <span
-                              title={`${totalCriteria} acceptance criteria`}
-                              className="font-mono text-[10px] text-muted-foreground"
-                            >
-                              {totalCriteria}C
-                            </span>
+                            <div className="flex items-center gap-1.5">
+                              {iss.prototypes && iss.prototypes.length > 0 && (
+                                <span
+                                  title={`${iss.prototypes.length} interactive UI prototype(s) attached`}
+                                  className="inline-flex items-center gap-0.5 rounded-full bg-primary/10 px-1.5 py-0.5 font-mono text-[10px] font-medium text-primary"
+                                >
+                                  <EyeIcon className="size-2.5" />
+                                  Proto
+                                </span>
+                              )}
+                              <span
+                                title={`${totalCriteria} acceptance criteria`}
+                                className="font-mono text-[10px] text-muted-foreground"
+                              >
+                                {totalCriteria}C
+                              </span>
+                            </div>
                           </div>
 
                           {/* Row 2: Clean 2-line title (full spec/goal lives in the click-to-open Sheet) */}
@@ -1203,12 +1223,19 @@ export function KanbanBoard({
 
                   <Tabs
                     defaultValue={
-                      selectedIssue.latestRun?.specs.length ? "specs" : "overview"
+                      selectedIssue.prototypes?.length
+                        ? "prototype"
+                        : selectedIssue.latestRun?.specs.length
+                          ? "specs"
+                          : "overview"
                     }
                   >
                     <TabsList className="w-full">
                       <TabsTrigger value="overview">
                         Criteria ({selectedIssue.criteria.length})
+                      </TabsTrigger>
+                      <TabsTrigger value="prototype">
+                        Prototype ({selectedIssue.prototypes?.length ?? 0})
                       </TabsTrigger>
                       <TabsTrigger value="specs">
                         AI Specs ({selectedIssue.latestRun?.specs.length ?? 0})
@@ -1282,6 +1309,68 @@ export function KanbanBoard({
                             <MarkdownContent content={selectedIssue.body} />
                           </div>
                         </div>
+                      )}
+                    </TabsContent>
+
+                    {/* INTERACTIVE PROTOTYPE TAB */}
+                    <TabsContent value="prototype" className="flex flex-col gap-3 pt-3">
+                      {!selectedIssue.prototypes || selectedIssue.prototypes.length === 0 ? (
+                        <div className="flex flex-col items-center gap-3 rounded-md border border-dashed p-6 text-center text-xs text-muted-foreground">
+                          <p>
+                            No clickable prototype is attached to{" "}
+                            <strong className="font-mono text-foreground">
+                              {selectedIssue.issueKey}
+                            </strong>{" "}
+                            yet.
+                          </p>
+                          {canWrite && (
+                            <Button
+                              size="xs"
+                              variant="outline"
+                              disabled={busyKey === `clarify:${selectedIssue.id}`}
+                              onClick={() =>
+                                void callDispatch("clarify_issue", { issueId: selectedIssue.id })
+                              }
+                            >
+                              <SparklesIcon data-icon="inline-start" />
+                              Design Prototype in Clarify Chat
+                            </Button>
+                          )}
+                        </div>
+                      ) : (
+                        <>
+                          {selectedIssue.prototypes.length > 1 && (
+                            <div className="flex flex-wrap items-center gap-1.5">
+                              {selectedIssue.prototypes.map((proto, idx) => (
+                                <Button
+                                  key={proto.id}
+                                  type="button"
+                                  size="xs"
+                                  variant={idx === selectedProtoIdx ? "secondary" : "outline"}
+                                  onClick={() => setSelectedProtoIdx(idx)}
+                                >
+                                  {proto.title}
+                                </Button>
+                              ))}
+                            </div>
+                          )}
+                          <div className="h-[520px]">
+                            <PrototypeStudio
+                              key={
+                                (selectedIssue.prototypes[selectedProtoIdx] ??
+                                  selectedIssue.prototypes[0]).id
+                              }
+                              prototype={toPrototypeViewModel(
+                                selectedIssue.prototypes[selectedProtoIdx] ??
+                                  selectedIssue.prototypes[0],
+                              )}
+                              projectId={project.id}
+                              canWrite={canWrite}
+                              compact
+                              onUpdated={() => void onRefresh()}
+                            />
+                          </div>
+                        </>
                       )}
                     </TabsContent>
 

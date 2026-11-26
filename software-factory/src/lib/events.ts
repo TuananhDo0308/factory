@@ -7,6 +7,8 @@ export type FactoryStreamEvent = {
     | "step:created"
     | "interaction:updated"
     | "artifact:created"
+    | "prototype:updated"
+    | "context:updated"
     | "issue:updated"
     | "project:updated"
     | "pr:updated"

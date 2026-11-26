@@ -1,10 +1,10 @@
 import { notFound, redirect } from "next/navigation";
 import { ProjectWorkspace } from "@/components/factory/project-workspace";
 import { getProjectBoardSnapshot } from "@/lib/board-data";
+import { getProjectContextLake } from "@/lib/context-lake";
 import { prisma } from "@/lib/prisma";
 import { getCurrentSession } from "@/lib/session";
 import { getProjectAccess } from "@/lib/team-access";
-import { readProjectContextFiles } from "@/lib/workspace-data";
 
 export default async function ProjectDetailPage({
   params,
@@ -43,7 +43,10 @@ export default async function ProjectDetailPage({
 
   if (!project || !board) notFound();
 
-  const contextFiles = readProjectContextFiles(project.localPath);
+  const contextLake = await getProjectContextLake({
+    project,
+    githubAccessToken: session.githubAccessToken,
+  });
 
   return (
     <ProjectWorkspace
@@ -58,7 +61,7 @@ export default async function ProjectDetailPage({
         githubFullName: project.githubFullName,
         githubUrl: project.githubUrl,
         defaultBranch: project.defaultBranch || "main",
-        initStatus: project.initStatus,
+        initStatus: board.initStatus,
         readinessScore: project.readinessScore,
       }}
       myRole={access.role}
@@ -77,7 +80,7 @@ export default async function ProjectDetailPage({
         passedCount: m.issues.filter((i) => i.status === "passed").length,
         updatedAt: m.updatedAt.toISOString(),
       }))}
-      contextFiles={contextFiles}
+      contextLake={contextLake}
       defaultTab={sp.tab || "dashboard"}
     />
   );

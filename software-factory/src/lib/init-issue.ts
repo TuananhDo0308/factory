@@ -1,7 +1,10 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
+import { isFactoryInitCompleteFromFiles } from "@/lib/context-lake";
 import { FACTORY_INIT_ISSUE_KEY, isFactoryInitIssue } from "@/lib/init-issue-shared";
 import { prisma } from "@/lib/prisma";
+import { SF_PROTOTYPE_PROMPT_CONTRACT } from "@/lib/prototypes";
+import { SF_QUESTIONS_PROMPT_CONTRACT } from "@/lib/questions";
 import { safeJsonParse } from "@/lib/workspace-data";
 
 export { FACTORY_INIT_ISSUE_KEY, isFactoryInitIssue };
@@ -69,6 +72,25 @@ export async function syncProjectInitStatus(project: {
       .catch(() => {});
     return true;
   }
+
+  // Fallback for remote serverless deployments (e.g. Vercel): verify from DB-synced Context Lake files.
+  const syncedFiles = await prisma.projectContextFile.findMany({
+    where: {
+      projectId: project.id,
+      path: { in: [".factory/init.json", ".factory/project.json"] },
+    },
+    select: { path: true, content: true },
+  });
+  if (syncedFiles.length >= 2 && isFactoryInitCompleteFromFiles(syncedFiles)) {
+    await prisma.project
+      .update({
+        where: { id: project.id },
+        data: { initStatus: "complete" },
+      })
+      .catch(() => {});
+    return true;
+  }
+
   return false;
 }
 
@@ -85,8 +107,9 @@ export function buildProjectInitPrompt(params: {
     `Project: ${params.projectName}`,
     ...(params.description?.trim() ? [`Description: ${params.description.trim()}`] : []),
     "Follow the `factory-init` skill step by step (Stage 1: Once per project, interactive with the person).",
-    "This chat runs headless over Software Factory: do NOT call interactive-only tools like `ask_question` / `AskUserQuestion`. Instead, ask in waves of at most 3 numbered questions in plain markdown with your recommended option under each, and wait for the user's reply in chat.",
     "Complete `.factory/project.json`, `.factory/product.md`, `.factory/decisions.md`, `DESIGN.md`, `CODING_STANDARDS.md`, project agent instructions (`GEMINI.md` / `CLAUDE.md`), stack skills, and `.factory/init.json` verified by `project-check.mjs --run` and `init-status.mjs` (`complete`).",
+    "",
+    SF_QUESTIONS_PROMPT_CONTRACT,
   ];
   return lines.join("\n");
 }
@@ -114,7 +137,6 @@ export function buildIssueClarifyPrompt(params: {
     "",
     `Project: ${params.projectName}`,
     "Follow the `factory-clarify` skill step by step (Stage 2: Per feature, interactive with the person).",
-    "This chat runs headless over Software Factory: do NOT call interactive-only tools like `ask_question` / `AskUserQuestion`. Ask in waves of at most 3 numbered questions in plain markdown with your recommended answer under each, and wait for the user's reply in chat.",
     "",
     "Current ticket draft:",
     `- Key: ${params.issue.issueKey}`,
@@ -144,11 +166,15 @@ export function buildIssueClarifyPrompt(params: {
   lines.push(
     "",
     "When grilling is complete:",
-    "1. Finalize the ticket (`C1..Cn`, Data & API, Permissions, Copy, UI & states, Out of scope, Depends on) and draw approved mockups into `.factory/design/mockups/<key>/` if any screen is new or changes layout.",
-    "2. Run `ready-check.mjs --body-file` and run the Planner alone (`questionsOnly: true`) until it returns 0 open questions, then save the approved plan to `.factory/plans/<key>.json`.",
-    "3. Present the package (ticket, mockups, plan summary) for the user to approve. Once approved, include the updated ticket in an ```sf-tickets JSON block (keeping the exact issueKey `" +
+    "1. Finalize the ticket (`C1..Cn`, Data & API, Permissions, Copy, UI & states, Out of scope, Depends on) and build a clickable self-contained HTML prototype in `.factory/prototypes/<slug>/index.html` (referenced by an ```sf-prototype JSON block) whenever any screen is new or changes layout/states.",
+    "2. Run `ready-check.mjs --body-file` (when present) and verify every state (`normal`, `empty`, `loading`, `error`, `no permission`) matches the criteria.",
+    "3. Present the package (ticket, interactive prototype, plan summary) for the user to click through and approve. Once approved, include the updated ticket in an ```sf-tickets JSON block (keeping the exact issueKey `" +
       params.issue.issueKey +
       "`) so Software Factory updates the Kanban card, and tell the user to click **Approve → Ready** to hand it to the unattended Factory build loop.",
+    "",
+    SF_PROTOTYPE_PROMPT_CONTRACT,
+    "",
+    SF_QUESTIONS_PROMPT_CONTRACT,
   );
 
   return lines.join("\n");

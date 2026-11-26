@@ -26,10 +26,11 @@ import {
 import { Spinner } from "@/components/ui/spinner";
 import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { ContextLakeViewer } from "@/components/factory/context-lake-viewer";
+import { ContextLakeViewer, type ContextLakeFile } from "@/components/factory/context-lake-viewer";
 import { StatusDot } from "@/components/factory/factory-primitives";
 import { KanbanBoard } from "@/components/factory/kanban-board";
 import { ProjectDashboard } from "@/components/factory/project-dashboard";
+import { ProjectPrototypesWorkspace } from "@/components/factory/prototype-viewer";
 import { SettingsTeamPanel } from "@/components/factory/settings-team-panel";
 import { useFactoryStream } from "@/components/factory/use-factory-stream";
 import type { ProjectBoardSnapshot } from "@/lib/board-data";
@@ -65,7 +66,11 @@ type ProjectWorkspaceProps = {
     passedCount: number;
     updatedAt: string;
   }>;
-  contextFiles: Array<{ path: string; content: string; bytes: number }>;
+  contextLake: {
+    files: ContextLakeFile[];
+    source: "local" | "daemon" | "github" | "none";
+    syncedAt: string | null;
+  };
   defaultTab?: string;
 };
 
@@ -76,7 +81,7 @@ export function ProjectWorkspace({
   ownerLogin,
   memberCount: initialMemberCount,
   initialBoard,
-  contextFiles,
+  contextLake: initialContextLake,
   defaultTab = "dashboard",
 }: ProjectWorkspaceProps) {
   const router = useRouter();
@@ -96,6 +101,8 @@ export function ProjectWorkspace({
   const origin =
     mounted && typeof window !== "undefined" ? window.location.origin : "http://localhost:8787";
   const [board, setBoard] = React.useState<ProjectBoardSnapshot>(initialBoard);
+  const [contextLake, setContextLake] = React.useState(initialContextLake);
+  const [contextSyncing, setContextSyncing] = React.useState(false);
   const [dispatchBusy, setDispatchBusy] = React.useState<string | null>(null);
   const issues = board.issues;
   const readyCount = React.useMemo(
@@ -116,6 +123,71 @@ export function ProjectWorkspace({
     }
   }, [project.id]);
 
+  const refreshContextLake = React.useCallback(async () => {
+    try {
+      const res = await fetch(`/api/projects/${project.id}/context`, { cache: "no-store" });
+      if (res.ok) {
+        const data = (await res.json()) as {
+          files?: ContextLakeFile[];
+          source?: "local" | "daemon" | "github" | "none";
+          syncedAt?: string | null;
+        };
+        if (Array.isArray(data.files)) {
+          setContextLake({
+            files: data.files,
+            source: data.source ?? "none",
+            syncedAt: data.syncedAt ?? null,
+          });
+        }
+      }
+    } catch {
+      // Ignore transient refresh error.
+    }
+  }, [project.id]);
+
+  const handleSyncContext = React.useCallback(async () => {
+    setContextSyncing(true);
+    try {
+      const res = await fetch(`/api/projects/${project.id}/context`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ source: "auto" }),
+      });
+      const data = (await res.json().catch(() => null)) as {
+        ok?: boolean;
+        files?: ContextLakeFile[];
+        source?: "local" | "daemon" | "github" | "none";
+        syncedAt?: string | null;
+        savedCount?: number;
+        queuedRunnerName?: string | null;
+        message?: string;
+        error?: string;
+      } | null;
+      if (!res.ok) {
+        toast.error(data?.error || "Could not sync Context Lake");
+        return;
+      }
+      if (Array.isArray(data?.files)) {
+        setContextLake({
+          files: data.files,
+          source: data.source ?? "none",
+          syncedAt: data.syncedAt ?? new Date().toISOString(),
+        });
+      }
+      if (data?.queuedRunnerName && !data.savedCount) {
+        toast.success(`Requested live sync from runner "${data.queuedRunnerName}"`);
+        setTimeout(() => void refreshContextLake(), 2500);
+      } else {
+        toast.success(
+          `Synced ${data?.savedCount ?? data?.files?.length ?? 0} file(s)${data?.source ? ` (${data.source})` : ""}`,
+        );
+      }
+      await refreshBoard();
+    } finally {
+      setContextSyncing(false);
+    }
+  }, [project.id, refreshBoard, refreshContextLake]);
+
   const scheduleBoardRefresh = React.useCallback(() => {
     if (refreshTimerRef.current) return;
     refreshTimerRef.current = setTimeout(() => {
@@ -130,8 +202,11 @@ export function ProjectWorkspace({
     };
   }, []);
 
-  useFactoryStream(() => {
+  useFactoryStream((eventType) => {
     scheduleBoardRefresh();
+    if (eventType === "context:updated") {
+      void refreshContextLake();
+    }
   });
 
   async function handleDispatchPolicy(
@@ -372,7 +447,10 @@ export function ProjectWorkspace({
           <TabsList variant="line">
             <TabsTrigger value="dashboard">Dashboard</TabsTrigger>
             <TabsTrigger value="issues">Kanban Board ({issues.length})</TabsTrigger>
-            <TabsTrigger value="context">Context Lake ({contextFiles.length})</TabsTrigger>
+            <TabsTrigger value="prototypes">
+              Prototypes ({board.prototypes?.length ?? 0})
+            </TabsTrigger>
+            <TabsTrigger value="context">Context Lake ({contextLake.files.length})</TabsTrigger>
           </TabsList>
         </div>
 
@@ -402,9 +480,27 @@ export function ProjectWorkspace({
           />
         </TabsContent>
 
+        {/* INTERACTIVE PROTOTYPES TAB */}
+        <TabsContent value="prototypes" className="pt-5">
+          <ProjectPrototypesWorkspace
+            projectId={project.id}
+            prototypes={board.prototypes ?? []}
+            canWrite={canWrite}
+            onRefresh={refreshBoard}
+          />
+        </TabsContent>
+
         {/* CONTEXT LAKE (.factory/) TAB */}
         <TabsContent value="context" className="pt-5">
-          <ContextLakeViewer files={contextFiles} />
+          <ContextLakeViewer
+            files={contextLake.files}
+            source={contextLake.source}
+            syncedAt={contextLake.syncedAt}
+            githubFullName={project.githubFullName}
+            canWrite={canWrite}
+            syncing={contextSyncing}
+            onSync={handleSyncContext}
+          />
         </TabsContent>
       </Tabs>
 

@@ -6,7 +6,7 @@
 // Runs directly on Node 22+ via native TypeScript type stripping.
 
 import { type ChildProcess, execFileSync, spawn } from "node:child_process";
-import { randomBytes } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import {
   chmodSync,
   closeSync,
@@ -26,11 +26,11 @@ import {
   writeFileSync,
 } from "node:fs";
 import { homedir, hostname, platform } from "node:os";
-import { basename, dirname, join, resolve } from "node:path";
+import { basename, dirname, extname, join, resolve } from "node:path";
 import { createInterface } from "node:readline";
 import { parseArgs } from "node:util";
 
-const CLI_VERSION = "2026.11.25";
+const CLI_VERSION = "2026.11.26";
 const FACTORY_SKILLS = [
   "factory",
   "factory-init",
@@ -78,10 +78,14 @@ Usage:
               [--agent <id>] [--label <text>] [--model <model>] [--duration-ms <n>]
               [--input-tokens <n>] [--output-tokens <n>] [--cache-read-tokens <n>] [--cost-usd <n>]
               [--summary <text>] [--data <json>]
-  sf artifact --run <run-id> --kind <plan|mockup|qc_shot|baseline_diff|axe|pr_judge|walkthrough|diff|log>
+  sf artifact --run <run-id> --kind <plan|mockup|prototype|qc_shot|baseline_diff|axe|pr_judge|walkthrough|diff|log>
               --path <file-or-url> [--title <text>] [--project <slug>] [--repo <dir>]
+  sf prototype --path <index.html|dir> [--title <text>] [--slug <slug>] [--issue <I1,I2>]
+               [--kind <first_screen|ticket|whole_flow|existing>] [--binding <flow|look>]
+               [--run <run-id>] [--project <slug>] [--repo <dir>]
+  sf sync-context [--project <slug>] [--repo <dir>]
   sf ask      --run <run-id> --title <text> [--type <question|plan_approval|mockup_approval|merge_approval>]
-              [--prompt <text>] [--agent <key>] [--wait] [--timeout-sec <n>]
+              [--prompt <text>] [--options <json-or-csv>] [--agent <key>] [--wait] [--timeout-sec <n>]
   sf finish   --run <run-id> --outcome <passed|failed|blocked> [--project <slug|owner/repo>] [--repo <dir>]
               [--summary <text>] [--risk <low|medium|high>] [--merge <auto|person>]
               [--merged <commit>] [--pr-number <n>] [--pr-url <url>] [--duration-ms <n>]
@@ -561,6 +565,122 @@ async function cmdStep(args: string[]): Promise<number> {
   );
 }
 
+const ARTIFACT_TEXT_EXTS: Record<string, string> = {
+  ".html": "text/html; charset=utf-8",
+  ".htm": "text/html; charset=utf-8",
+  ".md": "text/markdown; charset=utf-8",
+  ".mdx": "text/markdown; charset=utf-8",
+  ".json": "application/json; charset=utf-8",
+  ".txt": "text/plain; charset=utf-8",
+  ".log": "text/plain; charset=utf-8",
+  ".svg": "image/svg+xml",
+  ".css": "text/css; charset=utf-8",
+};
+const ARTIFACT_BIN_EXTS: Record<string, string> = {
+  ".png": "image/png",
+  ".jpg": "image/jpeg",
+  ".jpeg": "image/jpeg",
+  ".webp": "image/webp",
+};
+
+const CONTEXT_TOP_FILES = new Set([
+  "CODING_STANDARDS.md",
+  "GEMINI.md",
+  "CLAUDE.md",
+  "AGENTS.md",
+  "README.md",
+  "DESIGN.md",
+]);
+const CONTEXT_IGNORED_DIRS = new Set([
+  "node_modules",
+  ".git",
+  ".next",
+  "dist",
+  "build",
+  "runs",
+  "worktrees",
+  ".tmp",
+  "shots",
+]);
+const CONTEXT_ALLOWED_EXTS = new Set([
+  ".md",
+  ".mdx",
+  ".json",
+  ".yml",
+  ".yaml",
+  ".txt",
+  ".toml",
+  ".css",
+]);
+
+function scanLocalContextLakeFiles(repoDir: string): Array<{
+  path: string;
+  content: string;
+  bytes: number;
+  sha: string;
+}> {
+  const root = resolve(repoDir);
+  if (!existsSync(root)) return [];
+  const out: Array<{ path: string; content: string; bytes: number; sha: string }> = [];
+  const seen = new Set<string>();
+
+  function collect(relPath: string) {
+    if (out.length >= 80) return;
+    const norm = relPath.replace(/\\/g, "/");
+    if (seen.has(norm)) return;
+    const ext = extname(norm).toLowerCase();
+    if (!CONTEXT_TOP_FILES.has(norm) && !CONTEXT_ALLOWED_EXTS.has(ext)) return;
+    const abs = join(root, norm);
+    if (!existsSync(abs)) return;
+    try {
+      const st = statSync(abs);
+      if (!st.isFile() || st.size > 512_000) return;
+      const raw = readFileSync(abs, "utf8");
+      if (raw.includes("\u0000")) return;
+      seen.add(norm);
+      out.push({
+        path: norm,
+        content: raw.slice(0, 48_000),
+        bytes: Buffer.byteLength(raw, "utf8"),
+        sha: createHash("sha256").update(raw, "utf8").digest("hex").slice(0, 16),
+      });
+    } catch {
+      // Skip unreadable file.
+    }
+  }
+
+  function walk(relDir: string, depth: number) {
+    if (depth > 6 || out.length >= 80) return;
+    const absDir = join(root, relDir);
+    if (!existsSync(absDir)) return;
+    let names: string[];
+    try {
+      names = readdirSync(absDir).sort();
+    } catch {
+      return;
+    }
+    for (const name of names) {
+      if (out.length >= 80) break;
+      if (CONTEXT_IGNORED_DIRS.has(name)) continue;
+      const nextRel = relDir ? `${relDir}/${name}` : name;
+      const nextAbs = join(root, nextRel);
+      try {
+        const st = statSync(nextAbs);
+        if (st.isDirectory()) walk(nextRel, depth + 1);
+        else if (st.isFile()) collect(nextRel);
+      } catch {
+        // Ignore inaccessible entries.
+      }
+    }
+  }
+
+  walk(".factory", 0);
+  for (const top of CONTEXT_TOP_FILES) collect(top);
+  walk("docs/ba", 0);
+  walk("docs/dev/adr", 0);
+  return out;
+}
+
 async function cmdArtifact(args: string[]): Promise<number> {
   const { values } = parseArgs({
     args,
@@ -579,17 +699,136 @@ async function cmdArtifact(args: string[]): Promise<number> {
     return 2;
   }
   const ctx = inferProjectContext(values.repo, values.project);
-  const pathVal = /^https?:\/\//i.test(values.path.trim())
-    ? values.path.trim()
-    : resolve(values.path.trim());
+  const isUrl = /^https?:\/\//i.test(values.path.trim());
+  const pathVal = isUrl ? values.path.trim() : resolve(values.path.trim());
+  let mimeType: string | undefined;
+  let contentText: string | undefined;
+  let contentBase64: string | undefined;
+
+  if (!isUrl && existsSync(pathVal)) {
+    try {
+      const st = statSync(pathVal);
+      const ext = extname(pathVal).toLowerCase();
+      if (st.isFile() && ext in ARTIFACT_TEXT_EXTS && st.size <= 1_500_000) {
+        mimeType = ARTIFACT_TEXT_EXTS[ext];
+        contentText = readFileSync(pathVal, "utf8");
+      } else if (st.isFile() && ext in ARTIFACT_BIN_EXTS && st.size <= 2_000_000) {
+        mimeType = ARTIFACT_BIN_EXTS[ext];
+        contentBase64 = readFileSync(pathVal).toString("base64");
+      }
+    } catch {
+      // Fall back to path-only reference if unreadable.
+    }
+  }
+
   return deliverOrSpool(`artifact ${values.kind || "file"}`, "/api/v1/runs/artifact", {
     run: values.run.trim(),
     kind: values.kind?.trim() || "log",
     title: values.title?.trim() || basename(pathVal),
     pathOrUrl: pathVal,
+    ...(mimeType ? { mimeType } : {}),
+    ...(contentText !== undefined ? { contentText } : {}),
+    ...(contentBase64 !== undefined ? { contentBase64 } : {}),
     project: ctx.project,
     repo: ctx.localPath,
   });
+}
+
+async function cmdPrototype(args: string[]): Promise<number> {
+  const { values } = parseArgs({
+    args,
+    options: {
+      path: { type: "string" },
+      title: { type: "string" },
+      slug: { type: "string" },
+      issue: { type: "string" },
+      kind: { type: "string" },
+      binding: { type: "string" },
+      run: { type: "string" },
+      project: { type: "string" },
+      repo: { type: "string" },
+    },
+    strict: true,
+  });
+  if (!values.path?.trim()) {
+    console.error("sf prototype: --path <index.html|dir> is required");
+    return 2;
+  }
+  const rawTarget = resolve(values.path.trim());
+  const htmlFile =
+    existsSync(rawTarget) && statSync(rawTarget).isDirectory()
+      ? join(rawTarget, "index.html")
+      : rawTarget;
+  if (!existsSync(htmlFile)) {
+    console.error(`sf prototype: file not found: ${htmlFile}`);
+    return 1;
+  }
+  const htmlContent = readFileSync(htmlFile, "utf8");
+  const manifestPath = join(dirname(htmlFile), "prototype.json");
+  let manifest: Record<string, unknown> = {};
+  if (existsSync(manifestPath)) {
+    try {
+      const parsed = JSON.parse(readFileSync(manifestPath, "utf8")) as unknown;
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+        manifest = parsed as Record<string, unknown>;
+      }
+    } catch {
+      // Ignore invalid prototype.json.
+    }
+  }
+
+  const issueKeys = (values.issue || "")
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
+  const ctx = inferProjectContext(values.repo, values.project);
+  return deliverOrSpool(`prototype ${values.slug || basename(dirname(htmlFile))}`, "/api/v1/prototypes", {
+    project: ctx.project,
+    repo: ctx.localPath,
+    run: values.run?.trim() || undefined,
+    slug: values.slug?.trim() || undefined,
+    title:
+      values.title?.trim() ||
+      (typeof manifest.title === "string" && manifest.title.trim()) ||
+      basename(dirname(htmlFile)),
+    kind: values.kind?.trim() || (typeof manifest.kind === "string" ? manifest.kind : "ticket"),
+    binding:
+      values.binding?.trim() || (typeof manifest.binding === "string" ? manifest.binding : "flow"),
+    issueKeys: issueKeys.length > 0 ? issueKeys : undefined,
+    htmlPath: htmlFile,
+    htmlContent,
+    manifest,
+  });
+}
+
+async function cmdSyncContext(args: string[]): Promise<number> {
+  const { values } = parseArgs({
+    args,
+    options: {
+      project: { type: "string" },
+      repo: { type: "string" },
+    },
+    strict: true,
+  });
+  const ctx = inferProjectContext(values.repo, values.project);
+  const repoDir = ctx.localPath || process.cwd();
+  const files = scanLocalContextLakeFiles(repoDir);
+  return deliverOrSpool(
+    `sync-context (${files.length} files)`,
+    "/api/v1/projects/context-sync",
+    {
+      project: ctx.project,
+      repo: repoDir,
+      source: "daemon",
+      replaceAll: true,
+      files,
+    },
+    "POST",
+    (data) => {
+      const rec = data as { savedCount?: number; initComplete?: boolean } | null;
+      return `sf sync-context: synced ${rec?.savedCount ?? files.length} file(s)${rec?.initComplete ? " · init complete" : ""}`;
+    },
+  );
 }
 
 async function cmdAsk(args: string[]): Promise<number> {
@@ -600,6 +839,7 @@ async function cmdAsk(args: string[]): Promise<number> {
       title: { type: "string" },
       type: { type: "string" },
       prompt: { type: "string" },
+      options: { type: "string" },
       agent: { type: "string" },
       wait: { type: "boolean" },
       "timeout-sec": { type: "string" },
@@ -617,12 +857,33 @@ async function cmdAsk(args: string[]): Promise<number> {
     console.error("sf ask: login required (`sf login`)");
     return 1;
   }
+  let parsedPayload: Record<string, unknown> | undefined;
+  if (values.options?.trim()) {
+    const rawOpts = values.options.trim();
+    try {
+      const parsed = JSON.parse(rawOpts) as unknown;
+      if (Array.isArray(parsed)) {
+        parsedPayload = { options: parsed };
+      } else if (parsed && typeof parsed === "object") {
+        parsedPayload = parsed as Record<string, unknown>;
+      }
+    } catch {
+      const splitOpts = rawOpts
+        .split(",")
+        .map((s) => s.trim())
+        .filter(Boolean);
+      if (splitOpts.length > 0) {
+        parsedPayload = { options: splitOpts };
+      }
+    }
+  }
   const ctx = inferProjectContext(values.repo, values.project);
   const created = await sendJson(cfg, "/api/v1/runs/interaction", {
     run: values.run.trim(),
     title: values.title.trim(),
     type: values.type?.trim() || "question",
     prompt: values.prompt?.trim() || undefined,
+    payload: parsedPayload,
     agentKey: values.agent?.trim() || undefined,
     project: ctx.project,
     repo: ctx.localPath,
@@ -2882,14 +3143,74 @@ async function cmdDaemon(args: string[]): Promise<number> {
     }
   }
 
+  const SF_QUESTIONS_CONTRACT = [
+    "Interactive Questions Contract:",
+    "- Do NOT call interactive-only tools like `ask_question` / `AskUserQuestion` (this session runs headless over Software Factory).",
+    "- Whenever you need the user to answer questions (at most 3 per wave), write brief context first and end your reply with a single fenced JSON block tagged `sf-questions` so Software Factory renders clickable radio/multi-select options:",
+    "```sf-questions",
+    "{",
+    '  "questions": [',
+    "    {",
+    '      "id": "Q1",',
+    '      "header": "Short topic",',
+    '      "question": "Clear question text?",',
+    '      "multiSelect": false,',
+    '      "options": [',
+    '        { "label": "Recommended option", "description": "Short rationale", "recommended": true },',
+    '        { "label": "Alternative option", "description": "Trade-off" }',
+    "      ],",
+    '      "allowOther": true',
+    "    }",
+    "  ]",
+    "}",
+    "```",
+    '- Keep option labels concise (2-8 words), mark your best default with `"recommended": true`, set `"multiSelect": true` when multiple choices apply, and write in the same language as the user.',
+    "- Do NOT duplicate the full options list in plain markdown prose when emitting `sf-questions`.",
+  ].join("\n");
+
+  const SF_PROTOTYPE_CONTRACT = [
+    "Interactive HTML Prototype Contract (BA → Prototype Flow):",
+    "- Whenever a ticket introduces a new screen, changes a layout, adds a new kind of control, or has distinct UI states (empty, loading, error, no permission), build a clickable self-contained HTML prototype so the user can test the UX right in Software Factory before any code is built.",
+    "- If the product has NO existing UI look yet, first ask a brief Design Brief via `sf-questions` (Vibe, Theme: light/dark/both, Colours & Type, Motion) and draw ONE primary screen (`kind: \"first_screen\"`) for the user to approve or steer before drawing remaining screens.",
+    "- Prototype rules:",
+    "  1. Completely self-contained HTML (inline `<style>` and `<script>`, zero external network/CDN requests, believable sample data, responsive at both `1440px` desktop and `390px` mobile, respects light & dark themes via CSS variables / `[data-theme=\"dark\"]` / `.dark`).",
+    "  2. Every criterion state (normal, empty, loading, error, permission, dialog) is a separate `<section data-screen=\"<id>\" data-title=\"<Label>\">` shown one at a time via `location.hash` (`#<id>`), with real in-memory interactivity (filters, validation, dialogs, tabs).",
+    "  3. Mark elements added/changed by the ticket with `data-change` and show a subtle prototype bar noting sample data.",
+    "  4. When 2+ tickets form a sequential user journey, also produce a combined whole-flow demo (`kind: \"whole_flow\"`) so the user can click through end-to-end.",
+    "- Delivery (preferred): write `.factory/prototypes/<slug>/index.html` (and optionally `.factory/prototypes/<slug>/prototype.json`), then emit a compact fenced `sf-prototype` JSON metadata block referencing `\"htmlPath\": \".factory/prototypes/<slug>/index.html\"` (the local runner automatically uploads the full HTML to Software Factory so even Vercel users can click it!). Alternatively, emit ` ```sf-prototype ` metadata immediately followed by a fenced ` ```sf-prototype-html ` block.",
+    "```sf-prototype",
+    "{",
+    '  "slug": "orders-export",',
+    '  "title": "Orders Export & Filters",',
+    '  "kind": "ticket",',
+    '  "binding": "flow",',
+    '  "issueKeys": ["I1"],',
+    '  "themes": ["light", "dark"],',
+    '  "htmlPath": ".factory/prototypes/orders-export/index.html",',
+    '  "screens": [',
+    '    { "id": "orders-list", "title": "Orders list (Normal)", "criteria": ["C1"], "shows": "Filter bar, table rows, Export CSV button" },',
+    '    { "id": "orders-empty", "title": "Empty state", "criteria": ["C2"], "shows": "No orders match filters + Clear button" }',
+    "  ],",
+    '  "notShown": [',
+    '    { "criterion": "C5", "why": "Server rate limit; nothing on screen" }',
+    "  ]",
+    "}",
+    "```",
+  ].join("\n");
+
+  const SF_QUESTIONS_RESUME_REMINDER =
+    '(Interactive Questions & Prototype reminder: if you ask any follow-up questions, end with a ```sf-questions JSON block containing concise clickable options and `"recommended": true` on your suggested default. If you created or updated a clickable HTML prototype, save it to `.factory/prototypes/<slug>/index.html` and include its compact ```sf-prototype metadata block — do NOT call `ask_question`/`AskUserQuestion`.)';
+
   function buildBaTicketPrompt(userRequest: string): string {
     return [
       "You are the Business Analyst (BA) for Software Factory. Follow the `ba-ticket` skill principles:",
-      "1. First inspect the repository (README, `.factory/`, existing code/files) so your tickets match what actually exists.",
-      "2. Break the user's request into well-sized tickets (1 ticket = 1 pull request, each deliverable and testable on its own). Order them by dependency (`dependsOn`).",
-      "3. Each ticket MUST have 3-6 crisp, externally verifiable acceptance criteria (`C1..Cn`), clear `goal`, `priority` (`P0|P1|P2|P3`), `complexity` (`XS|S|M|L`), and a concise `body` (bullet points for Scope, UI & States, and explicit **Out of scope** — avoid long repetitive essays).",
-      "4. Do NOT edit code, do NOT create GitHub issues yet, and do NOT call interactive-only tools like `ask_question` (this session is headless; put any open questions/assumptions in plain text before the JSON block so the user can reply in chat). Write in the same language as the user's request.",
-      "5. Present a brief human-readable overview table/list of the tickets, execution order, and any assumptions or questions first (do NOT repeat the full body of every ticket in prose), then end with a single fenced JSON block tagged `sf-tickets` using this exact shape so Software Factory imports them automatically into the Draft column:",
+      "1. First inspect the repository (README, `.factory/`, design tokens, existing code/screens, and any existing prototypes in `.factory/prototypes/` or `docs/ba/prototypes/`) so your tickets and prototypes match what actually exists.",
+      "2. When requirements are ambiguous or the task touches UI and you need to confirm whether the user already has a prototype / design direction, ask the highest-impact questions first (at most 3-4 per wave) using `sf-questions` so the user can click options.",
+      "3. Break the user's request into well-sized tickets (1 ticket = 1 pull request, each deliverable and testable on its own). Order them by dependency (`dependsOn`).",
+      "4. Each ticket MUST have 3-6 crisp, externally verifiable acceptance criteria (`C1..Cn`), clear `goal`, `priority` (`P0|P1|P2|P3`), `complexity` (`XS|S|M|L`), and a concise `body` (bullet points for Scope, UI & States, and explicit **Out of scope** — avoid long repetitive essays).",
+      "5. For every UI change that is not trivial, build a clickable self-contained HTML prototype (starting with 1 main screen first if the product has no look yet, plus a whole-flow demo when 2+ tickets form a sequential user journey) following the Interactive HTML Prototype Contract below.",
+      "6. Do NOT edit application source code, do NOT create GitHub issues yet, and do NOT call interactive-only tools like `ask_question` / `AskUserQuestion` (this session is headless). You MAY write prototype HTML/JSON files inside `.factory/prototypes/<slug>/` so Software Factory uploads them for the user to preview and click. Write in the same language as the user's request.",
+      "7. When presenting tickets, give a brief human-readable overview table/list first, then end with a single fenced JSON block tagged `sf-tickets` using this exact shape so Software Factory imports them automatically into the Draft column:",
       "",
       "```sf-tickets",
       "{",
@@ -2911,8 +3232,219 @@ async function cmdDaemon(args: string[]): Promise<number> {
       "}",
       "```",
       "",
+      SF_PROTOTYPE_CONTRACT,
+      "",
+      SF_QUESTIONS_CONTRACT,
+      "",
       `User Request:\n${userRequest}`,
     ].join("\n");
+  }
+
+  function extractPrototypesFromTurn(
+    text: string,
+    repoDir: string,
+    sinceMs: number,
+  ): Array<{
+    slug?: string;
+    title: string;
+    kind: string;
+    binding: string;
+    issueKeys: string[];
+    htmlPath?: string;
+    htmlContent: string;
+    manifest: Record<string, unknown>;
+  }> {
+    const results: Array<{
+      slug?: string;
+      title: string;
+      kind: string;
+      binding: string;
+      issueKeys: string[];
+      htmlPath?: string;
+      htmlContent: string;
+      manifest: Record<string, unknown>;
+    }> = [];
+    const seenPaths = new Set<string>();
+    const seenSlugs = new Set<string>();
+
+    // 1. Parse ```sf-prototype + optional adjacent ```sf-prototype-html blocks
+    const fenceRe = /```(sf-prototype-html|sf-prototype)\s*\r?\n([\s\S]*?)```/gi;
+    const spans: Array<{ kind: "meta" | "html"; body: string }> = [];
+    let m: RegExpExecArray | null;
+    while ((m = fenceRe.exec(text || "")) !== null) {
+      spans.push({
+        kind: m[1].toLowerCase() === "sf-prototype-html" ? "html" : "meta",
+        body: m[2].trim(),
+      });
+    }
+
+    for (let i = 0; i < spans.length; i += 1) {
+      const sp = spans[i];
+      if (sp.kind === "html") {
+        const titleMatch = /<title[^>]*>([^<]+)<\/title>/i.exec(sp.body);
+        const title = titleMatch?.[1]?.trim() || `Interactive Prototype ${results.length + 1}`;
+        results.push({
+          title,
+          kind: "ticket",
+          binding: "flow",
+          issueKeys: [],
+          htmlContent: sp.body,
+          manifest: { title, kind: "ticket", binding: "flow" },
+        });
+        continue;
+      }
+
+      let meta: Record<string, unknown> | null = null;
+      try {
+        const parsed = JSON.parse(sp.body) as unknown;
+        if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+          meta = parsed as Record<string, unknown>;
+        }
+      } catch {
+        continue;
+      }
+      if (!meta) continue;
+
+      let htmlContent = typeof meta.html === "string" && meta.html.trim() ? meta.html.trim() : "";
+      if (!htmlContent && spans[i + 1]?.kind === "html") {
+        htmlContent = spans[i + 1].body;
+        i += 1;
+      }
+
+      const rawPath =
+        (typeof meta.htmlPath === "string" && meta.htmlPath.trim()) ||
+        (typeof meta.file === "string" && meta.file.trim()) ||
+        (typeof meta.path === "string" && meta.path.trim()) ||
+        "";
+      let resolvedHtmlPath: string | undefined;
+      if (rawPath) {
+        const candidate = rawPath.startsWith("/") ? resolve(rawPath) : resolve(repoDir, rawPath);
+        const finalFile =
+          existsSync(candidate) && statSync(candidate).isDirectory()
+            ? join(candidate, "index.html")
+            : candidate;
+        if (existsSync(finalFile) && statSync(finalFile).isFile()) {
+          resolvedHtmlPath = finalFile;
+          seenPaths.add(finalFile);
+          if (!htmlContent) {
+            try {
+              htmlContent = readFileSync(finalFile, "utf8");
+            } catch {
+              // Ignore read error.
+            }
+          }
+          // Merge sibling prototype.json if meta omitted screens
+          const siblingManifest = join(dirname(finalFile), "prototype.json");
+          if (existsSync(siblingManifest)) {
+            try {
+              const sib = JSON.parse(readFileSync(siblingManifest, "utf8")) as Record<string, unknown>;
+              meta = { ...sib, ...meta };
+            } catch {
+              // Ignore invalid sibling manifest.
+            }
+          }
+        }
+      }
+
+      if (!htmlContent) continue;
+
+      const issueKeys = Array.isArray(meta.issueKeys)
+        ? meta.issueKeys.map((k) => String(k).trim()).filter(Boolean)
+        : typeof meta.issueKey === "string" && meta.issueKey.trim()
+          ? [meta.issueKey.trim()]
+          : [];
+      const slug = typeof meta.slug === "string" && meta.slug.trim() ? meta.slug.trim() : undefined;
+      if (slug) seenSlugs.add(slug.toLowerCase());
+      results.push({
+        slug,
+        title: (typeof meta.title === "string" && meta.title.trim()) || "Interactive Prototype",
+        kind: typeof meta.kind === "string" ? meta.kind : "ticket",
+        binding: typeof meta.binding === "string" ? meta.binding : "flow",
+        issueKeys,
+        htmlPath: rawPath || resolvedHtmlPath,
+        htmlContent,
+        manifest: meta,
+      });
+    }
+
+    // 2. Fallback disk scan: capture any newly written `.factory/prototypes/<slug>/index.html`
+    const protoRoot = join(repoDir, ".factory", "prototypes");
+    if (existsSync(protoRoot)) {
+      try {
+        for (const entry of readdirSync(protoRoot)) {
+          const dir = join(protoRoot, entry);
+          const htmlFile = join(dir, "index.html");
+          if (!existsSync(htmlFile)) continue;
+          const st = statSync(htmlFile);
+          if (!st.isFile() || st.mtimeMs < sinceMs - 2000) continue;
+          const absFile = resolve(htmlFile);
+          if (seenPaths.has(absFile) || seenSlugs.has(entry.toLowerCase())) continue;
+
+          const htmlContent = readFileSync(absFile, "utf8");
+          let manifest: Record<string, unknown> = {};
+          const manifestFile = join(dir, "prototype.json");
+          if (existsSync(manifestFile)) {
+            try {
+              const parsed = JSON.parse(readFileSync(manifestFile, "utf8")) as unknown;
+              if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+                manifest = parsed as Record<string, unknown>;
+              }
+            } catch {
+              // Ignore malformed manifest.
+            }
+          }
+          const issueKeys = Array.isArray(manifest.issueKeys)
+            ? manifest.issueKeys.map((k) => String(k).trim()).filter(Boolean)
+            : [];
+          results.push({
+            slug: entry,
+            title:
+              (typeof manifest.title === "string" && manifest.title.trim()) ||
+              entry.replace(/[-_]+/g, " "),
+            kind: typeof manifest.kind === "string" ? manifest.kind : "ticket",
+            binding: typeof manifest.binding === "string" ? manifest.binding : "flow",
+            issueKeys,
+            htmlPath: `.factory/prototypes/${entry}/index.html`,
+            htmlContent,
+            manifest,
+          });
+        }
+      } catch {
+        // Ignore scan errors.
+      }
+    }
+
+    return results;
+  }
+
+  const contextDigestByRepo = new Map<string, string>();
+  async function syncProjectContextToServer(
+    repoDir: string,
+    opts?: { projectId?: string; projectSlug?: string; force?: boolean },
+  ): Promise<boolean> {
+    if (!repoDir || !existsSync(repoDir)) return false;
+    const files = scanLocalContextLakeFiles(repoDir);
+    const digest = createHash("sha256")
+      .update(files.map((f) => `${f.path}:${f.sha}`).join("|"))
+      .digest("hex");
+    const key = resolve(repoDir);
+    if (!opts?.force && contextDigestByRepo.get(key) === digest) {
+      return false;
+    }
+    const ctx = inferProjectContext(repoDir, opts?.projectSlug);
+    const res = await sendJson(cfg!, "/api/v1/projects/context-sync", {
+      projectId: opts?.projectId || undefined,
+      project: opts?.projectSlug || ctx.project,
+      repo: key,
+      source: "daemon",
+      replaceAll: true,
+      files,
+    });
+    if (res.ok) {
+      contextDigestByRepo.set(key, digest);
+      return true;
+    }
+    return false;
   }
 
   function extractBaTicketsFromText(text: string): Array<Record<string, unknown>> {
@@ -3021,16 +3553,18 @@ async function cmdDaemon(args: string[]): Promise<number> {
     let fullPrompt: string;
     if (cmd.type === "run_ba" || mode === "ba") {
       fullPrompt = isResume
-        ? `${rawPrompt}\n\n(If you updated, added, or split any tickets, include the complete updated \`\`\`sf-tickets JSON block at the end so the Software Factory Kanban Board syncs automatically.)`
+        ? `${rawPrompt}\n\n(If you updated, added, or split any tickets, include the complete updated \`\`\`sf-tickets JSON block at the end so the Software Factory Kanban Board syncs automatically.)\n${SF_QUESTIONS_RESUME_REMINDER}`
         : buildBaTicketPrompt(stripped.body || rawPrompt);
     } else if (isResume) {
-      fullPrompt = rawPrompt.trim();
+      const isInteractiveMode = mode === "init" || mode === "clarify" || mode === "normal";
+      fullPrompt = isInteractiveMode
+        ? `${rawPrompt.trim()}\n\n${SF_QUESTIONS_RESUME_REMINDER}`
+        : rawPrompt.trim();
     } else if (mode === "init" || stripped.skill === "init") {
       const bodyText = stripped.skill === "init" ? stripped.body : rawPrompt.replace(/^\/factory[\s-]+init\b/i, "").trim();
       fullPrompt = `/factory init ${bodyText}`.trim();
-      if (!fullPrompt.includes("ask_question")) {
-        fullPrompt +=
-          "\n\n(Headless Software Factory session: do NOT call interactive-only `ask_question`/`AskUserQuestion`. Ask at most 3 concise numbered questions in plain markdown so the user can reply in chat.)";
+      if (!fullPrompt.includes("Interactive Questions Contract:")) {
+        fullPrompt += `\n\n${SF_QUESTIONS_CONTRACT}`;
       }
     } else if (stripped.skill === "dev-subissues") {
       fullPrompt = `/dev-subissues ${stripped.body}`.trim();
@@ -3047,9 +3581,8 @@ async function cmdDaemon(args: string[]): Promise<number> {
               ? ""
               : "/factory ";
       fullPrompt = `${prefix}${stripped.skill ? stripped.body : rawPrompt}`.trim();
-      if (isClarify && !fullPrompt.includes("ask_question")) {
-        fullPrompt +=
-          "\n\n(Headless Software Factory Clarify session: do NOT call interactive-only `ask_question`/`AskUserQuestion`. Ask at most 3 concise numbered questions in plain markdown so the user can reply in chat.)";
+      if (isClarify && !fullPrompt.includes("Interactive Questions Contract:")) {
+        fullPrompt += `\n\n${SF_QUESTIONS_CONTRACT}`;
       } else if (
         prefix === "/factory " &&
         !fullPrompt.includes("UNATTENDED FACTORY BUILD RUN")
@@ -3264,6 +3797,13 @@ async function cmdDaemon(args: string[]): Promise<number> {
         return count > 0
           ? `Generating Kanban tickets… (${count} drafted · ${charCount} chars)`
           : `Generating Kanban tickets JSON… (${charCount} chars)`;
+      }
+      if (/```sf-questions/i.test(text)) {
+        const qMatches = text.match(/"question"\s*:/g);
+        const count = qMatches ? qMatches.length : 0;
+        return count > 0
+          ? `Preparing interactive questions… (${count} ready)`
+          : "Preparing interactive questions…";
       }
       return `Writing response… (${charCount} chars)`;
     }
@@ -4011,6 +4551,66 @@ async function cmdDaemon(args: string[]): Promise<number> {
         }
       }
 
+      // Extract & upload any clickable HTML prototypes created during this interactive turn
+      // (both inline `sf-prototype` blocks and `.factory/prototypes/<slug>/index.html` files).
+      if (ok && !isUnattendedFactory) {
+        const extractedProtos = extractPrototypesFromTurn(
+          finalResponseText,
+          repoRoot || cwd,
+          runStartedAtMs,
+        );
+        if (extractedProtos.length > 0) {
+          const uploadedTitles: string[] = [];
+          for (const proto of extractedProtos) {
+            const pRes = await sendJson(cfg!, "/api/v1/prototypes", {
+              projectId: projectId || undefined,
+              repo: repoRoot || cwd,
+              run: runKey || undefined,
+              slug: proto.slug,
+              title: proto.title,
+              kind: proto.kind,
+              binding: proto.binding,
+              issueKeys: proto.issueKeys,
+              htmlPath: proto.htmlPath,
+              htmlContent: proto.htmlContent,
+              manifest: proto.manifest,
+            }).catch(() => ({ ok: false as const, status: 0, error: "upload failed" }));
+            if (pRes.ok) {
+              uploadedTitles.push(proto.title);
+            } else {
+              console.error(`sf daemon: prototype upload failed (${proto.title}): ${pRes.error}`);
+            }
+          }
+          if (uploadedTitles.length > 0) {
+            console.log(
+              `sf daemon: uploaded ${uploadedTitles.length} interactive prototype(s) (${uploadedTitles.join(", ")})`,
+            );
+            if (runKey) {
+              await sendJson(cfg!, "/api/v1/runs/step", {
+                run: runKey,
+                projectId: projectId || undefined,
+                repo: repoRoot || cwd,
+                step: "ba-prototype-synced",
+                phase: spec.mode === "clarify" ? "Clarify" : "BA Prototype",
+                status: "passed",
+                role: "orchestrator",
+                agent: "orchestrator",
+                label: `Published ${uploadedTitles.length} interactive prototype(s)`,
+                summary: `Ready to preview & click: ${uploadedTitles.join(", ")}`,
+                data: { kind: "ba_prototypes", count: uploadedTitles.length, titles: uploadedTitles },
+              }).catch(() => {});
+            }
+          }
+        }
+      }
+
+      // Keep Context Lake in sync on remote servers (e.g. Vercel) whenever a run finishes.
+      if (repoRoot || cwd) {
+        await syncProjectContextToServer(repoRoot || cwd, {
+          projectId: projectId || undefined,
+        }).catch(() => {});
+      }
+
       if (runKey && !wasPaused) {
         if (isUnattendedFactory) {
           const wf = readWorkflowOutcomeForRun(spec.engine, runKey, runStartedAtMs);
@@ -4133,6 +4733,49 @@ async function cmdDaemon(args: string[]): Promise<number> {
           "PATCH",
         );
       }
+      return;
+    }
+
+    // 0b. On-demand Context Lake sync requested from Web UI (especially on Vercel!)
+    if (cmd.type === "sync_context") {
+      const targetPath =
+        (typeof cmd.payload.localPath === "string" && cmd.payload.localPath.trim()) ||
+        (typeof cmd.payload.projectSlug === "string" && cmd.payload.projectSlug.trim()
+          ? join(workspaceDir, cmd.payload.projectSlug.trim())
+          : "");
+      if (!targetPath || !existsSync(targetPath)) {
+        await sendJson(
+          cfg!,
+          `/api/v1/runners/commands/${cmd.id}`,
+          { status: "failed", error: `Local path not found on runner: ${targetPath || "(empty)"}` },
+          "PATCH",
+        ).catch(() => {});
+        return;
+      }
+      if (!isPathAllowed(targetPath)) {
+        await sendJson(
+          cfg!,
+          `/api/v1/runners/commands/${cmd.id}`,
+          { status: "failed", error: `Blocked by --allow-root guardrail: ${targetPath}` },
+          "PATCH",
+        ).catch(() => {});
+        return;
+      }
+      const synced = await syncProjectContextToServer(targetPath, {
+        projectId: resolvedProjectId,
+        projectSlug:
+          typeof cmd.payload.projectSlug === "string" ? cmd.payload.projectSlug : undefined,
+        force: true,
+      }).catch(() => false);
+      console.log(
+        `sf daemon: sync_context ${targetPath} -> ${synced ? "synced" : "failed/unmatched"}`,
+      );
+      await sendJson(
+        cfg!,
+        `/api/v1/runners/commands/${cmd.id}`,
+        synced ? { status: "done" } : { status: "failed", error: "Could not sync project context" },
+        "PATCH",
+      ).catch(() => {});
       return;
     }
 
@@ -4341,6 +4984,7 @@ async function cmdDaemon(args: string[]): Promise<number> {
   }
 
   let lastScanAt = 0;
+  let lastContextSweepAt = 0;
   let cachedDiscovered: DiscoveredWorkspaceProject[] = [];
   let lastHeartbeatErr = "";
 
@@ -4350,6 +4994,16 @@ async function cmdDaemon(args: string[]): Promise<number> {
     if (Date.now() - lastScanAt > 10_000) {
       cachedDiscovered = scanWorkspaceProjects(workspaceDir);
       lastScanAt = Date.now();
+    }
+    // Periodically push changed Context Lake files (`.factory/**`, docs) for discovered workspace repos
+    // so remote servers like Vercel always display fresh Context Lake & Init status!
+    if (Date.now() - lastContextSweepAt > 30_000 && cachedDiscovered.length > 0) {
+      lastContextSweepAt = Date.now();
+      for (const proj of cachedDiscovered.slice(0, 20)) {
+        if (proj.path && isPathAllowed(proj.path)) {
+          await syncProjectContextToServer(proj.path, { projectSlug: proj.name }).catch(() => {});
+        }
+      }
     }
     const hb = await sendJson(cfg!, "/api/v1/runners/heartbeat", {
       name: runnerName,
@@ -4708,6 +5362,8 @@ async function main(argv: string[]): Promise<number> {
     if (cmd === "agent") return await cmdAgent(rest);
     if (cmd === "step") return await cmdStep(rest);
     if (cmd === "artifact") return await cmdArtifact(rest);
+    if (cmd === "prototype") return await cmdPrototype(rest);
+    if (cmd === "sync-context") return await cmdSyncContext(rest);
     if (cmd === "ask") return await cmdAsk(rest);
     if (cmd === "finish") return await cmdFinish(rest);
     if (cmd === "issues") return await cmdIssues(rest);

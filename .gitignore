@@ -27,3 +27,4 @@ software-factory/.env.local
 software-factory/.vercel/
 .vercel/
 .env.local
+.playwright-mcp/

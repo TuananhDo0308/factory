@@ -16,32 +16,38 @@ function resolveDatabaseUrl(): string {
   return raw;
 }
 
-const PRISMA_SCHEMA_REV = "v7-postgresql";
+const PRISMA_SCHEMA_REV = "v8-prototypes-context-lake";
 
 const globalForPrisma = globalThis as unknown as {
   prisma?: PrismaClient;
   prismaSchemaRev?: string;
+  prismaDatabaseUrl?: string;
 };
 
-function createPrismaClient(): PrismaClient {
+function createPrismaClient(connectionString: string): PrismaClient {
   const adapter = new PrismaPg({
-    connectionString: resolveDatabaseUrl(),
+    connectionString,
     max: process.env.VERCEL ? 5 : 10,
   });
   return new PrismaClient({ adapter });
 }
 
 function getOrCreatePrisma(): PrismaClient {
+  const connectionString = resolveDatabaseUrl();
   if (
     globalForPrisma.prisma &&
     globalForPrisma.prismaSchemaRev === PRISMA_SCHEMA_REV &&
-    "projectMember" in globalForPrisma.prisma
+    globalForPrisma.prismaDatabaseUrl === connectionString &&
+    "projectMember" in globalForPrisma.prisma &&
+    "projectContextFile" in globalForPrisma.prisma &&
+    "projectPrototype" in globalForPrisma.prisma
   ) {
     return globalForPrisma.prisma;
   }
-  const client = createPrismaClient();
+  const client = createPrismaClient(connectionString);
   globalForPrisma.prisma = client;
   globalForPrisma.prismaSchemaRev = PRISMA_SCHEMA_REV;
+  globalForPrisma.prismaDatabaseUrl = connectionString;
   return client;
 }
 
