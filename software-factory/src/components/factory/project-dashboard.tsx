@@ -33,11 +33,21 @@ function formatCompactDuration(ms: number): string {
 /**
  * Subtle inline SVG sparkline for spend across recent runs (ui-ux-pro-max Executive Dashboard).
  */
-function SpendSparkline({ values }: { values: number[] }) {
+function SpendSparkline({
+  values,
+  color = "var(--primary)",
+  width = 148,
+  height = 30,
+}: {
+  values: number[];
+  color?: string;
+  width?: number;
+  height?: number;
+}) {
   if (values.length < 2) return null;
   const max = Math.max(...values, 0.01);
-  const w = 112;
-  const h = 24;
+  const w = width;
+  const h = height;
   const pad = 2;
   const pts = values.map((v, i) => {
     const x = pad + (i / (values.length - 1)) * (w - pad * 2);
@@ -53,10 +63,10 @@ function SpendSparkline({ values }: { values: number[] }) {
       className="shrink-0 overflow-visible"
       aria-hidden="true"
     >
-      <polygon points={areaPts} fill="var(--primary)" fillOpacity={0.12} />
+      <polygon points={areaPts} fill={color} fillOpacity={0.14} />
       <polyline
         fill="none"
-        stroke="var(--primary)"
+        stroke={color}
         strokeWidth="1.75"
         strokeLinecap="round"
         strokeLinejoin="round"
@@ -96,13 +106,14 @@ export function ProjectDashboard({
   const totalInput = runs.reduce((s, r) => s + r.inputTokens, 0);
   const totalOutput = runs.reduce((s, r) => s + r.outputTokens, 0);
   const totalCache = runs.reduce((s, r) => s + r.cacheReadTokens, 0);
-  const totalTokens = totalInput + totalOutput + totalCache;
+  // Headline token volume tracks active tokens (uncached input + output); cached prefix
+  // re-reads are shown separately with cache hit % so multi-step runs aren't inflated.
+  const activeTokens = totalInput + totalOutput;
   const cacheBase = totalInput + totalCache;
   const cacheHitPct = cacheBase > 0 ? Math.round((totalCache / cacheBase) * 100) : 0;
 
-  const inputPct = totalTokens > 0 ? (totalInput / totalTokens) * 100 : 0;
-  const cachePct = totalTokens > 0 ? (totalCache / totalTokens) * 100 : 0;
-  const outputPct = totalTokens > 0 ? (totalOutput / totalTokens) * 100 : 0;
+  const inputPct = activeTokens > 0 ? (totalInput / activeTokens) * 100 : 0;
+  const outputPct = activeTokens > 0 ? (totalOutput / activeTokens) * 100 : 0;
 
   const totalCost = runs.reduce((s, r) => s + r.costUsd, 0);
   const avgCost = runs.length > 0 ? totalCost / runs.length : 0;
@@ -134,7 +145,7 @@ export function ProjectDashboard({
       const prev = map.get(m) ?? { mode: m, count: 0, cost: 0, tokens: 0 };
       prev.count += 1;
       prev.cost += r.costUsd;
-      prev.tokens += r.inputTokens + r.outputTokens + r.cacheReadTokens;
+      prev.tokens += r.inputTokens + r.outputTokens;
       map.set(m, prev);
     }
     return Array.from(map.values()).sort((a, b) => b.cost - a.cost);
@@ -152,88 +163,93 @@ export function ProjectDashboard({
 
   return (
     <div className="flex flex-col gap-5">
-      {/* 1. EXECUTIVE KPI ROW — 4 spacious cards with micro-visual cues */}
-      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
-        {/* KPI 1: Delivery Progress */}
-        <div className="flex flex-col justify-between gap-3 rounded-xl border border-border/80 bg-card p-5">
+      {/* 1. EXECUTIVE KPI BENTO GRID */}
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
+        {/* KPI 1 (Wide): Delivery Progress */}
+        <section className="col-span-1 flex min-h-[144px] flex-col justify-between gap-4 rounded-xl border border-primary/20 bg-primary/[0.035] p-5 transition-colors hover:border-primary/35 sm:col-span-2 lg:col-span-2 dark:border-primary/25 dark:bg-primary/[0.06]">
           <div className="flex items-center justify-between gap-2">
             <span className="text-xs font-medium text-muted-foreground">Tickets completed</span>
-            <CheckCircle2Icon className="size-4 text-muted-foreground/70" />
+            <CheckCircle2Icon className="size-4 text-primary/75" />
           </div>
-          <div className="flex items-baseline justify-between gap-2">
-            <span className="font-mono text-2xl font-semibold tracking-tight text-foreground tabular-nums">
+          <div className="flex items-baseline justify-between gap-3">
+            <span className="font-mono text-3xl font-semibold tracking-tight text-foreground tabular-nums">
               {doneCount}
-              <span className="text-base font-normal text-muted-foreground">/{totalIssues}</span>
+              <span className="text-lg font-normal text-muted-foreground">/{totalIssues}</span>
             </span>
-            <span className="font-mono text-xs font-medium text-primary tabular-nums">
-              {completionPct}%
+            <span className="rounded-md bg-primary/12 px-2 py-0.5 font-mono text-xs font-medium text-primary tabular-nums">
+              {completionPct}% done
             </span>
           </div>
-          <div className="flex flex-col gap-1.5">
-            <div className="h-1.5 w-full overflow-hidden rounded-full bg-muted">
+          <div className="flex flex-col gap-2">
+            <div className="h-1.5 w-full overflow-hidden rounded-full bg-primary/15">
               <div
                 className="h-full rounded-full bg-primary transition-all duration-300"
                 style={{ width: `${completionPct}%` }}
               />
             </div>
-            <span className="text-xs text-muted-foreground">
-              {inProgressCount > 0
-                ? `${inProgressCount} in progress · ${readyCount} ready`
-                : `${readyCount} ready in queue`}
-            </span>
+            <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-muted-foreground">
+              <span>
+                {inProgressCount > 0
+                  ? `${inProgressCount} in progress · ${readyCount} ready`
+                  : `${readyCount} ready in queue`}
+              </span>
+              {reviewCount > 0 && (
+                <span className="font-mono text-foreground/80">{reviewCount} in review</span>
+              )}
+            </div>
           </div>
-        </div>
+        </section>
 
-        {/* KPI 2: Pass Rate & Execution Time */}
-        <div className="flex flex-col justify-between gap-3 rounded-xl border border-border/80 bg-card p-5">
+        {/* KPI 2: Pipeline Health & Execution Time */}
+        <section className="col-span-1 flex min-h-[144px] flex-col justify-between gap-4 rounded-xl border border-border/80 bg-card p-5 transition-colors hover:border-border">
           <div className="flex items-center justify-between gap-2">
             <span className="text-xs font-medium text-muted-foreground">Pipeline health</span>
             <ActivityIcon className="size-4 text-muted-foreground/70" />
           </div>
           <div className="flex items-baseline justify-between gap-2">
-            <span className="font-mono text-2xl font-semibold tracking-tight text-foreground tabular-nums">
+            <span className="font-mono text-3xl font-semibold tracking-tight text-foreground tabular-nums">
               {passRate !== null ? `${passRate}%` : `${runs.length}`}
             </span>
             <span className="text-xs text-muted-foreground">
-              {passRate !== null ? "pass rate" : "runs"}
+              {passRate !== null ? "pass rate" : runs.length === 1 ? "run" : "runs"}
             </span>
           </div>
-          <div className="flex items-center justify-between gap-2 border-t border-border/50 pt-2 text-xs text-muted-foreground tabular-nums">
+          <div className="flex items-center justify-between gap-2 border-t border-border/60 pt-2.5 text-xs text-muted-foreground tabular-nums">
             <span>
               {passedRuns} passed{failedRuns > 0 ? ` · ${failedRuns} stopped` : ""}
             </span>
-            <span className="font-mono">
+            <span className="font-mono text-foreground/80">
               {totalDurationMs > 0 ? formatCompactDuration(totalDurationMs) : "0m"}
             </span>
           </div>
-        </div>
+        </section>
 
         {/* KPI 3: Token Efficiency */}
-        <div className="flex flex-col justify-between gap-3 rounded-xl border border-border/80 bg-card p-5">
+        <section
+          title={`Active tokens: ${activeTokens.toLocaleString()} (Input: ${totalInput.toLocaleString()} · Output: ${totalOutput.toLocaleString()}) · Cached prompt reads: ${totalCache.toLocaleString()} (${cacheHitPct}% cache hit)`}
+          className="col-span-1 flex min-h-[144px] flex-col justify-between gap-4 rounded-xl border border-border/80 bg-card p-5 transition-colors hover:border-border"
+        >
           <div className="flex items-center justify-between gap-2">
             <span className="text-xs font-medium text-muted-foreground">Token volume</span>
             <CpuIcon className="size-4 text-muted-foreground/70" />
           </div>
           <div className="flex items-baseline justify-between gap-2">
-            <span className="font-mono text-2xl font-semibold tracking-tight text-foreground tabular-nums">
-              {formatCompactTokens(totalTokens)}
+            <span className="font-mono text-3xl font-semibold tracking-tight text-foreground tabular-nums">
+              {formatCompactTokens(activeTokens)}
             </span>
             {cacheHitPct > 0 && (
               <span
-                className="font-mono text-xs font-medium text-primary tabular-nums"
-                title="Input cache hit rate = cache read / (uncached input + cache read)"
+                className="rounded-md bg-primary/10 px-2 py-0.5 font-mono text-xs font-medium text-primary tabular-nums"
+                title={`Cached prompt reads: ${totalCache.toLocaleString()} (${cacheHitPct}% of total input served from cache)`}
               >
                 {cacheHitPct}% cache
               </span>
             )}
           </div>
-          <div className="flex flex-col gap-1.5">
+          <div className="flex flex-col gap-2">
             <div className="flex h-1.5 w-full gap-0.5 overflow-hidden rounded-full bg-muted">
               {inputPct > 0 && (
                 <div className="h-full bg-[var(--chart-2)]" style={{ width: `${inputPct}%` }} />
-              )}
-              {cachePct > 0 && (
-                <div className="h-full bg-primary" style={{ width: `${cachePct}%` }} />
               )}
               {outputPct > 0 && (
                 <div className="h-full bg-[var(--chart-5)]" style={{ width: `${outputPct}%` }} />
@@ -241,30 +257,33 @@ export function ProjectDashboard({
             </div>
             <span className="font-mono text-xs text-muted-foreground tabular-nums">
               in {formatCompactTokens(totalInput)} · out {formatCompactTokens(totalOutput)}
+              {totalCache > 0 ? ` · ${formatCompactTokens(totalCache)} cached` : ""}
             </span>
           </div>
-        </div>
+        </section>
 
-        {/* KPI 4: Spend + Trend Sparkline */}
-        <div className="flex flex-col justify-between gap-3 rounded-xl border border-border/80 bg-card p-5">
+        {/* KPI 4 (Wide): Spend + Trend Sparkline */}
+        <section className="col-span-1 flex min-h-[144px] flex-col justify-between gap-4 rounded-xl border border-border/80 bg-card p-5 transition-colors hover:border-border sm:col-span-2 lg:col-span-2">
           <div className="flex items-center justify-between gap-2">
             <span className="text-xs font-medium text-muted-foreground">
               {engine === "antigravity" ? "Estimated spend" : "Total spend"}
             </span>
             <CoinsIcon className="size-4 text-muted-foreground/70" />
           </div>
-          <div className="flex items-end justify-between gap-3">
-            <span className="font-mono text-2xl font-semibold tracking-tight text-foreground tabular-nums">
+          <div className="flex items-end justify-between gap-4">
+            <span className="font-mono text-3xl font-semibold tracking-tight text-foreground tabular-nums">
               {engine === "antigravity" && totalCost > 0 ? "~" : ""}
               {formatUsd(totalCost)}
             </span>
             <SpendSparkline values={spendSparkValues} />
           </div>
-          <div className="flex items-center justify-between gap-2 border-t border-border/50 pt-2 font-mono text-xs text-muted-foreground tabular-nums">
+          <div className="flex items-center justify-between gap-2 border-t border-border/60 pt-2.5 font-mono text-xs text-muted-foreground tabular-nums">
             <span>{runs.length > 0 ? `${formatUsd(avgCost)} / run` : "No spend yet"}</span>
-            <span>{runs.length} runs</span>
+            <span>
+              {runs.length} {runs.length === 1 ? "run" : "runs"}
+            </span>
           </div>
-        </div>
+        </section>
       </div>
 
       {/* 2. LIVE ACTIVITY STRIP (shown only when a build or BA chat is active) */}

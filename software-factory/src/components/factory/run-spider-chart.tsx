@@ -167,7 +167,7 @@ function resolveDurationMs(run: RunSpiderInput): number {
 
 export function scoreRunDimensions(run: RunSpiderInput, engine?: string): RunSpiderScore {
   const resolvedEngine = run.engine ?? engine;
-  const totalTokens = run.inputTokens + run.outputTokens + run.cacheReadTokens;
+  const totalTokens = run.inputTokens + run.outputTokens;
   const cacheBase = run.inputTokens + run.cacheReadTokens;
   const cachePct = cacheBase > 0 ? Math.round((run.cacheReadTokens / cacheBase) * 100) : 0;
 

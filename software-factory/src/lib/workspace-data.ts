@@ -305,6 +305,7 @@ export async function getSidebarData(userId: string) {
       localPath: p.localPath,
       githubFullName: p.githubFullName,
       defaultBranch: p.defaultBranch || "main",
+      defaultRunnerId: p.defaultRunnerId ?? null,
       initStatus: p.initStatus,
       readinessScore: p.readinessScore,
       isOwner: p.userId === userId,
@@ -368,25 +369,40 @@ export async function getRunDetail(userId: string, runId: string) {
 
   if (!run) return null;
 
-  const [projectDraftIssues, projectPrototypes] = await Promise.all([
-    run.mode === "ba"
-      ? prisma.projectIssue
-          .findMany({
-            where: { projectId: run.projectId },
-            orderBy: [{ priority: "asc" }, { createdAt: "asc" }],
-          })
-          .then((rows) => rows.map(serializeProjectIssue))
-      : Promise.resolve([]),
-    run.mode === "ba" || run.mode === "clarify" || run.issue
-      ? prisma.projectPrototype
-          .findMany({
-            where: { projectId: run.projectId },
-            orderBy: { updatedAt: "desc" },
-            take: 30,
-          })
-          .then((rows) => rows.map(serializePrototype))
-      : Promise.resolve([]),
-  ]);
+  const [projectDraftIssues, projectPrototypes, accessibleRunners, pendingCommandCount] =
+    await Promise.all([
+      run.mode === "ba"
+        ? prisma.projectIssue
+            .findMany({
+              where: { projectId: run.projectId },
+              orderBy: [{ priority: "asc" }, { createdAt: "asc" }],
+            })
+            .then((rows) => rows.map(serializeProjectIssue))
+        : Promise.resolve([]),
+      run.mode === "ba" || run.mode === "clarify" || run.issue
+        ? prisma.projectPrototype
+            .findMany({
+              where: { projectId: run.projectId },
+              orderBy: { updatedAt: "desc" },
+              take: 30,
+            })
+            .then((rows) => rows.map(serializePrototype))
+        : Promise.resolve([]),
+      getAccessibleRunners(userId, {
+        projectId: run.projectId,
+        githubLogin: viewer?.githubLogin,
+      }),
+      prisma.runnerCommand.count({
+        where: { runId: run.id, status: "pending" },
+      }),
+    ]);
+
+  const onlineRunnerCount = accessibleRunners.filter((r) =>
+    isRunnerOnline(r.status, r.lastHeartbeatAt),
+  ).length;
+  const assignedRunnerOnline = Boolean(
+    run.runner && isRunnerOnline(run.runner.status, run.runner.lastHeartbeatAt),
+  );
 
   const seenProtoIds = new Set<string>();
   const combinedPrototypes = [...run.prototypes.map(serializePrototype), ...projectPrototypes].filter(
@@ -479,11 +495,16 @@ export async function getRunDetail(userId: string, runId: string) {
           id: run.runner.id,
           name: run.runner.name,
           hostname: run.runner.hostname,
-          status: run.runner.status,
+          status: assignedRunnerOnline ? "online" : "offline",
           visibility: run.runner.visibility,
           ownerLogin: run.runner.user?.githubLogin ?? null,
         }
       : null,
+    runnerState: {
+      onlineCount: onlineRunnerCount,
+      assignedOnline: assignedRunnerOnline,
+      hasPendingCommand: pendingCommandCount > 0,
+    },
     triggeredBy: run.triggeredBy
       ? {
           id: run.triggeredBy.id,
@@ -833,7 +854,7 @@ export async function getAnalyticsData(userId: string) {
     d.cost = Number((d.cost + r.costUsd).toFixed(4));
     d.runs += 1;
     if (r.status === "passed") d.passed += 1;
-    d.tokensK += Math.round((r.inputTokens + r.outputTokens + r.cacheReadTokens) / 1000);
+    d.tokensK += Math.round((r.inputTokens + r.outputTokens) / 1000);
     dailyMap.set(day, d);
 
     const pKey = r.project.name;

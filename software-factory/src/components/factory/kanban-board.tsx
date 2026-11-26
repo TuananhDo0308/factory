@@ -14,6 +14,7 @@ import {
   GitPullRequestIcon,
   Link2Icon,
   MessageSquareIcon,
+  PauseIcon,
   PlayIcon,
   RotateCcwIcon,
   SparklesIcon,
@@ -51,6 +52,7 @@ import {
   SheetTitle,
 } from "@/components/ui/sheet";
 import { Spinner } from "@/components/ui/spinner";
+import { Switch } from "@/components/ui/switch";
 import {
   Table,
   TableBody,
@@ -277,6 +279,8 @@ export function KanbanBoard({
   project,
   canWrite,
   board,
+  dispatchBusy = null,
+  onDispatchPolicy,
   onRefresh,
 }: {
   project: {
@@ -289,6 +293,11 @@ export function KanbanBoard({
   };
   canWrite: boolean;
   board: ProjectBoardSnapshot;
+  dispatchBusy?: string | null;
+  onDispatchPolicy?: (
+    action: "start_auto" | "stop_auto" | "set_auto_approve",
+    extra?: { autoApprove?: boolean },
+  ) => Promise<void>;
   onRefresh: () => Promise<void>;
 }) {
   const router = useRouter();
@@ -324,6 +333,10 @@ export function KanbanBoard({
 
   const draftIssues = React.useMemo(
     () => board.issues.filter((i) => i.status === "backlog" || i.status === "needs_human"),
+    [board.issues],
+  );
+  const readyCount = React.useMemo(
+    () => board.issues.filter((i) => i.status === "ready").length,
     [board.issues],
   );
 
@@ -459,61 +472,136 @@ export function KanbanBoard({
 
   return (
     <div className="flex flex-col gap-4">
-      {/* Compact Kanban Toolbar (shown when board has tickets) */}
-      {board.issues.length > 0 && (
-        <div className="flex flex-wrap items-center justify-end gap-2">
-          {canWrite && draftIssues.length > 0 && (
-            <>
-              <Button
-                variant="secondary"
-                size="sm"
-                disabled={busyKey !== null}
-                onClick={() => void callDispatch("confirm_all")}
-              >
-                {busyKey === "confirm_all" ? (
-                  <Spinner data-icon="inline-start" />
-                ) : (
-                  <CheckIcon data-icon="inline-start" />
-                )}
-                Confirm Drafts ({draftIssues.length})
-              </Button>
-              <Button
-                variant="default"
-                size="sm"
-                disabled={busyKey !== null}
-                onClick={() =>
-                  void callDispatch("confirm_and_run", { autoApprove: board.autoApprove })
-                }
-              >
-                {busyKey === "confirm_and_run" ? (
-                  <Spinner data-icon="inline-start" />
-                ) : (
-                  <ZapIcon data-icon="inline-start" />
-                )}
-                {board.autoApprove ? "Confirm & Full Auto" : "Confirm & Auto-Run"}
-              </Button>
-            </>
-          )}
+      {/* Kanban Toolbar: Auto-Run & No-approval controls + Draft actions & View Switch */}
+      {(canWrite || board.issues.length > 0) && (
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div className="flex flex-wrap items-center gap-2">
+            {canWrite && onDispatchPolicy && (
+              <>
+                <label
+                  htmlFor="kanban-no-approval"
+                  title="Auto-merge passed branches, skip human approval gates, and advance dependent tickets automatically"
+                  className={`flex h-7 cursor-pointer items-center gap-2 rounded-md border px-2.5 text-xs transition-colors select-none ${
+                    board.autoApprove
+                      ? "border-primary/40 bg-primary/10 text-foreground"
+                      : "border-border bg-card text-muted-foreground hover:text-foreground"
+                  }`}
+                >
+                  <Switch
+                    id="kanban-no-approval"
+                    size="sm"
+                    checked={board.autoApprove}
+                    disabled={dispatchBusy !== null}
+                    onCheckedChange={(checked) =>
+                      void onDispatchPolicy("set_auto_approve", {
+                        autoApprove: checked === true,
+                      })
+                    }
+                  />
+                  <span>No approval</span>
+                </label>
 
-          <div className="flex items-center rounded-[3px] border bg-background p-0.5">
-            <Button
-              type="button"
-              variant={viewMode === "board" ? "secondary" : "ghost"}
-              size="xs"
-              onClick={() => setViewMode("board")}
-            >
-              <Columns3Icon data-icon="inline-start" />
-              Board
-            </Button>
-            <Button
-              type="button"
-              variant={viewMode === "table" ? "secondary" : "ghost"}
-              size="xs"
-              onClick={() => setViewMode("table")}
-            >
-              <TableIcon data-icon="inline-start" />
-              Table
-            </Button>
+                {board.autoDispatch ? (
+                  <Button
+                    variant="default"
+                    size="sm"
+                    disabled={dispatchBusy !== null}
+                    onClick={() => void onDispatchPolicy("stop_auto")}
+                  >
+                    {dispatchBusy === "stop_auto" ? (
+                      <Spinner data-icon="inline-start" />
+                    ) : (
+                      <PauseIcon data-icon="inline-start" />
+                    )}
+                    {board.autoApprove ? "Full Auto Active" : "Auto-Run Active"}
+                  </Button>
+                ) : (
+                  <Button
+                    variant={readyCount > 0 || board.autoApprove ? "default" : "outline"}
+                    size="sm"
+                    disabled={dispatchBusy !== null}
+                    onClick={() =>
+                      void onDispatchPolicy("start_auto", {
+                        autoApprove: board.autoApprove,
+                      })
+                    }
+                  >
+                    {dispatchBusy === "start_auto" ? (
+                      <Spinner data-icon="inline-start" />
+                    ) : board.autoApprove ? (
+                      <ZapIcon data-icon="inline-start" />
+                    ) : (
+                      <PlayIcon data-icon="inline-start" />
+                    )}
+                    {board.autoApprove
+                      ? readyCount > 0
+                        ? `Full Auto (${readyCount})`
+                        : "Full Auto"
+                      : readyCount > 0
+                        ? `Auto-Run (${readyCount})`
+                        : "Auto-Run"}
+                  </Button>
+                )}
+              </>
+            )}
+          </div>
+
+          <div className="flex flex-wrap items-center gap-2">
+            {canWrite && draftIssues.length > 0 && (
+              <>
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  disabled={busyKey !== null}
+                  onClick={() => void callDispatch("confirm_all")}
+                >
+                  {busyKey === "confirm_all" ? (
+                    <Spinner data-icon="inline-start" />
+                  ) : (
+                    <CheckIcon data-icon="inline-start" />
+                  )}
+                  Confirm Drafts ({draftIssues.length})
+                </Button>
+                <Button
+                  variant="default"
+                  size="sm"
+                  disabled={busyKey !== null}
+                  onClick={() =>
+                    void callDispatch("confirm_and_run", { autoApprove: board.autoApprove })
+                  }
+                >
+                  {busyKey === "confirm_and_run" ? (
+                    <Spinner data-icon="inline-start" />
+                  ) : (
+                    <ZapIcon data-icon="inline-start" />
+                  )}
+                  {board.autoApprove ? "Confirm & Full Auto" : "Confirm & Auto-Run"}
+                </Button>
+              </>
+            )}
+
+            {board.issues.length > 0 && (
+              <div className="flex items-center rounded-[3px] border bg-background p-0.5">
+                <Button
+                  type="button"
+                  variant={viewMode === "board" ? "secondary" : "ghost"}
+                  size="xs"
+                  onClick={() => setViewMode("board")}
+                >
+                  <Columns3Icon data-icon="inline-start" />
+                  Board
+                </Button>
+                <Button
+                  type="button"
+                  variant={viewMode === "table" ? "secondary" : "ghost"}
+                  size="xs"
+                  onClick={() => setViewMode("table")}
+                >
+                  <TableIcon data-icon="inline-start" />
+                  Table
+                </Button>
+              </div>
+            )}
           </div>
         </div>
       )}

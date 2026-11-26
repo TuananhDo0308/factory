@@ -1242,7 +1242,7 @@ function resolveMonorepoRoot(explicitRoot?: string): string {
   return dirname(dirname(dirname(resolve(process.argv[1] || "."))));
 }
 
-function estimateCostUsd(
+export function estimateCostUsd(
   engine: string,
   model: string,
   inputTokens: number,
@@ -1532,11 +1532,22 @@ function createAgySubagentTracker(opts: {
   runKey: string;
   baseCtx: Record<string, unknown>;
   defaultPhase: string;
+  initialRootOffset?: number;
   enqueuePost: (path: string, body: Record<string, unknown>) => void;
+  emitLive?: (chunk: Record<string, unknown>) => void;
   onActivity?: () => void;
   onLog?: (msg: string) => void;
 }) {
-  const { runKey, baseCtx, defaultPhase, enqueuePost, onActivity, onLog } = opts;
+  const {
+    runKey,
+    baseCtx,
+    defaultPhase,
+    initialRootOffset = 0,
+    enqueuePost,
+    emitLive,
+    onActivity,
+    onLog,
+  } = opts;
 
   type BgTaskState = {
     desc: string;
@@ -1593,6 +1604,16 @@ function createAgySubagentTracker(opts: {
     st.lastSentActivity = st.activity;
     st.lastSentModel = st.model;
     st.lastSentSummary = st.summary;
+    emitLive?.({
+      kind: "activity",
+      agentKey: st.meta.agentKey,
+      agentName: st.meta.name,
+      role: st.meta.role,
+      status: st.status,
+      activity: st.activity ? st.activity.slice(0, 160) : "",
+      model: st.model || undefined,
+      ts: Date.now(),
+    });
     enqueuePost("/api/v1/runs/agent", {
       run: runKey,
       ...baseCtx,
@@ -1644,7 +1665,7 @@ function createAgySubagentTracker(opts: {
       isRoot,
       meta,
       brainDir: resolveAgyBrainDir(convId),
-      byteOffset: 0,
+      byteOffset: isRoot && initialRootOffset > 0 ? initialRootOffset : 0,
       lineRemainder: "",
       model: "",
       status: initialStatus,
@@ -1674,12 +1695,21 @@ function createAgySubagentTracker(opts: {
     return created;
   }
 
-  function watchTasksDir(tasksDir: string) {
-    if (!liveMode || watchedDirs.has(tasksDir) || !existsSync(tasksDir)) return;
-    watchedDirs.add(tasksDir);
+  let syncDebounceTimer: ReturnType<typeof setTimeout> | null = null;
+  function scheduleSyncOnce() {
+    if (syncDebounceTimer) return;
+    syncDebounceTimer = setTimeout(() => {
+      syncDebounceTimer = null;
+      syncOnce();
+    }, 35);
+  }
+
+  function watchDirLive(targetDir: string) {
+    if (!liveMode || watchedDirs.has(targetDir) || !existsSync(targetDir)) return;
+    watchedDirs.add(targetDir);
     try {
-      const w = watch(tasksDir, () => {
-        syncOnce();
+      const w = watch(targetDir, () => {
+        scheduleSyncOnce();
       });
       watchers.push(w);
     } catch {
@@ -1691,7 +1721,7 @@ function createAgySubagentTracker(opts: {
     if (!st.brainDir) return false;
     const tasksDir = join(st.brainDir, ".system_generated", "tasks");
     if (!existsSync(tasksDir)) return false;
-    watchTasksDir(tasksDir);
+    watchDirLive(tasksDir);
 
     let files: string[];
     try {
@@ -1791,7 +1821,9 @@ function createAgySubagentTracker(opts: {
       st.brainDir = resolveAgyBrainDir(st.convId);
       if (!st.brainDir) return false;
     }
-    const transcriptPath = join(st.brainDir, ".system_generated", "logs", "transcript.jsonl");
+    const logsDir = join(st.brainDir, ".system_generated", "logs");
+    watchDirLive(logsDir);
+    const transcriptPath = join(logsDir, "transcript.jsonl");
     const { text, nextOffset } = readNewTextFromOffset(transcriptPath, st.byteOffset);
     if (!text) return false;
     st.byteOffset = nextOffset;
@@ -1852,6 +1884,15 @@ function createAgySubagentTracker(opts: {
           const rootThinking = typeof entry.thinking === "string" ? entry.thinking.trim() : "";
           if (rootThinking) {
             sawActivity = true;
+            emitLive?.({
+              kind: "thinking",
+              stepKey: `think-root-${shortId}-${stepIdx}`,
+              agentKey: "orchestrator",
+              agentName: "Session Orchestrator",
+              text: rootThinking.slice(0, 4000),
+              model: typeof entry.model === "string" && entry.model ? entry.model : undefined,
+              ts: Date.now(),
+            });
             enqueuePost("/api/v1/runs/step", {
               run: runKey,
               ...baseCtx,
@@ -1924,6 +1965,15 @@ function createAgySubagentTracker(opts: {
         const thinking = typeof entry.thinking === "string" ? entry.thinking.trim() : "";
         if (thinking) {
           st.stepsEmitted += 1;
+          emitLive?.({
+            kind: "thinking",
+            stepKey: `think-${shortId}-${stepIdx}`,
+            agentKey: st.meta.agentKey,
+            agentName: st.meta.name,
+            text: thinking.slice(0, 4000),
+            model: st.model || undefined,
+            ts: Date.now(),
+          });
           enqueuePost("/api/v1/runs/step", {
             run: runKey,
             ...baseCtx,
@@ -1958,6 +2008,15 @@ function createAgySubagentTracker(opts: {
           st.activity = label.slice(0, 150);
           st.stepsEmitted += 1;
           const safeTool = toolName.replace(/[^a-zA-Z0-9_-]+/g, "_").slice(0, 32) || "tool";
+          emitLive?.({
+            kind: "tool_active",
+            stepKey: `${safeTool}-${shortId}-${stepIdx}-${i}`,
+            agentKey: st.meta.agentKey,
+            agentName: st.meta.name,
+            tool: toolName,
+            label: label.slice(0, 155),
+            ts: Date.now(),
+          });
           enqueuePost("/api/v1/runs/step", {
             run: runKey,
             ...baseCtx,
@@ -2225,6 +2284,16 @@ function createAgySubagentTracker(opts: {
         continue;
       }
       onActivity?.();
+      emitLive?.({
+        kind: "tool_output",
+        stepKey: `bgtask-${shortId}-${taskIdx}`,
+        agentKey: st.meta.agentKey,
+        agentName: st.meta.name,
+        tool: "run_command",
+        label: `Running: ${taskState.desc}`.slice(0, 155),
+        output: logTail,
+        ts: Date.now(),
+      });
       enqueuePost("/api/v1/runs/step", {
         run: runKey,
         ...baseCtx,
@@ -2313,6 +2382,10 @@ function createAgySubagentTracker(opts: {
   }
 
   function stop() {
+    if (syncDebounceTimer) {
+      clearTimeout(syncDebounceTimer);
+      syncDebounceTimer = null;
+    }
     if (pollTimer) {
       clearInterval(pollTimer);
       pollTimer = null;
@@ -2443,20 +2516,6 @@ async function cmdSyncSubagents(args: string[]): Promise<number> {
     project: ctx.project,
     repo: ctx.localPath,
   };
-
-  // Also sync live.js first if it matches this run so rich spec titles exist before subagents attach.
-  const liveFile = join(resolveMonorepoRoot(), "antigravity/factory/dashboard/live.js");
-  if (existsSync(liveFile)) {
-    const parsedLive = parseDashboardJs(liveFile);
-    if (parsedLive) {
-      const records = Array.isArray(parsedLive) ? parsedLive : [parsedLive];
-      await sendJson(cfg, "/api/v1/runs/sync-live", {
-        ...baseCtx,
-        engine: "antigravity",
-        records,
-      }).catch(() => {});
-    }
-  }
 
   let chain: Promise<unknown> = Promise.resolve();
   const tracker = createAgySubagentTracker({
@@ -3351,7 +3410,6 @@ async function cmdDaemon(args: string[]): Promise<number> {
   const runnerName = values.name?.trim() || hostname();
   const maxConcurrency = Math.max(1, Math.min(10, Number(values["max-concurrency"]) || 2));
   const intervalMs = Math.max(1500, Number(values["interval-ms"]) || 3000);
-  const monorepoRoot = resolveMonorepoRoot(values.root);
   const workspaceDir = resolve(
     values["projects-dir"]?.trim() ||
       process.env.SF_PROJECTS_DIR?.trim() ||
@@ -3433,36 +3491,6 @@ async function cmdDaemon(args: string[]): Promise<number> {
     }
   }
 
-  const rawWatchCandidates: Array<{ path: string; engine: "antigravity" | "claude" }> = [
-    { path: join(monorepoRoot, "antigravity/factory/dashboard/live.js"), engine: "antigravity" },
-    { path: join(monorepoRoot, "antigravity/factory/dashboard/runs.js"), engine: "antigravity" },
-    { path: join(monorepoRoot, "claude/factory/dashboard/live.js"), engine: "claude" },
-    { path: join(monorepoRoot, "claude/factory/dashboard/runs.js"), engine: "claude" },
-    // Also watch installed user skill locations in case skills were copied rather than symlinked
-    { path: join(homedir(), ".gemini/config/skills/factory/dashboard/live.js"), engine: "antigravity" },
-    { path: join(homedir(), ".gemini/config/skills/factory/dashboard/runs.js"), engine: "antigravity" },
-    { path: join(homedir(), ".claude/skills/factory/dashboard/live.js"), engine: "claude" },
-    { path: join(homedir(), ".claude/skills/factory/dashboard/runs.js"), engine: "claude" },
-  ];
-  const watchFiles: Array<{ path: string; engine: "antigravity" | "claude" }> = [];
-  const seenWatchKeys = new Set<string>();
-  for (const cand of rawWatchCandidates) {
-    let canonical = resolve(cand.path);
-    try {
-      if (existsSync(cand.path)) {
-        canonical = realpathSync(cand.path);
-      } else if (existsSync(dirname(cand.path))) {
-        canonical = join(realpathSync(dirname(cand.path)), basename(cand.path));
-      }
-    } catch {
-      // Keep resolved path when symlink target cannot be stat'd yet.
-    }
-    const dedupeKey = `${cand.engine}:${canonical}`;
-    if (seenWatchKeys.has(dedupeKey)) continue;
-    seenWatchKeys.add(dedupeKey);
-    watchFiles.push({ path: canonical, engine: cand.engine });
-  }
-  const mtimes = new Map<string, number>();
   let activeRuns = 0;
 
   type SavedSession = {
@@ -3511,46 +3539,14 @@ async function cmdDaemon(args: string[]): Promise<number> {
   if (allowedRoots.length > 0) {
     console.log(`sf daemon: --allow-root guardrail active (${allowedRoots.join(", ")})`);
   }
-  console.log(`sf daemon: watching dashboard snapshots under ${monorepoRoot}`);
-
-  async function syncWatchedFiles() {
-    for (const target of watchFiles) {
-      if (!existsSync(target.path)) continue;
-      try {
-        const mtime = statSync(target.path).mtimeMs;
-        if (mtimes.get(target.path) === mtime) continue;
-        const parsed = parseDashboardJs(target.path);
-        if (!parsed) continue;
-        const records = Array.isArray(parsed) ? parsed : [parsed];
-        if (records.length === 0) {
-          mtimes.set(target.path, mtime);
-          continue;
-        }
-        const res = await sendJson(cfg!, "/api/v1/runs/sync-live", {
-          engine: target.engine,
-          source: basename(target.path) === "live.js" ? "live" : "runs",
-          records,
-        });
-        // Only cache mtime after a successful sync so transient server restarts or
-        // network timeouts automatically retry on the next daemon tick.
-        if (res.ok) {
-          mtimes.set(target.path, mtime);
-          console.log(`sf daemon: synced ${records.length} record(s) from ${basename(target.path)} (${target.engine})`);
-        }
-      } catch {
-        // Skip transient write lock and retry on the next tick.
-      }
-    }
-  }
+  console.log("sf daemon: web-origin tracking only (local/personal IDE chats are not synced)");
 
   function readWorkflowOutcomeForRun(
-    engine: "antigravity" | "claude",
     runKey: string,
-    startedAfterMs: number,
     searchDirs: string[] = [],
   ): { outcome?: string; reason?: string; mergeDecision?: string; risk?: string } | null {
-    // 0. Isolated per-run state.json written by workflow/factory.py takes top precedence
-    //    so concurrent runs or omitted dashboard.file never lose or overwrite their verdict.
+    // Strictly read isolated per-run `.factory/runs/<safeRunKey>/state.json` written by
+    // web-dispatched workflow runs — never read shared global dashboard live.js/runs.js.
     const perRun = readPerRunStateFile(searchDirs, runKey);
     if (perRun && perRun.outcome) {
       return {
@@ -3560,71 +3556,7 @@ async function cmdDaemon(args: string[]): Promise<number> {
         risk: perRun.risk,
       };
     }
-
-    const extractFields = (rec: Record<string, unknown>) => {
-      const outcome = typeof rec.outcome === "string" ? rec.outcome.trim() : undefined;
-      const reason = typeof rec.reason === "string" ? rec.reason.trim() : undefined;
-      const mergeObj = rec.merge && typeof rec.merge === "object" ? (rec.merge as Record<string, unknown>) : null;
-      const mergeDecision =
-        mergeObj && typeof mergeObj.decision === "string" ? mergeObj.decision.trim() : undefined;
-      const riskObj = rec.risk && typeof rec.risk === "object" ? (rec.risk as Record<string, unknown>) : null;
-      const risk = riskObj && typeof riskObj.level === "string" ? riskObj.level.trim() : undefined;
-      return { outcome, reason, mergeDecision, risk };
-    };
-
-    const engineFiles = watchFiles.filter((w) => w.engine === engine);
-    // 1. Exact runKey match across live.js and runs.js
-    for (const target of engineFiles) {
-      if (!existsSync(target.path)) continue;
-      try {
-        const parsed = parseDashboardJs(target.path);
-        if (!parsed) continue;
-        const records = (Array.isArray(parsed) ? parsed : [parsed]).filter(
-          (r): r is Record<string, unknown> => Boolean(r && typeof r === "object"),
-        );
-        for (let i = records.length - 1; i >= 0; i--) {
-          if (String(records[i].id || "").trim() === runKey) {
-            return extractFields(records[i]);
-          }
-        }
-      } catch {
-        // Ignore transient read errors
-      }
-    }
-    // 2. Fallback: fresh live.js written during this run (handles custom dashboard.id)
-    const liveFile = engineFiles.find((w) => basename(w.path) === "live.js");
-    if (liveFile && existsSync(liveFile.path)) {
-      try {
-        const mtime = statSync(liveFile.path).mtimeMs;
-        if (mtime >= startedAfterMs - 1000) {
-          const parsed = parseDashboardJs(liveFile.path);
-          if (parsed && !Array.isArray(parsed) && typeof parsed === "object") {
-            return extractFields(parsed as Record<string, unknown>);
-          }
-        }
-      } catch {
-        // Ignore transient read errors
-      }
-    }
     return null;
-  }
-
-  // Instant fs.watch (macOS FSEvents) on dashboard folders for sub-200ms live.js sync.
-  const watchedDirs = new Set(watchFiles.map((w) => dirname(w.path)));
-  let watchDebounce: ReturnType<typeof setTimeout> | null = null;
-  for (const dir of watchedDirs) {
-    if (!existsSync(dir)) continue;
-    try {
-      watch(dir, (_event, fname) => {
-        if (fname && !String(fname).endsWith(".js")) return;
-        if (watchDebounce) clearTimeout(watchDebounce);
-        watchDebounce = setTimeout(() => {
-          void syncWatchedFiles().catch(() => {});
-        }, 120);
-      });
-    } catch {
-      // Fall back to interval sync if fs.watch fails.
-    }
   }
 
   const SF_QUESTIONS_CONTRACT = [
@@ -3902,18 +3834,30 @@ async function cmdDaemon(args: string[]): Promise<number> {
   }
 
   const contextDigestByRepo = new Map<string, string>();
+  const MAX_CONTEXT_UPLOAD_BYTES = 3_000_000;
   async function syncProjectContextToServer(
     repoDir: string,
     opts?: { projectId?: string; projectSlug?: string; force?: boolean },
-  ): Promise<boolean> {
-    if (!repoDir || !existsSync(repoDir)) return false;
-    const files = scanLocalContextLakeFiles(repoDir);
+  ): Promise<{ ok: boolean; error?: string; count?: number }> {
+    if (!repoDir || !existsSync(repoDir)) {
+      return { ok: false, error: `Repo directory not found: ${repoDir}` };
+    }
+    const scanned = scanLocalContextLakeFiles(repoDir);
+    // Stay safely below Vercel Serverless 4.5 MB request body limit.
+    const files: typeof scanned = [];
+    let totalBytes = 0;
+    for (const f of scanned) {
+      const est = Buffer.byteLength(f.content, "utf8") + f.path.length + 128;
+      if (totalBytes + est > MAX_CONTEXT_UPLOAD_BYTES) break;
+      totalBytes += est;
+      files.push(f);
+    }
     const digest = createHash("sha256")
       .update(files.map((f) => `${f.path}:${f.sha}`).join("|"))
       .digest("hex");
     const key = resolve(repoDir);
     if (!opts?.force && contextDigestByRepo.get(key) === digest) {
-      return false;
+      return { ok: false };
     }
     const ctx = inferProjectContext(repoDir, opts?.projectSlug);
     const res = await sendJson(cfg!, "/api/v1/projects/context-sync", {
@@ -3926,9 +3870,9 @@ async function cmdDaemon(args: string[]): Promise<number> {
     });
     if (res.ok) {
       contextDigestByRepo.set(key, digest);
-      return true;
+      return { ok: true, count: files.length };
     }
-    return false;
+    return { ok: false, error: res.error || `HTTP ${res.status}` };
   }
 
   function extractBaTicketsFromText(text: string): Array<Record<string, unknown>> {
@@ -4215,7 +4159,9 @@ async function cmdDaemon(args: string[]): Promise<number> {
 
     const prevSavedSession = runKey ? sessionMap[runKey] : undefined;
     let activeConvId = prevSavedSession?.sessionId || "";
+    let activeModel = spec.model;
     let priorConvUsage: AgyTokenTotals = { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0 };
+    let initialRootOffset = 0;
     if (isResume && spec.engine === "antigravity" && prevSavedSession?.sessionId) {
       if (typeof prevSavedSession.reportedInputTokens === "number") {
         priorConvUsage = {
@@ -4228,9 +4174,21 @@ async function cmdDaemon(args: string[]): Promise<number> {
         // so upgraded daemons never double-count older multi-turn sessions either.
         priorConvUsage = readRootTranscriptUsage(prevSavedSession.sessionId);
       }
+      const prevBrainDir = resolveAgyBrainDir(prevSavedSession.sessionId.trim().toLowerCase());
+      if (prevBrainDir) {
+        const prevTranscript = join(prevBrainDir, ".system_generated", "logs", "transcript.jsonl");
+        try {
+          if (existsSync(prevTranscript)) {
+            initialRootOffset = statSync(prevTranscript).size;
+          }
+        } catch {
+          initialRootOffset = 0;
+        }
+      }
     }
 
     const runStartedAtMs = Date.now();
+    const turnTag = (cmdId || String(runStartedAtMs)).replace(/[^a-zA-Z0-9_-]+/g, "").slice(-8);
     const child = spawn(spec.binary, spec.args, {
       cwd,
       env: { ...process.env },
@@ -4260,6 +4218,172 @@ async function cmdDaemon(args: string[]): Promise<number> {
     const agyStreamingInFlight = new Set<number>();
     let lastPostWarnMs = 0;
 
+    // Ephemeral low-latency live chunk broadcaster (Ably / Supabase Broadcast / local zero-DB SSE).
+    // Bypasses Vercel Lambda + Postgres while tokens/thinking/tool logs stream at ~70ms cadence.
+    type LivePublishGrant =
+      | {
+          transport: "ably";
+          runId: string;
+          channel: string;
+          publishUrl: string;
+          bearerToken: string;
+          expiresAt: number;
+        }
+      | {
+          transport: "supabase";
+          runId: string;
+          channel: string;
+          publishUrl: string;
+          apiKey: string;
+        }
+      | {
+          transport: "sse";
+          runId: string;
+          channel: string;
+        };
+
+    let liveGrant: LivePublishGrant | null = null;
+    let liveGrantFetchInFlight: Promise<void> | null = null;
+    const liveQueue: Array<Record<string, unknown>> = [];
+    let liveFlushTimer: ReturnType<typeof setTimeout> | null = null;
+    let liveFlushChain: Promise<void> = Promise.resolve();
+    let liveStopped = false;
+
+    function ensureLiveGrant(): Promise<void> {
+      if (!runKey || liveStopped) return Promise.resolve();
+      if (
+        liveGrant &&
+        (liveGrant.transport !== "ably" || Date.now() < liveGrant.expiresAt - 180_000)
+      ) {
+        return Promise.resolve();
+      }
+      if (liveGrantFetchInFlight) return liveGrantFetchInFlight;
+      liveGrantFetchInFlight = sendJson(cfg!, "/api/v1/runs/live-token", {
+        run: runKey,
+        ...baseCtx,
+      })
+        .then((res) => {
+          if (res.ok && res.data && typeof res.data === "object") {
+            const d = res.data as Partial<LivePublishGrant>;
+            if (d.transport === "ably" && d.publishUrl && d.bearerToken && d.channel && d.runId) {
+              liveGrant = d as LivePublishGrant;
+            } else if (d.transport === "supabase" && d.publishUrl && d.apiKey && d.channel && d.runId) {
+              liveGrant = d as LivePublishGrant;
+            } else if (d.transport === "sse" && d.channel && d.runId) {
+              liveGrant = d as LivePublishGrant;
+            }
+          }
+        })
+        .catch(() => {})
+        .finally(() => {
+          liveGrantFetchInFlight = null;
+        });
+      return liveGrantFetchInFlight;
+    }
+
+    function coalesceLocalChunks(items: Array<Record<string, unknown>>): Array<Record<string, unknown>> {
+      const out: Array<Record<string, unknown>> = [];
+      for (const item of items) {
+        const prev = out[out.length - 1];
+        if (
+          item.kind === "text_delta" &&
+          prev?.kind === "text_delta" &&
+          prev.stepKey === item.stepKey &&
+          prev.agentKey === item.agentKey
+        ) {
+          prev.delta = `${String(prev.delta || "")}${String(item.delta || "")}`;
+          prev.ts = item.ts;
+          continue;
+        }
+        if (
+          item.kind === "tool_output" &&
+          prev?.kind === "tool_output" &&
+          prev.stepKey === item.stepKey &&
+          prev.agentKey === item.agentKey
+        ) {
+          out[out.length - 1] = item;
+          continue;
+        }
+        if (
+          item.kind === "activity" &&
+          prev?.kind === "activity" &&
+          prev.agentKey === item.agentKey
+        ) {
+          out[out.length - 1] = item;
+          continue;
+        }
+        out.push({ ...item });
+      }
+      return out;
+    }
+
+    async function dispatchLiveBatch(batch: Array<Record<string, unknown>>) {
+      if (batch.length === 0 || !runKey) return;
+      await ensureLiveGrant();
+      if (!liveGrant) return;
+      const chunks = coalesceLocalChunks(batch);
+      try {
+        if (liveGrant.transport === "ably") {
+          await fetch(liveGrant.publishUrl, {
+            method: "POST",
+            headers: {
+              Authorization: `Bearer ${liveGrant.bearerToken}`,
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify([{ name: "chunk", data: JSON.stringify({ chunks }) }]),
+            signal: AbortSignal.timeout(5000),
+          });
+        } else if (liveGrant.transport === "supabase") {
+          await fetch(liveGrant.publishUrl, {
+            method: "POST",
+            headers: {
+              apikey: liveGrant.apiKey,
+              Authorization: `Bearer ${liveGrant.apiKey}`,
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({
+              messages: [{ topic: liveGrant.channel, event: "chunk", payload: { chunks } }],
+            }),
+            signal: AbortSignal.timeout(5000),
+          });
+        } else {
+          await sendJson(cfg!, "/api/v1/runs/live-chunk", {
+            run: runKey,
+            ...baseCtx,
+            chunks,
+          });
+        }
+      } catch {
+        // Ephemeral live chunks are best-effort; durable DB steps remain authoritative.
+      }
+    }
+
+    function flushLiveQueueNow() {
+      if (liveFlushTimer) {
+        clearTimeout(liveFlushTimer);
+        liveFlushTimer = null;
+      }
+      if (liveQueue.length === 0) return;
+      const batch = liveQueue.splice(0, liveQueue.length);
+      liveFlushChain = liveFlushChain.then(() => dispatchLiveBatch(batch)).catch(() => {});
+    }
+
+    function emitLiveChunk(chunk: Record<string, unknown>) {
+      if (!runKey || liveStopped) return;
+      liveQueue.push(chunk);
+      if (liveQueue.length >= 25) {
+        flushLiveQueueNow();
+        return;
+      }
+      if (!liveFlushTimer) {
+        liveFlushTimer = setTimeout(flushLiveQueueNow, 70);
+      }
+    }
+
+    if (runKey) {
+      void ensureLiveGrant();
+    }
+
     // Strict FIFO chain for all non-coalesced posts with retry + spool fallback so transient
     // network timeouts or serverless cold starts never drop steps or leave runs stuck.
     let postChain: Promise<unknown> = Promise.resolve();
@@ -4273,6 +4397,13 @@ async function cmdDaemon(args: string[]): Promise<number> {
           });
           if (res.ok) {
             lastServerHeartbeatMs = Date.now();
+            if (liveGrant && liveGrant.transport !== "sse") {
+              emitLiveChunk({
+                kind: "step_committed",
+                stepKey: typeof body.step === "string" ? body.step : undefined,
+                ts: Date.now(),
+              });
+            }
           } else {
             const now = Date.now();
             if (now - lastPostWarnMs > 10_000) {
@@ -4311,6 +4442,7 @@ async function cmdDaemon(args: string[]): Promise<number> {
                 enqueuePost("/api/v1/runs/sync-live", {
                   engine: spec.engine,
                   source: "live",
+                  runKey,
                   ...baseCtx,
                   records: [parsed],
                 });
@@ -4407,7 +4539,9 @@ async function cmdDaemon(args: string[]): Promise<number> {
             runKey,
             baseCtx,
             defaultPhase: basePhase,
+            initialRootOffset,
             enqueuePost,
+            emitLive: emitLiveChunk,
             onActivity: () => {
               lastStreamActivityMs = Date.now();
             },
@@ -4453,9 +4587,6 @@ async function cmdDaemon(args: string[]): Promise<number> {
           agySubagentTracker?.syncOnce();
           const hasSubagents =
             Boolean(agySubagentTracker?.hasActiveSubagents()) || perRunActiveAgents.size > 0;
-          if (hasSubagents) {
-            void syncWatchedFiles().catch(() => {});
-          }
           if (childAlive && (hasSubagents || activeToolRunning)) {
             if (nowMs - lastServerHeartbeatMs >= 45_000) {
               const activeNames = Array.from(perRunActiveAgents).slice(0, 3);
@@ -4465,7 +4596,7 @@ async function cmdDaemon(args: string[]): Promise<number> {
                 agentKey: "orchestrator",
                 preserveExistingName: true,
                 role: "orchestrator",
-                model: spec.model,
+                model: activeModel,
                 status: "working",
                 ...(activeNames.length > 0
                   ? { activity: `Workflow running: ${activeNames.join(", ")}`.slice(0, 150) }
@@ -4482,12 +4613,17 @@ async function cmdDaemon(args: string[]): Promise<number> {
             ...baseCtx,
             agentKey: "orchestrator",
             role: "orchestrator",
-            model: spec.model,
+            model: activeModel,
             status: "working",
             activity: `Thinking… (${thinkSec}s)`,
           });
         }, 3000)
       : null;
+
+    function agyStepPrefix(): string {
+      const short = (activeConvId || turnTag).replace(/[^a-zA-Z0-9_-]+/g, "").slice(0, 8);
+      return `agy-${short}`;
+    }
 
     function flushAgyStreamStep(stepIdx: number) {
       if (!runKey || agyStreamingInFlight.has(stepIdx)) return;
@@ -4498,24 +4634,25 @@ async function cmdDaemon(args: string[]): Promise<number> {
       agyLastFlushLen.set(stepIdx, curText.length);
       agyStreamingInFlight.add(stepIdx);
       const liveLabel = formatLiveWritingLabel(curText);
+      const stepKey = `${agyStepPrefix()}-r${stepIdx}`;
       postChain = postChain
         .then(() =>
           sendJson(cfg!, "/api/v1/runs/step", {
             run: runKey,
             ...baseCtx,
             upsert: true,
-            step: `response-${stepIdx}`,
+            step: stepKey,
             phase: basePhase,
             status: "started",
             role: "orchestrator",
             agent: "orchestrator",
-            model: spec.model,
+            model: activeModel,
             label: liveLabel,
             summary: curText.slice(0, MAX_RESPONSE_CHARS),
             data: {
               kind: "assistant_message",
               engine: "antigravity",
-              model: spec.model,
+              model: activeModel,
               streaming: true,
             },
           }),
@@ -4549,7 +4686,7 @@ async function cmdDaemon(args: string[]): Promise<number> {
         saveSession(runKey, {
           engine: "antigravity",
           sessionId: convId,
-          model: spec.model,
+          model: activeModel,
           autonomy: spec.autonomy,
           mode: spec.mode,
           cwd,
@@ -4566,7 +4703,9 @@ async function cmdDaemon(args: string[]): Promise<number> {
 
       if (eventName === "init") {
         const init = (ev.init || {}) as Record<string, unknown>;
-        const activeModel = String(init.model || spec.model);
+        if (typeof init.model === "string" && init.model.trim()) {
+          activeModel = init.model.trim();
+        }
         thinkingSinceMs = Date.now();
         lastStreamActivityMs = Date.now();
         if (runKey) {
@@ -4593,6 +4732,8 @@ async function cmdDaemon(args: string[]): Promise<number> {
           typeof su.duration_seconds === "number"
             ? Math.round(su.duration_seconds * 1000)
             : undefined;
+        const usageObj =
+          su.usage && typeof su.usage === "object" ? (su.usage as Record<string, unknown>) : null;
 
         if (stepType === "tool") {
           const toolName = String(
@@ -4604,12 +4745,22 @@ async function cmdDaemon(args: string[]): Promise<number> {
           if (state === "ACTIVE" && runKey) {
             activeToolRunning = true;
             lastStreamActivityMs = Date.now();
+            const safeTool = toolName.replace(/[^a-zA-Z0-9_-]+/g, "_").slice(0, 28) || "tool";
+            emitLiveChunk({
+              kind: "tool_active",
+              stepKey: `${agyStepPrefix()}-${safeTool}-${stepIdx}`,
+              agentKey: "orchestrator",
+              agentName: "Session Orchestrator",
+              tool: toolName,
+              label: label.slice(0, 155),
+              ts: Date.now(),
+            });
             enqueuePost("/api/v1/runs/agent", {
               run: runKey,
               ...baseCtx,
               agentKey: "orchestrator",
               role: "orchestrator",
-              model: spec.model,
+              model: activeModel,
               status: "working",
               activity: label.slice(0, 150),
             });
@@ -4617,6 +4768,27 @@ async function cmdDaemon(args: string[]): Promise<number> {
             activeToolRunning = false;
             thinkingSinceMs = Date.now();
             lastStreamActivityMs = Date.now();
+            const safeToolForLive = toolName.replace(/[^a-zA-Z0-9_-]+/g, "_").slice(0, 28) || "tool";
+            emitLiveChunk({
+              kind: "tool_done",
+              stepKey: `${agyStepPrefix()}-${safeToolForLive}-${stepIdx}`,
+              agentKey: "orchestrator",
+              status: state === "ERROR" ? "failed" : "passed",
+              ts: Date.now(),
+            });
+            const inTok = Number(usageObj?.input_tokens || 0);
+            const outTok = Number(usageObj?.output_tokens || 0);
+            const cacheTok = Number(usageObj?.cache_read_tokens || 0);
+            const toolCost =
+              inTok || outTok || cacheTok
+                ? estimateCostUsd("antigravity", activeModel, inTok, outTok, cacheTok)
+                : 0;
+            if (inTok || outTok || cacheTok) {
+              totalReportedIn += inTok;
+              totalReportedOut += outTok;
+              totalReportedCache += cacheTok;
+              totalReportedCost += toolCost;
+            }
             const errObj = (toolInfo.error || {}) as Record<string, unknown>;
             const errMsg =
               typeof errObj.message === "string"
@@ -4632,16 +4804,22 @@ async function cmdDaemon(args: string[]): Promise<number> {
                   : state === "ERROR"
                     ? "Tool call failed"
                     : "";
+            const safeTool = toolName.replace(/[^a-zA-Z0-9_-]+/g, "_").slice(0, 28) || "tool";
             enqueuePost("/api/v1/runs/step", {
               run: runKey,
               ...baseCtx,
-              step: toolName.slice(0, 80),
+              idempotent: true,
+              step: `${agyStepPrefix()}-${safeTool}-${stepIdx}`,
               phase: basePhase,
               status: state === "ERROR" ? "failed" : "passed",
               role: "orchestrator",
               agent: "orchestrator",
-              model: spec.model,
+              model: activeModel,
               durationMs,
+              inputTokens: inTok || undefined,
+              outputTokens: outTok || undefined,
+              cacheReadTokens: cacheTok || undefined,
+              costUsd: toolCost || undefined,
               label: label.slice(0, 155),
               summary: state === "ERROR" ? outText.slice(0, 1000) : undefined,
               data: {
@@ -4653,7 +4831,6 @@ async function cmdDaemon(args: string[]): Promise<number> {
             });
             if (toolName.toLowerCase().includes("workflow")) {
               agySubagentTracker?.syncOnce();
-              void syncWatchedFiles().catch(() => {});
             } else if (toolName === "invoke_subagent" && outText) {
               const pObj =
                 toolInfo.parameters && typeof toolInfo.parameters === "object"
@@ -4679,24 +4856,36 @@ async function cmdDaemon(args: string[]): Promise<number> {
               next.length > MAX_RESPONSE_CHARS ? next.slice(0, MAX_RESPONSE_CHARS) : next,
             );
             lastStreamActivityMs = Date.now();
+            if (runKey) {
+              emitLiveChunk({
+                kind: "text_delta",
+                stepKey: `${agyStepPrefix()}-r${stepIdx}`,
+                agentKey: "orchestrator",
+                agentName: "Session Orchestrator",
+                delta: su.text_delta,
+                model: activeModel,
+                ts: Date.now(),
+              });
+            }
           }
 
           if (state === "ACTIVE" && runKey) {
             activeToolRunning = false;
             const curText = (agyTextByStep.get(stepIdx) || "").trim();
             const lastMs = agyLastFlushMs.get(stepIdx) || 0;
-            if (curText && (lastMs === 0 || Date.now() - lastMs >= 1200)) {
+            const dbDraftIntervalMs = liveGrant && liveGrant.transport !== "sse" ? 3000 : 1200;
+            if (curText && (lastMs === 0 || Date.now() - lastMs >= dbDraftIntervalMs)) {
               flushAgyStreamStep(stepIdx);
             }
           } else if (state === "DONE" && runKey) {
             activeToolRunning = false;
             thinkingSinceMs = Date.now();
             lastStreamActivityMs = Date.now();
-            const usage = (su.usage || {}) as Record<string, unknown>;
+            const usage = usageObj || {};
             const inTok = Number(usage.input_tokens || 0);
             const outTok = Number(usage.output_tokens || 0);
             const cacheTok = Number(usage.cache_read_tokens || 0);
-            const costUsd = estimateCostUsd("antigravity", spec.model, inTok, outTok, cacheTok);
+            const costUsd = estimateCostUsd("antigravity", activeModel, inTok, outTok, cacheTok);
             totalReportedIn += inTok;
             totalReportedOut += outTok;
             totalReportedCache += cacheTok;
@@ -4712,12 +4901,13 @@ async function cmdDaemon(args: string[]): Promise<number> {
               run: runKey,
               ...baseCtx,
               upsert: Boolean(text),
-              step: text ? `response-${stepIdx}` : `think-${stepIdx}`,
+              idempotent: true,
+              step: text ? `${agyStepPrefix()}-r${stepIdx}` : `${agyStepPrefix()}-t${stepIdx}`,
               phase: basePhase,
               status: "info",
               role: "orchestrator",
               agent: "orchestrator",
-              model: spec.model,
+              model: activeModel,
               durationMs,
               inputTokens: inTok || undefined,
               outputTokens: outTok || undefined,
@@ -4726,11 +4916,49 @@ async function cmdDaemon(args: string[]): Promise<number> {
               label: text ? "Assistant" : "Thinking",
               summary: text ? text.slice(0, MAX_RESPONSE_CHARS) : undefined,
               data: text
-                ? { kind: "assistant_message", engine: "antigravity", model: spec.model }
+                ? { kind: "assistant_message", engine: "antigravity", model: activeModel }
                 : {
                     kind: "thinking",
                     thinkingTokens: Number(usage.thinking_tokens || 0),
                   },
+            });
+          }
+          return;
+        }
+
+        // Capture usage emitted on any other DONE step type so live token totals stay accurate.
+        if (state === "DONE" && runKey && usageObj) {
+          const inTok = Number(usageObj.input_tokens || 0);
+          const outTok = Number(usageObj.output_tokens || 0);
+          const cacheTok = Number(usageObj.cache_read_tokens || 0);
+          if (inTok > 0 || outTok > 0 || cacheTok > 0) {
+            const costUsd = estimateCostUsd("antigravity", activeModel, inTok, outTok, cacheTok);
+            totalReportedIn += inTok;
+            totalReportedOut += outTok;
+            totalReportedCache += cacheTok;
+            totalReportedCost += costUsd;
+            enqueuePost("/api/v1/runs/step", {
+              run: runKey,
+              ...baseCtx,
+              idempotent: true,
+              keepAgentStatus: true,
+              step: `${agyStepPrefix()}-u${stepIdx}`,
+              phase: basePhase,
+              status: "info",
+              role: "orchestrator",
+              agent: "orchestrator",
+              model: activeModel,
+              durationMs,
+              inputTokens: inTok || undefined,
+              outputTokens: outTok || undefined,
+              cacheReadTokens: cacheTok || undefined,
+              costUsd: costUsd || undefined,
+              label: "Thinking",
+              data: {
+                kind: "thinking",
+                stepType,
+                thinkingTokens: Number(usageObj.thinking_tokens || 0),
+              },
             });
           }
         }
@@ -4775,7 +5003,7 @@ async function cmdDaemon(args: string[]): Promise<number> {
           saveSession(runKey, {
             engine: "antigravity",
             sessionId: convId || activeConvId,
-            model: spec.model,
+            model: activeModel,
             autonomy: spec.autonomy,
             mode: spec.mode,
             cwd,
@@ -4789,41 +5017,43 @@ async function cmdDaemon(args: string[]): Promise<number> {
         const turnIn = totalReportedIn + remIn;
         const turnOut = totalReportedOut + remOut;
         const turnCache = totalReportedCache + remCache;
-        const turnCost = estimateCostUsd("antigravity", spec.model, turnIn, turnOut, turnCache);
+        const turnCost = estimateCostUsd("antigravity", activeModel, turnIn, turnOut, turnCache);
         console.log(
-          `sf daemon [${runKey || "run"}]: tokens turn(in=${turnIn.toLocaleString()} out=${turnOut.toLocaleString()} cache=${turnCache.toLocaleString()} ~$${turnCost.toFixed(4)}) conv_total(in=${nextCumulative.inputTokens.toLocaleString()} out=${nextCumulative.outputTokens.toLocaleString()})`,
+          `sf daemon [${runKey || "run"}]: tokens turn(in=${turnIn.toLocaleString()} out=${turnOut.toLocaleString()} cache=${turnCache.toLocaleString()} ~$${turnCost.toFixed(4)} · ${activeModel}) conv_total(in=${nextCumulative.inputTokens.toLocaleString()} out=${nextCumulative.outputTokens.toLocaleString()})`,
         );
         if (runKey && !emittedAssistantResponse && finalResponseText) {
-          const remCost = estimateCostUsd("antigravity", spec.model, remIn, remOut, remCache);
+          const remCost = estimateCostUsd("antigravity", activeModel, remIn, remOut, remCache);
           emittedAssistantResponse = true;
           enqueuePost("/api/v1/runs/step", {
             run: runKey,
             ...baseCtx,
-            step: "assistant-response",
+            idempotent: true,
+            step: `${agyStepPrefix()}-res-${turnTag}`,
             phase: basePhase,
             status: sawErrorResult ? "failed" : "passed",
             role: "orchestrator",
             agent: "orchestrator",
-            model: spec.model,
+            model: activeModel,
             inputTokens: remIn || undefined,
             outputTokens: remOut || undefined,
             cacheReadTokens: remCache || undefined,
             costUsd: remCost || undefined,
             label: "Assistant",
             summary: finalResponseText.slice(0, MAX_RESPONSE_CHARS),
-            data: { kind: "assistant_message", engine: "antigravity", model: spec.model },
+            data: { kind: "assistant_message", engine: "antigravity", model: activeModel },
           });
         } else if (runKey && (remIn > 0 || remOut > 0 || remCache > 0)) {
-          const remCost = estimateCostUsd("antigravity", spec.model, remIn, remOut, remCache);
+          const remCost = estimateCostUsd("antigravity", activeModel, remIn, remOut, remCache);
           enqueuePost("/api/v1/runs/step", {
             run: runKey,
             ...baseCtx,
-            step: "turn-metrics",
+            idempotent: true,
+            step: `${agyStepPrefix()}-met-${turnTag}`,
             phase: basePhase,
             status: sawErrorResult ? "failed" : "passed",
             role: "orchestrator",
             agent: "orchestrator",
-            model: spec.model,
+            model: activeModel,
             inputTokens: remIn || undefined,
             outputTokens: remOut || undefined,
             cacheReadTokens: remCache || undefined,
@@ -4850,7 +5080,9 @@ async function cmdDaemon(args: string[]): Promise<number> {
       }
 
       if (evType === "system" && ev.subtype === "init" && runKey) {
-        const activeModel = String(ev.model || spec.model);
+        if (typeof ev.model === "string" && ev.model.trim()) {
+          activeModel = ev.model.trim();
+        }
         thinkingSinceMs = Date.now();
         lastStreamActivityMs = Date.now();
         enqueuePost("/api/v1/runs/agent", {
@@ -5053,12 +5285,13 @@ async function cmdDaemon(args: string[]): Promise<number> {
           enqueuePost("/api/v1/runs/step", {
             run: runKey,
             ...baseCtx,
-            step: "assistant-response",
+            idempotent: true,
+            step: `cl-res-${turnTag}`,
             phase: basePhase,
             status: sawErrorResult ? "failed" : "passed",
             role: "orchestrator",
             agent: "orchestrator",
-            model: spec.model,
+            model: activeModel,
             durationMs,
             inputTokens: remIn || undefined,
             outputTokens: remOut || undefined,
@@ -5066,18 +5299,19 @@ async function cmdDaemon(args: string[]): Promise<number> {
             costUsd: deltaCost || undefined,
             label: "Assistant",
             summary: finalResponseText.slice(0, MAX_RESPONSE_CHARS),
-            data: { kind: "assistant_message", engine: "claude", model: spec.model, costUsd: exactCost },
+            data: { kind: "assistant_message", engine: "claude", model: activeModel, costUsd: exactCost },
           });
         } else if (runKey && (deltaCost > 0 || remIn > 0 || remOut > 0 || remCache > 0)) {
           enqueuePost("/api/v1/runs/step", {
             run: runKey,
             ...baseCtx,
-            step: "turn-metrics",
+            idempotent: true,
+            step: `cl-met-${turnTag}`,
             phase: basePhase,
             status: sawErrorResult ? "failed" : "passed",
             role: "orchestrator",
             agent: "orchestrator",
-            model: spec.model,
+            model: activeModel,
             durationMs,
             inputTokens: remIn || undefined,
             outputTokens: remOut || undefined,
@@ -5125,6 +5359,9 @@ async function cmdDaemon(args: string[]): Promise<number> {
       if (liveHeartbeatTimer) clearInterval(liveHeartbeatTimer);
       syncPerRunProgress();
       agySubagentTracker?.stop();
+      flushLiveQueueNow();
+      liveStopped = true;
+      await liveFlushChain;
       if (runKey) activeChildren.delete(runKey);
       activeRuns = Math.max(0, activeRuns - 1);
       const message = `Failed to spawn ${spec.binary}: ${err.message}`;
@@ -5160,6 +5397,12 @@ async function cmdDaemon(args: string[]): Promise<number> {
       if (runKey) activeChildren.delete(runKey);
       activeRuns = Math.max(0, activeRuns - 1);
       await postChain;
+      if (liveGrant && liveGrant.transport !== "sse") {
+        emitLiveChunk({ kind: "step_committed", ts: Date.now() });
+      }
+      flushLiveQueueNow();
+      liveStopped = true;
+      await liveFlushChain;
 
       const wasPaused = signal === "SIGTERM" || signal === "SIGINT";
       const ok = !wasPaused && !blockedByPermission && code === 0 && !sawErrorResult;
@@ -5183,8 +5426,6 @@ async function cmdDaemon(args: string[]): Promise<number> {
         "PATCH",
         { retries: 2, spoolOnFail: true },
       ).catch(() => {});
-
-      await syncWatchedFiles().catch(() => {});
 
       const isUnattendedFactory = spec.mode === "factory" || spec.mode === "mission";
 
@@ -5346,10 +5587,7 @@ async function cmdDaemon(args: string[]): Promise<number> {
 
       if (runKey && !wasPaused) {
         if (isUnattendedFactory) {
-          const wf = readWorkflowOutcomeForRun(spec.engine, runKey, runStartedAtMs, [
-            cwd,
-            repoRoot || cwd,
-          ]);
+          const wf = readWorkflowOutcomeForRun(runKey, [cwd, repoRoot || cwd]);
           const wfOutcome =
             wf?.outcome === "passed" || wf?.outcome === "failed" || wf?.outcome === "blocked"
               ? wf.outcome
@@ -5406,6 +5644,64 @@ async function cmdDaemon(args: string[]): Promise<number> {
         }
       }
     });
+  }
+
+  async function materializeCommandAttachments(
+    targetCwd: string,
+    keyForDir: string,
+    rawAttachments: unknown,
+  ): Promise<string> {
+    if (!Array.isArray(rawAttachments) || rawAttachments.length === 0) return "";
+    const safeDir = sanitizeRunDirKey(keyForDir || `att-${Date.now()}`);
+    const outDir = join(targetCwd, ".factory", "attachments", safeDir);
+    const savedLines: string[] = [];
+
+    for (let idx = 0; idx < rawAttachments.length; idx += 1) {
+      const item = rawAttachments[idx];
+      if (!item || typeof item !== "object" || Array.isArray(item)) continue;
+      const rec = item as Record<string, unknown>;
+      const artifactId = typeof rec.artifactId === "string" ? rec.artifactId.trim() : "";
+      const rawName = typeof rec.name === "string" ? rec.name.trim() : `attachment-${idx + 1}`;
+      const mimeType = typeof rec.mimeType === "string" ? rec.mimeType.trim() : "application/octet-stream";
+      if (!artifactId) continue;
+
+      try {
+        const res = await fetch(
+          `${cfg!.url.replace(/\/+$/, "")}/api/artifacts/file?id=${encodeURIComponent(artifactId)}`,
+          {
+            headers: { Authorization: `Bearer ${cfg!.token}` },
+            signal: AbortSignal.timeout(15_000),
+          },
+        );
+        if (!res.ok) continue;
+        const arrBuf = await res.arrayBuffer();
+        const bytes = Buffer.from(arrBuf);
+        if (bytes.length === 0) continue;
+
+        mkdirSync(outDir, { recursive: true });
+        const safeName = rawName
+          .split(/[\\/]/)
+          .pop()!
+          .replace(/[^a-zA-Z0-9._-]+/g, "-")
+          .replace(/^-+|-+$/g, "")
+          .slice(0, 90) || `file-${idx + 1}`;
+        const destPath = join(outDir, `${idx + 1}-${safeName}`);
+        writeFileSync(destPath, bytes);
+        const kb = bytes.length >= 1024 ? `${(bytes.length / 1024).toFixed(1)} KB` : `${bytes.length} B`;
+        savedLines.push(`- ${rawName} (${mimeType}, ${kb}): ${destPath}`);
+      } catch {
+        // Best-effort download; continue with remaining attachments.
+      }
+    }
+
+    if (savedLines.length === 0) return "";
+    console.log(
+      `sf daemon [${keyForDir}]: materialized ${savedLines.length} chat attachment(s) -> ${outDir}`,
+    );
+    return [
+      "[Attached Files — saved locally in workspace; inspect images, PDFs, or documents with `read_file` / `Read` tool]",
+      ...savedLines,
+    ].join("\n");
   }
 
   async function executeCommand(cmd: {
@@ -5496,16 +5792,43 @@ async function cmdDaemon(args: string[]): Promise<number> {
 
     // 0b. On-demand Context Lake sync requested from Web UI (especially on Vercel!)
     if (cmd.type === "sync_context") {
-      const targetPath =
-        (typeof cmd.payload.localPath === "string" && cmd.payload.localPath.trim()) ||
-        (typeof cmd.payload.projectSlug === "string" && cmd.payload.projectSlug.trim()
-          ? join(workspaceDir, cmd.payload.projectSlug.trim())
-          : "");
+      const payloadLocalPath =
+        typeof cmd.payload.localPath === "string" ? cmd.payload.localPath.trim() : "";
+      const payloadSlug =
+        typeof cmd.payload.projectSlug === "string" ? cmd.payload.projectSlug.trim() : "";
+      const payloadName =
+        typeof cmd.payload.projectName === "string" ? cmd.payload.projectName.trim() : "";
+
+      let targetPath = "";
+      if (payloadLocalPath && existsSync(payloadLocalPath)) {
+        targetPath = payloadLocalPath;
+      } else if (payloadSlug && existsSync(join(workspaceDir, payloadSlug))) {
+        targetPath = join(workspaceDir, payloadSlug);
+      } else if (payloadName && existsSync(join(workspaceDir, payloadName))) {
+        targetPath = join(workspaceDir, payloadName);
+      } else {
+        const wanted = new Set(
+          [payloadSlug, payloadName, payloadLocalPath ? basename(payloadLocalPath) : ""]
+            .map((v) => v.trim().toLowerCase())
+            .filter(Boolean),
+        );
+        const discoveredMatch = cachedDiscovered.find(
+          (p) =>
+            p.path &&
+            existsSync(p.path) &&
+            (wanted.has(p.name.toLowerCase()) || wanted.has(basename(p.path).toLowerCase())),
+        );
+        if (discoveredMatch?.path) {
+          targetPath = discoveredMatch.path;
+        }
+      }
+
       if (!targetPath || !existsSync(targetPath)) {
+        const errMsg = `Local path not found on runner "${runnerName}": checked ${payloadLocalPath || "(no localPath)"} and ${join(workspaceDir, payloadSlug || payloadName || "<slug>")}`;
         await sendJson(
           cfg!,
           `/api/v1/runners/commands/${cmd.id}`,
-          { status: "failed", error: `Local path not found on runner: ${targetPath || "(empty)"}` },
+          { status: "failed", error: errMsg },
           "PATCH",
         ).catch(() => {});
         return;
@@ -5519,19 +5842,21 @@ async function cmdDaemon(args: string[]): Promise<number> {
         ).catch(() => {});
         return;
       }
-      const synced = await syncProjectContextToServer(targetPath, {
-        projectId: resolvedProjectId,
-        projectSlug:
-          typeof cmd.payload.projectSlug === "string" ? cmd.payload.projectSlug : undefined,
-        force: true,
-      }).catch(() => false);
+      const syncRes: { ok: boolean; error?: string; count?: number } =
+        await syncProjectContextToServer(targetPath, {
+          projectId: resolvedProjectId,
+          projectSlug: payloadSlug || undefined,
+          force: true,
+        }).catch((err) => ({ ok: false, error: err instanceof Error ? err.message : String(err) }));
       console.log(
-        `sf daemon: sync_context ${targetPath} -> ${synced ? "synced" : "failed/unmatched"}`,
+        `sf daemon: sync_context ${targetPath} -> ${syncRes.ok ? `synced (${syncRes.count ?? 0} files)` : `failed (${syncRes.error || "unknown"})`}`,
       );
       await sendJson(
         cfg!,
         `/api/v1/runners/commands/${cmd.id}`,
-        synced ? { status: "done" } : { status: "failed", error: "Could not sync project context" },
+        syncRes.ok
+          ? { status: "done" }
+          : { status: "failed", error: syncRes.error || "Could not sync project context" },
         "PATCH",
       ).catch(() => {});
       return;
@@ -5589,9 +5914,9 @@ async function cmdDaemon(args: string[]): Promise<number> {
         ).catch(() => {});
         return;
       }
-      const steerPrompt =
+      const steerPromptBase =
         message || (decision ? `Operator decision: ${decision}. Please continue.` : "");
-      if (!steerPrompt) {
+      if (!steerPromptBase && !Array.isArray(cmd.payload.attachments)) {
         await sendJson(cfg!, `/api/v1/runners/commands/${cmd.id}`, { status: "done" }, "PATCH");
         return;
       }
@@ -5619,6 +5944,16 @@ async function cmdDaemon(args: string[]): Promise<number> {
           }).catch(() => {});
         }
         await sendJson(cfg!, `/api/v1/runners/commands/${cmd.id}`, { status: "failed", error: msg }, "PATCH");
+        return;
+      }
+      const attachmentBlock = await materializeCommandAttachments(
+        cwd,
+        runKey || cmd.id,
+        cmd.payload.attachments,
+      );
+      const steerPrompt = [steerPromptBase, attachmentBlock].filter(Boolean).join("\n\n").trim();
+      if (!steerPrompt) {
+        await sendJson(cfg!, `/api/v1/runners/commands/${cmd.id}`, { status: "done" }, "PATCH");
         return;
       }
       const spec = buildCliSpawnSpec({
@@ -5688,32 +6023,10 @@ async function cmdDaemon(args: string[]): Promise<number> {
       }
 
       const effectiveMode = String(cmd.payload.mode || savedForRetry?.mode || "factory");
-      const spec = buildCliSpawnSpec({
-        ...cmd,
-        type:
-          cmd.type === "retry_phase"
-            ? effectiveMode === "ba"
-              ? "run_ba"
-              : effectiveMode === "clarify"
-                ? "run_clarify"
-                : effectiveMode === "ui-refine"
-                  ? "run_ui_refine"
-                  : effectiveMode === "pr-judge"
-                    ? "run_pr_judge"
-                    : "start_run"
-            : cmd.type,
-        payload: {
-          ...cmd.payload,
-          engine: cmd.payload.engine || savedForRetry?.engine || "antigravity",
-          model: cmd.payload.model || savedForRetry?.model || "",
-          autonomy: cmd.payload.autonomy || savedForRetry?.autonomy || "high",
-          mode: effectiveMode,
-        },
-      });
       let execCwd = baseCwd;
-      if (cmd.payload.useWorktree === true && spec.mode !== "ba" && runKey) {
+      if (cmd.payload.useWorktree === true && effectiveMode !== "ba" && runKey) {
         const branchArg = typeof cmd.payload.branch === "string" ? cmd.payload.branch : undefined;
-        const wt = prepareWorktree(baseCwd, runKey, spec.mode, branchArg);
+        const wt = prepareWorktree(baseCwd, runKey, effectiveMode, branchArg);
         execCwd = wt.workCwd;
         if (wt.worktreeBranch && wt.workCwd !== baseCwd) {
           const syncedNote =
@@ -5742,6 +6055,38 @@ async function cmdDaemon(args: string[]): Promise<number> {
           ).catch(() => {});
         }
       }
+      const startAttachmentBlock = await materializeCommandAttachments(
+        execCwd,
+        runKey || cmd.id,
+        cmd.payload.attachments,
+      );
+      const rawPromptStr = typeof cmd.payload.prompt === "string" ? cmd.payload.prompt : "";
+      const promptWithAttachments = startAttachmentBlock
+        ? `${rawPromptStr}\n\n${startAttachmentBlock}`.trim()
+        : rawPromptStr;
+      const spec = buildCliSpawnSpec({
+        ...cmd,
+        type:
+          cmd.type === "retry_phase"
+            ? effectiveMode === "ba"
+              ? "run_ba"
+              : effectiveMode === "clarify"
+                ? "run_clarify"
+                : effectiveMode === "ui-refine"
+                  ? "run_ui_refine"
+                  : effectiveMode === "pr-judge"
+                    ? "run_pr_judge"
+                    : "start_run"
+            : cmd.type,
+        payload: {
+          ...cmd.payload,
+          prompt: promptWithAttachments,
+          engine: cmd.payload.engine || savedForRetry?.engine || "antigravity",
+          model: cmd.payload.model || savedForRetry?.model || "",
+          autonomy: cmd.payload.autonomy || savedForRetry?.autonomy || "high",
+          mode: effectiveMode,
+        },
+      });
       await runStreamedCli({
         cmdId: cmd.id,
         runKey,
@@ -5768,7 +6113,6 @@ async function cmdDaemon(args: string[]): Promise<number> {
 
   async function tick() {
     await flushSpool(cfg!).catch(() => {});
-    await syncWatchedFiles().catch(() => {});
     if (Date.now() - lastScanAt > 10_000) {
       cachedDiscovered = scanWorkspaceProjects(workspaceDir);
       lastScanAt = Date.now();

@@ -1,8 +1,7 @@
 "use client";
 
 import * as React from "react";
-import { GitBranchIcon, LaptopIcon } from "lucide-react";
-import { toast } from "sonner";
+import { AlertCircleIcon, GitBranchIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   Card,
@@ -10,39 +9,35 @@ import {
   CardDescription,
   CardHeader,
 } from "@/components/ui/card";
-import { Separator } from "@/components/ui/separator";
-import { Spinner } from "@/components/ui/spinner";
 import {
   FactoryMark,
   FactoryWordmark,
 } from "@/components/factory/factory-primitives";
 
+const OAUTH_ERROR_LABELS: Record<string, string> = {
+  oauth_not_configured:
+    "GitHub OAuth is not configured on this server. Set GITHUB_CLIENT_ID and GITHUB_CLIENT_SECRET.",
+  invalid_state: "Login session expired or state mismatch. Please try signing in again.",
+  access_denied: "GitHub authorization was cancelled.",
+};
+
 export default function LoginPage() {
-  const [enteringLocal, setEnteringLocal] = React.useState(false);
-
-  const nextPath = React.useSyncExternalStore(
+  const search = React.useSyncExternalStore(
     () => () => {},
-    () => {
-      const raw = new URLSearchParams(window.location.search).get("next") || "";
-      return raw.startsWith("/") && !raw.startsWith("//") ? raw : "/sessions";
-    },
-    () => "/sessions",
+    () => window.location.search,
+    () => "",
   );
-
-  async function continueLocal() {
-    setEnteringLocal(true);
-    try {
-      const res = await fetch("/auth/local", { method: "POST" });
-      if (!res.ok) {
-        const data = (await res.json().catch(() => null)) as { error?: string } | null;
-        toast.error(data?.error || "Local mode is disabled");
-        return;
-      }
-      window.location.assign(nextPath);
-    } finally {
-      setEnteringLocal(false);
-    }
-  }
+  const { nextPath, errorMessage } = React.useMemo(() => {
+    const params = new URLSearchParams(search);
+    const rawNext = params.get("next") || "";
+    const rawError = params.get("error") || "";
+    return {
+      nextPath: rawNext.startsWith("/") && !rawNext.startsWith("//") ? rawNext : "/sessions",
+      errorMessage: rawError
+        ? OAUTH_ERROR_LABELS[rawError] || `GitHub sign-in failed (${rawError}).`
+        : "",
+    };
+  }, [search]);
 
   const githubLoginHref =
     nextPath !== "/sessions"
@@ -62,25 +57,13 @@ export default function LoginPage() {
           </CardDescription>
         </CardHeader>
         <CardContent className="flex flex-col gap-3">
+          {errorMessage && (
+            <div className="flex items-start gap-2 rounded-md border border-destructive/35 bg-destructive/10 px-3 py-2 text-xs text-destructive">
+              <AlertCircleIcon className="mt-0.5 size-3.5 shrink-0" />
+              <span>{errorMessage}</span>
+            </div>
+          )}
           <Button
-            className="w-full"
-            disabled={enteringLocal}
-            onClick={() => void continueLocal()}
-          >
-            {enteringLocal ? (
-              <Spinner data-icon="inline-start" />
-            ) : (
-              <LaptopIcon data-icon="inline-start" />
-            )}
-            Continue in Local Mode
-          </Button>
-          <div className="flex items-center gap-3 text-xs text-muted-foreground">
-            <Separator className="flex-1" />
-            <span>or</span>
-            <Separator className="flex-1" />
-          </div>
-          <Button
-            variant="outline"
             className="w-full"
             nativeButton={false}
             render={<a href={githubLoginHref} />}

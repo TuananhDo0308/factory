@@ -127,19 +127,20 @@ async function resolveMatchingIssueId(
 }
 
 /**
- * Ingests a Factory `live.js` / `runs.js` record into Prisma so even manual CLI/IDE
- * `/factory` runs automatically appear with full per-agent status, criteria, and
- * open questions inside the web Control Plane.
+ * Updates telemetry (specs, phases, agents, criteria, risk, merge decision) on an
+ * EXISTING Web-created `FactoryRun`. Never auto-creates a run from local/personal IDE
+ * runs — runs must originate from Software Factory Web.
  */
 export async function syncLiveRecordToDb(params: {
   userId: string;
   projectId: string;
   engine: string;
   record: LiveJsRecord;
+  targetRunKey?: string;
   isLiveSnapshot?: boolean;
 }) {
-  const { userId, projectId, engine, record, isLiveSnapshot } = params;
-  const runKey = (record.id || "").trim();
+  const { userId, projectId, engine, record, targetRunKey: explicitRunKey } = params;
+  const runKey = (explicitRunKey || record.id || "").trim();
   if (!runKey || record.sample === true) return null;
 
   const hasQuestions = Array.isArray(record.questions) && record.questions.length > 0;
@@ -159,33 +160,18 @@ export async function syncLiveRecordToDb(params: {
     : "";
   const now = new Date();
 
-  // Match by exact runKey first; if an agent picked a different dashboard.id while a single
-  // factory run is actively executing on this project, attach live telemetry (including its
-  // final `live.js` verdict snapshot) to that run.
-  let targetRunKey = runKey;
+  // Strict web-origin lookup: ONLY update an existing FactoryRun created on Web.
+  // If no matching FactoryRun exists, ignore the record completely.
   const exactExisting = await prisma.factoryRun.findUnique({
     where: { projectId_runKey: { projectId, runKey } },
     select: { id: true, runKey: true, status: true, summary: true, issueId: true },
   });
-  let existingSummary = exactExisting?.summary ?? null;
-  let existingIssueId = exactExisting?.issueId ?? null;
-  if (!exactExisting && (!isDone || isLiveSnapshot)) {
-    const activeRuns = await prisma.factoryRun.findMany({
-      where: {
-        projectId,
-        mode: "factory",
-        status: { in: ["running", "queued"] },
-      },
-      orderBy: { updatedAt: "desc" },
-      take: 2,
-      select: { id: true, runKey: true, summary: true, issueId: true },
-    });
-    if (activeRuns.length === 1) {
-      targetRunKey = activeRuns[0].runKey;
-      existingSummary = activeRuns[0].summary ?? null;
-      existingIssueId = activeRuns[0].issueId ?? null;
-    }
+  if (!exactExisting) {
+    return null;
   }
+
+  const existingSummary = exactExisting.summary ?? null;
+  const existingIssueId = exactExisting.issueId ?? null;
   const linkedIssueId = existingIssueId ?? (await resolveMatchingIssueId(projectId, record));
   const clearStaleWatchdogSummary =
     status === "running" &&
@@ -209,10 +195,9 @@ export async function syncLiveRecordToDb(params: {
     updatedAt: now.toISOString(),
   });
 
-  const run = await prisma.factoryRun.upsert({
-    where: { projectId_runKey: { projectId, runKey: targetRunKey } },
-    update: {
-      title: exactExisting ? (record.title || runKey).slice(0, 240) : undefined,
+  const run = await prisma.factoryRun.update({
+    where: { id: exactExisting.id },
+    data: {
       issueId: !existingIssueId && linkedIssueId ? linkedIssueId : undefined,
       engine,
       status,
@@ -232,30 +217,6 @@ export async function syncLiveRecordToDb(params: {
       failureLogJson: record.failureLog ? JSON.stringify(record.failureLog) : undefined,
       checkpointJson: pipelineCheckpoint,
       durationMs: typeof record.seconds === "number" ? Math.round(record.seconds * 1000) : undefined,
-      lastHeartbeatAt: now,
-      finishedAt: isDone ? now : null,
-    },
-    create: {
-      projectId,
-      userId,
-      issueId: linkedIssueId ?? null,
-      runKey: targetRunKey.slice(0, 120),
-      title: (record.title || runKey).slice(0, 240),
-      mode: "factory",
-      engine,
-      status,
-      currentPhase: record.phase || "Spec",
-      summary: record.reason ? record.reason.slice(0, 1000) : null,
-      specLine: record.specLine ?? null,
-      specsJson: Array.isArray(record.specs) ? JSON.stringify(record.specs) : null,
-      risk: record.risk?.level ?? null,
-      surfacesJson: record.risk?.surfaces ? JSON.stringify(record.risk.surfaces) : null,
-      mergeDecision: record.merge?.decision ?? null,
-      mergeReasonsJson: record.merge?.reasons ? JSON.stringify(record.merge.reasons) : null,
-      criteriaJson: record.criteria ? JSON.stringify(record.criteria) : null,
-      failureLogJson: record.failureLog ? JSON.stringify(record.failureLog) : null,
-      checkpointJson: pipelineCheckpoint,
-      durationMs: typeof record.seconds === "number" ? Math.round(record.seconds * 1000) : null,
       lastHeartbeatAt: now,
       finishedAt: isDone ? now : null,
     },

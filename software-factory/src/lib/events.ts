@@ -5,6 +5,7 @@ export type FactoryStreamEvent = {
     | "run:updated"
     | "agent:updated"
     | "step:created"
+    | "live:chunk"
     | "interaction:updated"
     | "artifact:created"
     | "prototype:updated"

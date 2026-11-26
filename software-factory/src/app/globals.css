@@ -410,7 +410,10 @@
 }
 
 [data-slot="sidebar-menu-button"],
-[data-slot="sidebar-menu-sub-button"],
+[data-slot="sidebar-menu-sub-button"] {
+  border-radius: 8px;
+}
+
 [data-slot="tabs-list"],
 [data-slot="tabs-trigger"],
 [data-slot="dropdown-menu-item"],
@@ -498,4 +501,66 @@
 
 .xfb-lamp-pulse {
   animation: xfb-lamp-breathe 1.8s ease-in-out infinite;
+}
+
+/* Antigravity 2x2 four-dot sidebar loading animation */
+@keyframes agy-loader-dot {
+  0%,
+  100% {
+    opacity: 0.24;
+  }
+  32% {
+    opacity: 0.96;
+  }
+  68% {
+    opacity: 0.34;
+  }
+}
+
+.agy-loader-dot {
+  animation: agy-loader-dot 1.04s ease-in-out infinite;
+}
+
+.agy-loader-dot-1 {
+  animation-delay: 0ms;
+}
+
+.agy-loader-dot-2 {
+  animation-delay: 180ms;
+}
+
+.agy-loader-dot-3 {
+  animation-delay: 360ms;
+}
+
+.agy-loader-dot-4 {
+  animation-delay: 540ms;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .agy-loader-dot {
+    animation: none;
+  }
+  .agy-loader-dot-1 {
+    opacity: 0.65;
+  }
+  .agy-loader-dot-2 {
+    opacity: 0.95;
+  }
+  .agy-loader-dot-3 {
+    opacity: 0.45;
+  }
+  .agy-loader-dot-4 {
+    opacity: 0.25;
+  }
+}
+
+.no-visible-scrollbar {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+  -webkit-overflow-scrolling: touch;
+}
+
+.no-visible-scrollbar::-webkit-scrollbar {
+  display: none;
 }

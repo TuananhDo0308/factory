@@ -3,7 +3,7 @@ import { authenticateRequest } from "@/lib/api-auth";
 import { isUnattendedFactoryMode } from "@/lib/auto-dispatch";
 import { emitFactoryEvent } from "@/lib/events";
 import { prisma } from "@/lib/prisma";
-import { findAccessibleRun } from "@/lib/team-access";
+import { findAccessibleRun, getAccessibleRunners } from "@/lib/team-access";
 import { getRunDetail } from "@/lib/workspace-data";
 
 export async function GET(
@@ -55,12 +55,49 @@ export async function PATCH(
     );
   }
 
+  let targetResumeRunner:
+    | Awaited<ReturnType<typeof getAccessibleRunners>>[number]
+    | null = null;
+  if (body.action === "resume") {
+    const cutoffMs = Date.now() - 65_000;
+    const onlineRunners = (
+      await getAccessibleRunners(auth.user.id, {
+        projectId: existing.projectId,
+        githubLogin: auth.user.githubLogin,
+      })
+    ).filter((r) => r.status === "online" && r.lastHeartbeatAt.getTime() > cutoffMs);
+    targetResumeRunner =
+      (existing.runnerMachineId
+        ? onlineRunners.find((r) => r.id === existing.runnerMachineId) ?? null
+        : null) ??
+      onlineRunners
+        .filter((r) => r.userId === auth.user.id)
+        .sort((a, b) => a.activeRuns - b.activeRuns)[0] ??
+      onlineRunners
+        .filter((r) => r.visibility === "team")
+        .sort((a, b) => a.activeRuns - b.activeRuns)[0] ??
+      null;
+    if (!targetResumeRunner) {
+      return NextResponse.json(
+        {
+          error:
+            "No local daemon is connected. Start `sf daemon` on your machine before resuming.",
+          code: "NO_RUNNER_ONLINE",
+        },
+        { status: 503 },
+      );
+    }
+  }
+
   const data: Record<string, unknown> = {};
   if (typeof body.status === "string" && body.status.trim()) {
     data.status = body.status.trim();
     if (body.status === "cancelled" || body.status === "passed" || body.status === "failed") {
       data.finishedAt = new Date();
     }
+  }
+  if (targetResumeRunner) {
+    data.runnerMachineId = targetResumeRunner.id;
   }
   if (typeof body.model === "string" && body.model.trim()) {
     data.model = body.model.trim();
@@ -77,11 +114,25 @@ export async function PATCH(
     data,
   });
 
+  if (data.status === "cancelled") {
+    const now = new Date();
+    await Promise.all([
+      prisma.runnerCommand.updateMany({
+        where: { runId: existing.id, status: "pending" },
+        data: { status: "failed", error: "Session cancelled by user" },
+      }),
+      prisma.runAgent.updateMany({
+        where: { runId: existing.id, status: { in: ["working", "waiting_on_you"] } },
+        data: { status: "idle", activity: "Cancelled by operator", finishedAt: now },
+      }),
+    ]);
+  }
+
   if (body.action === "pause" || body.action === "resume") {
     await prisma.runnerCommand.create({
       data: {
-        userId: existing.runner?.userId ?? existing.project.userId,
-        runnerMachineId: existing.runnerMachineId,
+        userId: targetResumeRunner?.userId ?? existing.runner?.userId ?? existing.project.userId,
+        runnerMachineId: targetResumeRunner?.id ?? existing.runnerMachineId,
         projectId: existing.projectId,
         runId: existing.id,
         type: body.action === "pause" ? "pause_run" : "resume_run",

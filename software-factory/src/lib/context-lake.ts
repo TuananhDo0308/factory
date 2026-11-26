@@ -328,36 +328,42 @@ export async function upsertProjectContextFiles(params: {
 
   const keepPaths = validFiles.map((f) => f.path);
 
-  await prisma.$transaction(async (tx) => {
-    for (const file of validFiles) {
-      await tx.projectContextFile.upsert({
-        where: { projectId_path: { projectId: params.projectId, path: file.path } },
-        update: {
-          content: file.content,
-          bytes: file.bytes,
-          sha: file.sha,
-          source: params.source,
-        },
-        create: {
-          projectId: params.projectId,
-          path: file.path,
-          content: file.content,
-          bytes: file.bytes,
-          sha: file.sha,
-          source: params.source,
-        },
-      });
-    }
+  // Batch upserts in parallel chunks so remote Postgres / Vercel Serverless
+  // never hits Prisma's 5s interactive transaction timeout (P2028).
+  const UPSERT_CHUNK = 10;
+  for (let i = 0; i < validFiles.length; i += UPSERT_CHUNK) {
+    const chunk = validFiles.slice(i, i + UPSERT_CHUNK);
+    await Promise.all(
+      chunk.map((file) =>
+        prisma.projectContextFile.upsert({
+          where: { projectId_path: { projectId: params.projectId, path: file.path } },
+          update: {
+            content: file.content,
+            bytes: file.bytes,
+            sha: file.sha,
+            source: params.source,
+          },
+          create: {
+            projectId: params.projectId,
+            path: file.path,
+            content: file.content,
+            bytes: file.bytes,
+            sha: file.sha,
+            source: params.source,
+          },
+        }),
+      ),
+    );
+  }
 
-    if (params.replaceAll) {
-      await tx.projectContextFile.deleteMany({
-        where: {
-          projectId: params.projectId,
-          ...(keepPaths.length > 0 ? { path: { notIn: keepPaths } } : {}),
-        },
-      });
-    }
-  });
+  if (params.replaceAll) {
+    await prisma.projectContextFile.deleteMany({
+      where: {
+        projectId: params.projectId,
+        ...(keepPaths.length > 0 ? { path: { notIn: keepPaths } } : {}),
+      },
+    });
+  }
 
   const initComplete = isFactoryInitCompleteFromFiles(validFiles);
   if (initComplete) {

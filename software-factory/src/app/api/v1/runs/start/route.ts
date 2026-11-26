@@ -52,9 +52,22 @@ export async function POST(request: NextRequest) {
   const mode = str(body.mode) || "factory";
   const now = new Date();
 
-  const run = await prisma.factoryRun.upsert({
+  const existing = await prisma.factoryRun.findUnique({
     where: { projectId_runKey: { projectId: project.id, runKey } },
-    update: {
+  });
+  if (!existing) {
+    return NextResponse.json(
+      {
+        error:
+          "Run not found. Only sessions and runs created on Software Factory Web can be logged and tracked.",
+      },
+      { status: 404 },
+    );
+  }
+
+  const run = await prisma.factoryRun.update({
+    where: { id: existing.id },
+    data: {
       title: title.slice(0, 240),
       engine,
       mode,
@@ -64,20 +77,6 @@ export async function POST(request: NextRequest) {
       model: model ?? undefined,
       lastHeartbeatAt: now,
       finishedAt: null,
-    },
-    create: {
-      projectId: project.id,
-      userId: auth.user.id,
-      runKey: runKey.slice(0, 120),
-      title: title.slice(0, 240),
-      engine,
-      mode,
-      status: "running",
-      currentPhase: "Init",
-      baseCommit,
-      targetBranch,
-      model,
-      lastHeartbeatAt: now,
     },
   });
 

@@ -1,0 +1,14 @@
+{
+  "name": "factory-v2-node-api",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "node --test src/**/*.test.ts"
+  },
+  "devDependencies": {
+    "@types/node": "^22.19.15",
+    "typescript": "^5"
+  }
+}

@@ -1,9 +1,13 @@
 import { type NextRequest, NextResponse } from "next/server";
 import { authenticateRequest } from "@/lib/api-auth";
+import {
+  validateIncomingAttachments,
+  type StoredAttachmentRef,
+} from "@/lib/attachments";
 import { isUnattendedFactoryMode } from "@/lib/auto-dispatch";
 import { emitFactoryEvent } from "@/lib/events";
 import { prisma } from "@/lib/prisma";
-import { findAccessibleRun } from "@/lib/team-access";
+import { findAccessibleRun, getAccessibleRunners } from "@/lib/team-access";
 
 export async function POST(
   request: NextRequest,
@@ -39,20 +43,67 @@ export async function POST(
     return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 });
   }
 
-  const message = typeof body.message === "string" ? body.message.trim() : "";
+  const rawMessage = typeof body.message === "string" ? body.message.trim() : "";
   const interactionId =
     typeof body.interactionId === "string" ? body.interactionId.trim() : "";
   const decision = typeof body.decision === "string" ? body.decision.trim() : "approved";
   const agentKey = typeof body.agentKey === "string" ? body.agentKey.trim() : "";
+  const { attachments: validatedAttachments, error: attachmentError } = validateIncomingAttachments(
+    body.attachments,
+  );
+  if (attachmentError) {
+    return NextResponse.json({ error: attachmentError }, { status: 400 });
+  }
+  const message =
+    rawMessage ||
+    (validatedAttachments.length > 0
+      ? `See attached file${validatedAttachments.length === 1 ? "" : "s"} (${validatedAttachments.map((a) => a.name).join(", ")}).`
+      : "");
 
   if (!message && !interactionId) {
     return NextResponse.json(
-      { error: "Provide either message or interactionId" },
+      { error: "Provide a message, attachment, or interactionId" },
       { status: 400 },
     );
   }
 
   const now = new Date();
+  const needsDaemon = decision !== "dismissed" || Boolean(message);
+  let targetRunner:
+    | Awaited<ReturnType<typeof getAccessibleRunners>>[number]
+    | null = null;
+  if (needsDaemon) {
+    const cutoffMs = Date.now() - 65_000;
+    const onlineRunners = (
+      await getAccessibleRunners(auth.user.id, {
+        projectId: run.projectId,
+        githubLogin: auth.user.githubLogin,
+      })
+    ).filter((r) => r.status === "online" && r.lastHeartbeatAt.getTime() > cutoffMs);
+
+    targetRunner =
+      (run.runnerMachineId
+        ? onlineRunners.find((r) => r.id === run.runnerMachineId) ?? null
+        : null) ??
+      onlineRunners
+        .filter((r) => r.userId === auth.user.id)
+        .sort((a, b) => a.activeRuns - b.activeRuns)[0] ??
+      onlineRunners
+        .filter((r) => r.visibility === "team")
+        .sort((a, b) => a.activeRuns - b.activeRuns)[0] ??
+      null;
+
+    if (!targetRunner && body.allowOfflineQueue !== true) {
+      return NextResponse.json(
+        {
+          error:
+            "No local daemon is connected. Start `sf daemon` on your machine before sending a message.",
+          code: "NO_RUNNER_ONLINE",
+        },
+        { status: 503 },
+      );
+    }
+  }
 
   const result = await prisma.$transaction(async (tx) => {
     let waitAddedMs = 0;
@@ -109,6 +160,29 @@ export async function POST(
       });
     }
 
+    const storedAttachments: StoredAttachmentRef[] = [];
+    for (let idx = 0; idx < validatedAttachments.length; idx += 1) {
+      const att = validatedAttachments[idx];
+      const artifact = await tx.runArtifact.create({
+        data: {
+          runId: run.id,
+          kind: "attachment",
+          title: att.name.slice(0, 180),
+          pathOrUrl: `.factory/attachments/${run.runKey}/${now.getTime()}-${idx + 1}-${att.name}`,
+          mimeType: att.mimeType,
+          contentText: att.isText ? att.textContent : null,
+          contentBase64: att.isText ? null : att.base64,
+          metaJson: JSON.stringify({ size: att.bytes, source: "human_steer" }),
+        },
+      });
+      storedAttachments.push({
+        artifactId: artifact.id,
+        name: att.name,
+        mimeType: att.mimeType,
+        size: att.bytes,
+      });
+    }
+
     const lastStep = await tx.runStep.findFirst({
       where: { runId: run.id },
       orderBy: { seq: "desc" },
@@ -126,6 +200,10 @@ export async function POST(
         agentId: agentKey || null,
         label: interactionId ? `Interaction ${decision}` : "Operator steer",
         summary: (message || `Decision: ${decision}`).slice(0, 8_000),
+        dataJson:
+          storedAttachments.length > 0
+            ? JSON.stringify({ kind: "human_steer", attachments: storedAttachments })
+            : null,
       },
     });
 
@@ -155,6 +233,7 @@ export async function POST(
       where: { id: run.id },
       data: {
         status: shouldResumeRunning ? "running" : run.status,
+        runnerMachineId: targetRunner?.id ?? run.runnerMachineId,
         finishedAt: shouldResumeRunning ? null : run.finishedAt,
         durationMs: shouldResumeRunning ? null : run.durationMs,
         waitMs: { increment: waitAddedMs },
@@ -163,29 +242,32 @@ export async function POST(
       },
     });
 
-    await tx.runnerCommand.create({
-      data: {
-        userId: run.runner?.userId ?? run.project.userId,
-        runnerMachineId: run.runnerMachineId,
-        projectId: run.projectId,
-        runId: run.id,
-        type: interactionId ? "answer_interaction" : "resume_run",
-        payloadJson: JSON.stringify({
-          runKey: run.runKey,
+    if (needsDaemon) {
+      await tx.runnerCommand.create({
+        data: {
+          userId: targetRunner?.userId ?? run.runner?.userId ?? run.project.userId,
+          runnerMachineId: targetRunner?.id ?? run.runnerMachineId,
           projectId: run.projectId,
-          interactionId: interactionId || null,
-          decision,
-          message,
-          agentKey: agentKey || null,
-          engine: run.engine,
-          model: run.model,
-          autonomy: run.autonomy,
-          mode: run.mode,
-          localPath: run.project.localPath,
-        }),
-        status: "pending",
-      },
-    });
+          runId: run.id,
+          type: interactionId ? "answer_interaction" : "resume_run",
+          payloadJson: JSON.stringify({
+            runKey: run.runKey,
+            projectId: run.projectId,
+            interactionId: interactionId || null,
+            decision,
+            message,
+            ...(storedAttachments.length > 0 ? { attachments: storedAttachments } : {}),
+            agentKey: agentKey || null,
+            engine: run.engine,
+            model: run.model,
+            autonomy: run.autonomy,
+            mode: run.mode,
+            localPath: run.project.localPath,
+          }),
+          status: "pending",
+        },
+      });
+    }
 
     return updatedRun;
   });

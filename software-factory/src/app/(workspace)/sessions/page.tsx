@@ -8,6 +8,7 @@ export default async function SessionsPage({
 }: {
   searchParams: Promise<{
     project?: string;
+    runner?: string;
     mode?: string;
     skill?: string;
     prompt?: string;
@@ -26,6 +27,7 @@ export default async function SessionsPage({
       projects={sidebar.projects}
       runners={sidebar.runners}
       initialProjectId={sp.project}
+      initialRunnerId={sp.runner}
       initialSkill={sp.skill || sp.mode}
       initialPrompt={sp.prompt}
     />

@@ -1,6 +1,10 @@
 import { type NextRequest, NextResponse } from "next/server";
 import { authenticateRequest } from "@/lib/api-auth";
 import {
+  validateIncomingAttachments,
+  type StoredAttachmentRef,
+} from "@/lib/attachments";
+import {
   buildIssueFactoryPrompt,
   getProjectAutoApprove,
   isUnattendedFactoryMode,
@@ -93,10 +97,21 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 });
   }
 
-  const prompt = str(body.prompt);
+  const rawPrompt = str(body.prompt);
   const explicitTitle = str(body.title);
+  const { attachments: validatedAttachments, error: attachmentError } = validateIncomingAttachments(
+    body.attachments,
+  );
+  if (attachmentError) {
+    return NextResponse.json({ error: attachmentError }, { status: 400 });
+  }
+  const prompt =
+    rawPrompt ||
+    (validatedAttachments.length > 0
+      ? `Analyze the attached file${validatedAttachments.length === 1 ? "" : "s"} (${validatedAttachments.map((a) => a.name).join(", ")}).`
+      : "");
   if (!prompt && !explicitTitle) {
-    return NextResponse.json({ error: "Prompt or title is required" }, { status: 400 });
+    return NextResponse.json({ error: "Prompt, title, or attachment is required" }, { status: 400 });
   }
 
   let projectId = str(body.projectId);
@@ -310,6 +325,9 @@ export async function POST(request: NextRequest) {
   let onlineRunner = requestedRunnerId
     ? candidateRunners.find((r) => r.id === requestedRunnerId) ?? null
     : null;
+  if (!onlineRunner && project.defaultRunnerId) {
+    onlineRunner = candidateRunners.find((r) => r.id === project.defaultRunnerId) ?? null;
+  }
   if (!onlineRunner) {
     const ownOnline = candidateRunners
       .filter((r) => r.userId === auth.user.id)
@@ -320,12 +338,25 @@ export async function POST(request: NextRequest) {
     onlineRunner = ownOnline[0] ?? sharedOnline[0] ?? null;
   }
 
+  // Safety guardrail: require an online daemon unless the caller explicitly opts into offline queuing.
+  const allowOfflineQueue = body.allowOfflineQueue === true;
+  if (!onlineRunner && !allowOfflineQueue) {
+    return NextResponse.json(
+      {
+        error:
+          "No local daemon is connected. Start `sf daemon` on your machine (or connect a runner in Settings → Runners) before sending.",
+        code: "NO_RUNNER_ONLINE",
+      },
+      { status: 503 },
+    );
+  }
+
   // Safety guardrail: always enforce isolated git worktree when dispatching onto a teammate's shared daemon!
   const isSharedDispatch = Boolean(onlineRunner && onlineRunner.userId !== auth.user.id);
   const useWorktree =
     mode === "ba" || mode === "init" ? false : isSharedDispatch ? true : requestedWorktree;
 
-  const initialStatus = onlineRunner ? "queued" : "running";
+  const initialStatus = "queued";
   const initialPhase =
     mode === "ba"
       ? "BA Planning"
@@ -386,6 +417,29 @@ export async function POST(request: NextRequest) {
       },
     });
 
+    const storedAttachments: StoredAttachmentRef[] = [];
+    for (let idx = 0; idx < validatedAttachments.length; idx += 1) {
+      const att = validatedAttachments[idx];
+      const artifact = await tx.runArtifact.create({
+        data: {
+          runId: run.id,
+          kind: "attachment",
+          title: att.name.slice(0, 180),
+          pathOrUrl: `.factory/attachments/${runKey}/${idx + 1}-${att.name}`,
+          mimeType: att.mimeType,
+          contentText: att.isText ? att.textContent : null,
+          contentBase64: att.isText ? null : att.base64,
+          metaJson: JSON.stringify({ size: att.bytes, source: "session_prompt" }),
+        },
+      });
+      storedAttachments.push({
+        artifactId: artifact.id,
+        name: att.name,
+        mimeType: att.mimeType,
+        size: att.bytes,
+      });
+    }
+
     await tx.runStep.create({
       data: {
         runId: run.id,
@@ -398,6 +452,10 @@ export async function POST(request: NextRequest) {
         model,
         label: `${mode} · ${engine} · autonomy:${autonomy}`,
         summary: (prompt || title).slice(0, 500),
+        dataJson:
+          storedAttachments.length > 0
+            ? JSON.stringify({ kind: "session_created", attachments: storedAttachments })
+            : null,
       },
     });
 
@@ -434,6 +492,7 @@ export async function POST(request: NextRequest) {
           projectSlug: project.slug,
           prompt: effectivePrompt,
           ...(contextNote ? { contextNote } : {}),
+          ...(storedAttachments.length > 0 ? { attachments: storedAttachments } : {}),
           mode,
           autonomy,
           engine,

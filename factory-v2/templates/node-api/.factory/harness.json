@@ -1,0 +1,16 @@
+{
+  "schemaVersion": 2,
+  "stack": "node-api",
+  "hasUi": false,
+  "commands": {
+    "typecheck": "npm run typecheck",
+    "testFiles": "node --test {files}",
+    "test": "npm test"
+  },
+  "exemplars": ["src/health.ts", "src/health.test.ts"],
+  "antiBloat": {
+    "maxSourceLines": 400,
+    "maxTestLines": 450,
+    "maxTestToProdRatio": 2.2
+  }
+}

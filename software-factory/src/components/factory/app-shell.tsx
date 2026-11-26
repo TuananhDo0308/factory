@@ -2,26 +2,30 @@
 
 import * as React from "react";
 import Link from "next/link";
-import { usePathname, useRouter } from "next/navigation";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import {
+  ArrowLeftIcon,
+  ArrowRightIcon,
+  BarChart3Icon,
+  ChevronDownIcon,
   ChevronRightIcon,
   FolderIcon,
   InboxIcon,
+  KeyRoundIcon,
+  LaptopIcon,
+  PaletteIcon,
   PlugIcon,
   PlusIcon,
+  RefreshCwIcon,
   SettingsIcon,
   SunMoonIcon,
   TerminalIcon,
+  UsersIcon,
 } from "lucide-react";
 import { useTheme } from "next-themes";
 import { toast } from "sonner";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
-import {
-  Collapsible,
-  CollapsibleContent,
-  CollapsibleTrigger,
-} from "@/components/ui/collapsible";
 import {
   CommandDialog,
   CommandEmpty,
@@ -45,22 +49,163 @@ import {
   SidebarMenuBadge,
   SidebarMenuButton,
   SidebarMenuItem,
-  SidebarMenuSub,
-  SidebarMenuSubButton,
-  SidebarMenuSubItem,
   SidebarProvider,
   SidebarSeparator,
   SidebarTrigger,
+  useSidebar,
 } from "@/components/ui/sidebar";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 import {
   FactoryMark,
   FactoryWordmark,
   formatRelativeTime,
-  StatusDot,
+  getSidebarIndicatorKind,
+  SidebarStatusIndicator,
 } from "@/components/factory/factory-primitives";
 import { NewProjectDialog } from "@/components/factory/new-project-dialog";
 import { useFactoryStream } from "@/components/factory/use-factory-stream";
+import { cn } from "@/lib/utils";
 import type { SidebarData } from "@/lib/workspace-data";
+
+const ACTIVE_RUNS_STORAGE_KEY = "sf.sidebar.activeRunIds";
+const UNREAD_FINISHED_STORAGE_KEY = "sf.sidebar.unreadFinishedRuns";
+const EMPTY_UNREAD_MAP: Record<string, string> = {};
+
+const SETTINGS_SUB_ITEMS = [
+  { id: "general", label: "General", icon: SettingsIcon },
+  { id: "appearance", label: "Appearance", icon: PaletteIcon },
+  { id: "team", label: "Team", icon: UsersIcon },
+  { id: "runners", label: "Runners", icon: LaptopIcon },
+  { id: "keys", label: "API Keys", icon: KeyRoundIcon },
+  { id: "mcp", label: "MCP", icon: PlugIcon },
+] as const;
+
+function readJsonStorage<T>(key: string, fallback: T): T {
+  try {
+    const raw = localStorage.getItem(key);
+    if (!raw) return fallback;
+    return JSON.parse(raw) as T;
+  } catch {
+    return fallback;
+  }
+}
+
+function writeJsonStorage(key: string, value: unknown) {
+  try {
+    localStorage.setItem(key, JSON.stringify(value));
+  } catch {
+    // Ignore private-browsing storage errors.
+  }
+}
+
+function isRunActiveStatus(status: string): boolean {
+  const s = status.toLowerCase();
+  return s === "running" || s === "queued" || s === "working" || s === "in_progress";
+}
+
+function isRunPassedStatus(status: string): boolean {
+  const s = status.toLowerCase();
+  return s === "passed" || s === "completed" || s === "merged";
+}
+
+let cachedUnreadRuns: Record<string, string> = EMPTY_UNREAD_MAP;
+let unreadRunsHydrated = false;
+const unreadRunsListeners = new Set<() => void>();
+
+function notifyUnreadRunsListeners() {
+  for (const listener of unreadRunsListeners) {
+    listener();
+  }
+}
+
+function subscribeUnreadRuns(listener: () => void) {
+  unreadRunsListeners.add(listener);
+  return () => {
+    unreadRunsListeners.delete(listener);
+  };
+}
+
+function getUnreadRunsServerSnapshot(): Record<string, string> {
+  return EMPTY_UNREAD_MAP;
+}
+
+function getUnreadRunsClientSnapshot(): Record<string, string> {
+  if (!unreadRunsHydrated && typeof window !== "undefined") {
+    unreadRunsHydrated = true;
+    const stored = readJsonStorage<Record<string, string>>(UNREAD_FINISHED_STORAGE_KEY, {});
+    if (stored && typeof stored === "object" && !Array.isArray(stored)) {
+      cachedUnreadRuns = stored;
+    }
+  }
+  return cachedUnreadRuns;
+}
+
+function commitUnreadRuns(next: Record<string, string>) {
+  const prevKeys = Object.keys(cachedUnreadRuns);
+  const nextKeys = Object.keys(next);
+  const unchanged =
+    prevKeys.length === nextKeys.length &&
+    nextKeys.every((k) => cachedUnreadRuns[k] === next[k]);
+  writeJsonStorage(UNREAD_FINISHED_STORAGE_KEY, next);
+  if (!unchanged) {
+    cachedUnreadRuns = next;
+    notifyUnreadRunsListeners();
+  }
+}
+
+function clearUnreadRun(runId: string) {
+  const current = getUnreadRunsClientSnapshot();
+  if (!(runId in current)) return;
+  const next = { ...current };
+  delete next[runId];
+  commitUnreadRuns(next);
+}
+
+function reconcileSidebarRunNotifications(
+  projects: SidebarData["projects"],
+  pathname: string,
+) {
+  const storedActive = readJsonStorage<string[]>(ACTIVE_RUNS_STORAGE_KEY, []);
+  const activeSet = new Set(Array.isArray(storedActive) ? storedActive : []);
+  const unreadMap: Record<string, string> = { ...getUnreadRunsClientSnapshot() };
+
+  const visibleRunIds = new Set<string>();
+  for (const project of projects) {
+    for (const run of project.recentRuns) {
+      visibleRunIds.add(run.id);
+      const isCurrentRun = pathname === `/sessions/${run.id}`;
+
+      if (isRunActiveStatus(run.status)) {
+        activeSet.add(run.id);
+        delete unreadMap[run.id];
+      } else if (isRunPassedStatus(run.status)) {
+        const justFinished = activeSet.has(run.id);
+        activeSet.delete(run.id);
+        if (isCurrentRun) {
+          delete unreadMap[run.id];
+        } else if (justFinished) {
+          unreadMap[run.id] = run.updatedAt;
+        }
+      } else {
+        activeSet.delete(run.id);
+        delete unreadMap[run.id];
+      }
+    }
+  }
+
+  for (const runId of Object.keys(unreadMap)) {
+    if (!visibleRunIds.has(runId)) {
+      delete unreadMap[runId];
+    }
+  }
+
+  writeJsonStorage(ACTIVE_RUNS_STORAGE_KEY, Array.from(activeSet));
+  commitUnreadRuns(unreadMap);
+}
 
 const SKILL_TAG_LABELS: Record<string, string> = {
   factory: "factory",
@@ -125,6 +270,193 @@ function SetupRing({ completed, total }: { completed: number; total: number }) {
   );
 }
 
+/** Smooth 60fps accordion panel using CSS Grid height + fade + subtle vertical glide */
+function SmoothCollapse({
+  open,
+  children,
+  className,
+}: {
+  open: boolean;
+  children: React.ReactNode;
+  className?: string;
+}) {
+  return (
+    <div
+      data-state={open ? "open" : "closed"}
+      aria-hidden={!open}
+      inert={!open}
+      className={cn(
+        "grid transition-[grid-template-rows,opacity] duration-250 ease-[cubic-bezier(0.22,1,0.36,1)] motion-reduce:transition-none",
+        open ? "grid-rows-[1fr] opacity-100" : "pointer-events-none grid-rows-[0fr] opacity-0",
+        className,
+      )}
+    >
+      <div className="min-h-0 overflow-hidden">
+        <div
+          className={cn(
+            "transition-transform duration-250 ease-[cubic-bezier(0.22,1,0.36,1)] motion-reduce:transition-none",
+            open ? "translate-y-0" : "-translate-y-1.5",
+          )}
+        >
+          {children}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/** Header row with brand mark + smooth collapse/expand button */
+function SidebarBrandHeader() {
+  const { state, toggleSidebar } = useSidebar();
+  const isCollapsed = state === "collapsed";
+
+  return (
+    <SidebarHeader className="px-3 py-3 group-data-[collapsible=icon]:px-2">
+      <div
+        className={cn(
+          "flex items-center gap-2",
+          isCollapsed ? "justify-center" : "justify-between",
+        )}
+      >
+        {!isCollapsed && (
+          <Link
+            href="/sessions"
+            className="flex min-w-0 items-center gap-2.5 overflow-hidden text-foreground"
+          >
+            <span className="flex size-7 shrink-0 items-center justify-center rounded-lg bg-foreground text-background shadow-xs">
+              <FactoryMark className="size-4" />
+            </span>
+            <FactoryWordmark className="truncate text-[16px] text-foreground" />
+          </Link>
+        )}
+
+        <Tooltip>
+          <TooltipTrigger
+            render={
+              <button
+                type="button"
+                onClick={toggleSidebar}
+                aria-label={isCollapsed ? "Expand sidebar" : "Collapse sidebar"}
+                className="flex size-7 shrink-0 items-center justify-center rounded-md border border-sidebar-border/90 bg-sidebar-accent/40 text-sidebar-foreground/75 transition-colors hover:bg-sidebar-accent hover:text-sidebar-accent-foreground focus-visible:ring-2 focus-visible:ring-sidebar-ring focus-visible:outline-none"
+              >
+                {isCollapsed ? (
+                  <ArrowRightIcon className="size-3.5" />
+                ) : (
+                  <ArrowLeftIcon className="size-3.5" />
+                )}
+              </button>
+            }
+          />
+          <TooltipContent side="right">
+            {isCollapsed ? "Expand sidebar (⌘B)" : "Collapse sidebar (⌘B)"}
+          </TooltipContent>
+        </Tooltip>
+      </div>
+    </SidebarHeader>
+  );
+}
+
+/** Collapsible Settings tree section inside the shared sidebar */
+function SettingsSidebarTree({
+  pathname,
+  onlineRunnerCount,
+  totalRunnerCount,
+}: {
+  pathname: string;
+  onlineRunnerCount: number;
+  totalRunnerCount: number;
+}) {
+  const router = useRouter();
+  const searchParams = useSearchParams();
+  const { state, setOpen } = useSidebar();
+  const isOnSettings = pathname.startsWith("/settings");
+  const activeSettingsTab = isOnSettings ? searchParams.get("tab") || "general" : null;
+  const [settingsToggle, setSettingsToggle] = React.useState<{
+    onSettings: boolean;
+    open: boolean;
+  } | null>(null);
+
+  const isSettingsOpen =
+    settingsToggle?.onSettings === isOnSettings ? settingsToggle.open : isOnSettings;
+
+  function handleSettingsHeaderClick() {
+    if (state === "collapsed") {
+      setOpen(true);
+      setSettingsToggle({ onSettings: isOnSettings, open: true });
+      if (!isOnSettings) router.push("/settings");
+      return;
+    }
+    setSettingsToggle({ onSettings: isOnSettings, open: !isSettingsOpen });
+  }
+
+  return (
+    <SidebarGroup className="px-2.5 py-1 group-data-[collapsible=icon]:px-2">
+      <SidebarGroupContent>
+        <SidebarMenu>
+          <SidebarMenuItem>
+            <SidebarMenuButton
+              tooltip="Settings"
+              onClick={handleSettingsHeaderClick}
+              aria-expanded={isSettingsOpen}
+              className={cn(
+                "h-9 justify-between gap-2.5 rounded-lg px-2.5 text-[13.5px] font-medium text-sidebar-foreground transition-colors hover:bg-sidebar-accent/70 hover:text-sidebar-accent-foreground",
+                isOnSettings && !isSettingsOpen && "bg-sidebar-accent text-sidebar-accent-foreground",
+              )}
+            >
+              <span className="flex min-w-0 items-center gap-2.5">
+                <SettingsIcon className="size-4 shrink-0 text-sidebar-foreground/80" />
+                <span className="truncate group-data-[collapsible=icon]:hidden">Settings</span>
+              </span>
+              <ChevronDownIcon
+                className={cn(
+                  "size-3.5 shrink-0 text-muted-foreground transition-transform duration-200 ease-[cubic-bezier(0.22,1,0.36,1)] group-data-[collapsible=icon]:hidden",
+                  isSettingsOpen && "rotate-180",
+                )}
+              />
+            </SidebarMenuButton>
+
+            <SmoothCollapse
+              open={isSettingsOpen}
+              className="group-data-[collapsible=icon]:hidden"
+            >
+              <ul className="mt-1 ml-[17px] flex flex-col gap-0.5 border-l border-sidebar-border/80 pl-3">
+                {SETTINGS_SUB_ITEMS.map((item) => {
+                  const Icon = item.icon;
+                  const isActive = isOnSettings && activeSettingsTab === item.id;
+                  return (
+                    <li key={item.id} className="min-w-0">
+                      <Link
+                        href={`/settings?tab=${item.id}`}
+                        aria-current={isActive ? "page" : undefined}
+                        className={cn(
+                          "flex h-8 w-full min-w-0 items-center justify-between gap-2 rounded-lg px-2.5 text-[13px] transition-colors",
+                          isActive
+                            ? "bg-sidebar-accent font-medium text-sidebar-accent-foreground"
+                            : "text-sidebar-foreground/85 hover:bg-sidebar-accent/60 hover:text-sidebar-accent-foreground",
+                        )}
+                      >
+                        <span className="flex min-w-0 items-center gap-2.5">
+                          <Icon className="size-3.5 shrink-0 opacity-80" aria-hidden="true" />
+                          <span className="truncate">{item.label}</span>
+                        </span>
+                        {item.id === "runners" && totalRunnerCount > 0 && (
+                          <span className="shrink-0 font-mono text-[10px] text-muted-foreground tabular-nums">
+                            {onlineRunnerCount}/{totalRunnerCount}
+                          </span>
+                        )}
+                      </Link>
+                    </li>
+                  );
+                })}
+              </ul>
+            </SmoothCollapse>
+          </SidebarMenuItem>
+        </SidebarMenu>
+      </SidebarGroupContent>
+    </SidebarGroup>
+  );
+}
+
 export function AppShell({
   initialData,
   children,
@@ -144,9 +476,22 @@ export function AppShell({
   const [newProjectOpen, setNewProjectOpen] = React.useState(false);
   const [expandedProjectIds, setExpandedProjectIds] = React.useState<Record<string, boolean>>({});
   const [expandedRunIds, setExpandedRunIds] = React.useState<Record<string, boolean>>({});
+  const unreadFinishedRuns = React.useSyncExternalStore(
+    subscribeUnreadRuns,
+    getUnreadRunsClientSnapshot,
+    getUnreadRunsServerSnapshot,
+  );
   const seenInboxKeysRef = React.useRef<Set<string>>(
     new Set((initialData.inboxAlerts ?? []).map((a) => a.key)),
   );
+
+  const markRunSeen = React.useCallback((runId: string) => {
+    clearUnreadRun(runId);
+  }, []);
+
+  React.useEffect(() => {
+    reconcileSidebarRunNotifications(data.projects, pathname);
+  }, [data.projects, pathname]);
 
   const refreshSidebar = React.useCallback(async () => {
     try {
@@ -201,32 +546,23 @@ export function AppShell({
   const setupCompleted = (data.projects.length > 0 ? 1 : 0) + (onlineRunners.length > 0 ? 1 : 0);
 
   return (
-    <SidebarProvider open>
-      <Sidebar collapsible="offcanvas">
-        <SidebarHeader className="px-3 py-2.5">
-          <div className="flex items-center justify-between gap-2">
-            <Link
-              href="/sessions"
-              className="flex items-center gap-2 overflow-hidden text-foreground"
-            >
-              <FactoryMark className="size-5 text-foreground" />
-              <FactoryWordmark className="text-[17px] text-foreground" />
-            </Link>
-          </div>
-        </SidebarHeader>
+    <SidebarProvider defaultOpen>
+      <Sidebar collapsible="icon">
+        <SidebarBrandHeader />
 
         <SidebarContent className="overflow-x-hidden">
-          {/* Primary Nav — mirrors app.factory.ai sidebar */}
-          <SidebarGroup>
+          {/* Primary Nav */}
+          <SidebarGroup className="px-2.5 py-1.5 group-data-[collapsible=icon]:px-2">
             <SidebarGroupContent>
-              <SidebarMenu>
+              <SidebarMenu className="gap-0.5">
                 <SidebarMenuItem>
                   <SidebarMenuButton
                     isActive={pathname === "/sessions"}
                     tooltip="New Session"
+                    className="h-9 gap-2.5 rounded-lg px-2.5 text-[13.5px]"
                     render={<Link href="/sessions" />}
                   >
-                    <PlusIcon />
+                    <PlusIcon className="size-4" />
                     <span>New Session</span>
                   </SidebarMenuButton>
                 </SidebarMenuItem>
@@ -235,195 +571,274 @@ export function AppShell({
                   <SidebarMenuButton
                     isActive={pathname.startsWith("/inbox")}
                     tooltip="Inbox"
+                    className="h-9 gap-2.5 rounded-lg px-2.5 text-[13.5px]"
                     render={<Link href="/inbox" />}
                   >
-                    <InboxIcon />
+                    <InboxIcon className="size-4" />
                     <span>Inbox</span>
                   </SidebarMenuButton>
                   {data.inboxCount > 0 && (
-                    <SidebarMenuBadge>{data.inboxCount}</SidebarMenuBadge>
+                    <SidebarMenuBadge className="top-2 right-2">
+                      {data.inboxCount}
+                    </SidebarMenuBadge>
                   )}
+                </SidebarMenuItem>
+
+                <SidebarMenuItem>
+                  <SidebarMenuButton
+                    isActive={pathname.startsWith("/automations")}
+                    tooltip="Automations"
+                    className="h-9 gap-2.5 rounded-lg px-2.5 text-[13.5px]"
+                    render={<Link href="/automations" />}
+                  >
+                    <RefreshCwIcon className="size-4" />
+                    <span>Automations</span>
+                  </SidebarMenuButton>
+                </SidebarMenuItem>
+
+                <SidebarMenuItem>
+                  <SidebarMenuButton
+                    isActive={pathname.startsWith("/analytics")}
+                    tooltip="Analytics"
+                    className="h-9 gap-2.5 rounded-lg px-2.5 text-[13.5px]"
+                    render={<Link href="/analytics" />}
+                  >
+                    <BarChart3Icon className="size-4" />
+                    <span>Analytics</span>
+                  </SidebarMenuButton>
                 </SidebarMenuItem>
               </SidebarMenu>
             </SidebarGroupContent>
           </SidebarGroup>
 
-          <SidebarSeparator />
+          <SidebarSeparator className="mx-3 my-1 bg-sidebar-border/80" />
 
-          {/* Projects + nested recent sessions */}
-          <SidebarGroup>
-            <SidebarGroupLabel>Projects</SidebarGroupLabel>
+          {/* Projects + smooth nested sessions */}
+          <SidebarGroup className="px-2.5 py-1 group-data-[collapsible=icon]:px-2">
+            <SidebarGroupLabel className="px-2.5 font-mono text-[10px] uppercase tracking-wider text-muted-foreground/80">
+              Projects
+            </SidebarGroupLabel>
             <SidebarGroupAction
               title="Add Project"
+              className="top-2.5 right-3"
               onClick={() => setNewProjectOpen(true)}
             >
               <PlusIcon />
               <span className="sr-only">Add Project</span>
             </SidebarGroupAction>
             <SidebarGroupContent>
-              <SidebarMenu>
+              <SidebarMenu className="gap-1">
                 {data.projects.length === 0 ? (
                   <SidebarMenuItem>
                     <SidebarMenuButton
-                      size="sm"
+                      tooltip="Add your first repo"
+                      className="h-9 gap-2.5 rounded-lg px-2.5 text-[13px]"
                       onClick={() => setNewProjectOpen(true)}
                     >
-                      <FolderIcon />
+                      <FolderIcon className="size-4" />
                       <span>Add your first repo</span>
                     </SidebarMenuButton>
                   </SidebarMenuItem>
                 ) : (
                   data.projects.map((project) => {
                     const isProjectOpen = expandedProjectIds[project.id] ?? true;
-                    return (
-                      <Collapsible
-                        key={project.id}
-                        open={isProjectOpen}
-                        onOpenChange={(next) =>
-                          setExpandedProjectIds((prev) => ({ ...prev, [project.id]: next }))
-                        }
-                      >
-                        <SidebarMenuItem className="min-w-0">
-                          <div className="flex w-full min-w-0 items-center gap-0.5">
-                            <CollapsibleTrigger
-                              render={
-                                <Button
-                                  variant="ghost"
-                                  size="icon-xs"
-                                  aria-label={isProjectOpen ? `Collapse ${project.name}` : `Expand ${project.name}`}
-                                  className="size-5 shrink-0"
-                                >
-                                  <ChevronRightIcon
-                                    className={`transition-transform duration-150 ${
-                                      isProjectOpen ? "rotate-90" : ""
-                                    }`}
-                                  />
-                                </Button>
-                              }
-                            />
-                            <SidebarMenuButton
-                              size="sm"
-                              isActive={pathname === `/projects/${project.id}`}
-                              tooltip={project.name}
-                              className="min-w-0 flex-1"
-                              render={<Link href={`/projects/${project.id}`} />}
-                            >
-                              <FolderIcon />
-                              <span className="min-w-0 flex-1 truncate font-medium">
-                                {project.name}
-                              </span>
-                              <span className="shrink-0 font-mono text-[10px] text-muted-foreground">
-                                {project.engine === "claude" ? "claude" : "agy"}
-                              </span>
-                            </SidebarMenuButton>
-                          </div>
+                    const isProjectActive = pathname === `/projects/${project.id}`;
+                    const hasRuns = project.recentRuns.length > 0;
 
-                          <CollapsibleContent className="min-w-0 overflow-hidden">
-                            <SidebarMenuSub className="mx-0 ml-2.5 mr-0 pl-2 pr-0">
+                    return (
+                      <SidebarMenuItem key={project.id} className="min-w-0">
+                        <div className="group/proj relative flex w-full min-w-0 items-center">
+                          <SidebarMenuButton
+                            isActive={isProjectActive}
+                            tooltip={project.name}
+                            className={cn(
+                              "h-9 min-w-0 flex-1 gap-2.5 rounded-lg px-2.5 text-[13.5px] font-medium",
+                              hasRuns && "pr-8 group-data-[collapsible=icon]:pr-2",
+                            )}
+                            render={<Link href={`/projects/${project.id}`} />}
+                          >
+                            <FolderIcon className="size-4 shrink-0 text-sidebar-foreground/80" />
+                            <span className="min-w-0 flex-1 truncate">{project.name}</span>
+                          </SidebarMenuButton>
+
+                          {hasRuns && (
+                            <button
+                              type="button"
+                              aria-expanded={isProjectOpen}
+                              aria-label={
+                                isProjectOpen
+                                  ? `Collapse ${project.name}`
+                                  : `Expand ${project.name}`
+                              }
+                              onClick={() =>
+                                setExpandedProjectIds((prev) => ({
+                                  ...prev,
+                                  [project.id]: !isProjectOpen,
+                                }))
+                              }
+                              className="absolute top-1/2 right-1.5 flex size-6 -translate-y-1/2 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-sidebar-accent hover:text-foreground group-data-[collapsible=icon]:hidden"
+                            >
+                              <ChevronDownIcon
+                                className={cn(
+                                  "size-3.5 transition-transform duration-200 ease-[cubic-bezier(0.22,1,0.36,1)]",
+                                  isProjectOpen && "rotate-180",
+                                )}
+                              />
+                            </button>
+                          )}
+                        </div>
+
+                        {hasRuns && (
+                          <SmoothCollapse
+                            open={isProjectOpen}
+                            className="group-data-[collapsible=icon]:hidden"
+                          >
+                            <ul className="mt-1 ml-[17px] flex min-w-0 flex-col gap-0.5 border-l border-sidebar-border/80 pl-3">
                               {project.recentRuns.map((run) => {
                                 const skillLabel = getSidebarSkillLabel(run.mode);
                                 const subagents = run.agents ?? [];
                                 const hasSubagents = subagents.length > 0;
                                 const isCurrentRun = pathname === `/sessions/${run.id}`;
+                                const isUnreadFinished = Boolean(unreadFinishedRuns[run.id]);
+                                const indicatorKind = getSidebarIndicatorKind(
+                                  run.status,
+                                  isUnreadFinished,
+                                );
                                 const isExpanded =
                                   expandedRunIds[run.id] ?? (isCurrentRun && run.status === "running");
 
                                 return (
-                                  <SidebarMenuSubItem key={run.id} className="min-w-0">
+                                  <li key={run.id} className="min-w-0">
                                     <div className="flex w-full min-w-0 items-center gap-0.5">
-                                      {hasSubagents ? (
-                                        <button
-                                          type="button"
-                                          aria-expanded={isExpanded}
-                                          aria-label={isExpanded ? "Hide subagents" : "Show subagents"}
-                                          title={isExpanded ? "Hide subagents" : "Show subagents"}
-                                          onClick={() =>
-                                            setExpandedRunIds((prev) => ({
-                                              ...prev,
-                                              [run.id]: !isExpanded,
-                                            }))
-                                          }
-                                          className="flex size-4 shrink-0 items-center justify-center rounded-[3px] text-muted-foreground/70 transition-colors hover:bg-sidebar-accent hover:text-foreground"
-                                        >
-                                          <ChevronRightIcon
-                                            className={`size-3 transition-transform duration-150 ${
-                                              isExpanded ? "rotate-90" : ""
-                                            }`}
-                                          />
-                                        </button>
-                                      ) : (
-                                        <span className="size-4 shrink-0" aria-hidden="true" />
-                                      )}
-                                      <SidebarMenuSubButton
-                                        isActive={isCurrentRun}
-                                        render={<Link href={`/sessions/${run.id}`} />}
-                                        className="min-w-0 flex-1 translate-x-0 justify-between gap-1.5 px-1.5"
+                                      <Link
+                                        href={`/sessions/${run.id}`}
+                                        onClick={() => markRunSeen(run.id)}
+                                        aria-current={isCurrentRun ? "page" : undefined}
+                                        title={`${run.title} · ${run.status.replace("_", " ")}`}
+                                        className={cn(
+                                          "flex h-8 min-w-0 flex-1 items-center justify-between gap-2 rounded-lg px-2.5 text-[13px] transition-colors",
+                                          isCurrentRun
+                                            ? "bg-sidebar-accent font-medium text-sidebar-accent-foreground ring-1 ring-sidebar-border/90"
+                                            : "text-sidebar-foreground/85 hover:bg-sidebar-accent/60 hover:text-sidebar-accent-foreground",
+                                        )}
                                       >
                                         <span className="flex min-w-0 flex-1 items-center gap-1.5 overflow-hidden">
-                                          <StatusDot status={run.status} />
+                                          {hasSubagents && (
+                                            <span
+                                              role="button"
+                                              tabIndex={0}
+                                              aria-expanded={isExpanded}
+                                              aria-label={
+                                                isExpanded ? "Hide subagents" : "Show subagents"
+                                              }
+                                              title={
+                                                isExpanded ? "Hide subagents" : "Show subagents"
+                                              }
+                                              onClick={(e) => {
+                                                e.preventDefault();
+                                                e.stopPropagation();
+                                                setExpandedRunIds((prev) => ({
+                                                  ...prev,
+                                                  [run.id]: !isExpanded,
+                                                }));
+                                              }}
+                                              onKeyDown={(e) => {
+                                                if (e.key === "Enter" || e.key === " ") {
+                                                  e.preventDefault();
+                                                  e.stopPropagation();
+                                                  setExpandedRunIds((prev) => ({
+                                                    ...prev,
+                                                    [run.id]: !isExpanded,
+                                                  }));
+                                                }
+                                              }}
+                                              className="-ml-1 flex size-4 shrink-0 items-center justify-center rounded-[4px] text-muted-foreground/75 transition-colors hover:bg-sidebar-border/60 hover:text-foreground"
+                                            >
+                                              <ChevronRightIcon
+                                                className={cn(
+                                                  "size-3 transition-transform duration-200 ease-[cubic-bezier(0.22,1,0.36,1)]",
+                                                  isExpanded && "rotate-90",
+                                                )}
+                                              />
+                                            </span>
+                                          )}
                                           {skillLabel && (
                                             <span className="shrink-0 rounded-[3px] bg-muted px-1 py-px font-mono text-[9.5px] leading-tight text-muted-foreground">
                                               {skillLabel}
                                             </span>
                                           )}
-                                          <span className="min-w-0 flex-1 truncate">{run.title}</span>
+                                          <span className="min-w-0 flex-1 truncate">
+                                            {run.title}
+                                          </span>
                                         </span>
-                                        <span
-                                          suppressHydrationWarning
-                                          className="shrink-0 pl-1 font-mono text-[10px] text-muted-foreground tabular-nums"
-                                        >
-                                          {formatRelativeTime(run.updatedAt)}
-                                        </span>
-                                      </SidebarMenuSubButton>
+
+                                        <div className="flex shrink-0 items-center justify-end">
+                                          {indicatorKind ? (
+                                            <SidebarStatusIndicator
+                                              status={run.status}
+                                              unread={isUnreadFinished}
+                                            />
+                                          ) : (
+                                            <span
+                                              suppressHydrationWarning
+                                              className="pl-1 font-mono text-[10px] text-muted-foreground/70 tabular-nums"
+                                            >
+                                              {formatRelativeTime(run.updatedAt)}
+                                            </span>
+                                          )}
+                                        </div>
+                                      </Link>
                                     </div>
 
-                                    {hasSubagents && isExpanded && (
-                                      <div className="mt-1 ml-2 flex max-h-56 min-w-0 flex-col gap-0.5 overflow-x-hidden overflow-y-auto border-l border-sidebar-border/80 pl-2">
-                                        {subagents.map((ag) => (
-                                          <Link
-                                            key={ag.id}
-                                            href={`/sessions/${run.id}?agent=${encodeURIComponent(ag.id)}`}
-                                            title={ag.name}
-                                            className="flex w-full min-w-0 items-center justify-between gap-1.5 rounded-[4px] px-1.5 py-1 text-[11px] text-muted-foreground transition-colors hover:bg-sidebar-accent hover:text-foreground"
-                                          >
-                                            <span className="flex min-w-0 flex-1 items-center gap-1.5 overflow-hidden">
-                                              <StatusDot status={ag.status} />
+                                    {hasSubagents && (
+                                      <SmoothCollapse open={isExpanded}>
+                                        <div className="mt-0.5 ml-3 flex max-h-56 min-w-0 flex-col gap-0.5 overflow-x-hidden overflow-y-auto border-l border-sidebar-border/80 pl-2.5 py-0.5">
+                                          {subagents.map((ag) => (
+                                            <Link
+                                              key={ag.id}
+                                              href={`/sessions/${run.id}?agent=${encodeURIComponent(ag.id)}`}
+                                              title={`${ag.name} · ${ag.status.replace("_", " ")}`}
+                                              className="flex h-7 w-full min-w-0 items-center justify-between gap-2 rounded-md px-2 text-[12px] text-muted-foreground transition-colors hover:bg-sidebar-accent/60 hover:text-foreground"
+                                            >
                                               <span className="min-w-0 flex-1 truncate">
                                                 {compactAgentLabel(ag)}
                                               </span>
-                                            </span>
-                                            <span className="shrink-0 font-mono text-[9.5px] opacity-75">
-                                              {ag.status === "working"
-                                                ? "run"
-                                                : ag.status === "passed"
-                                                  ? "ok"
-                                                  : ag.status === "failed"
-                                                    ? "fail"
-                                                    : ""}
-                                            </span>
-                                          </Link>
-                                        ))}
-                                      </div>
+                                              <SidebarStatusIndicator status={ag.status} />
+                                            </Link>
+                                          ))}
+                                        </div>
+                                      </SmoothCollapse>
                                     )}
-                                  </SidebarMenuSubItem>
+                                  </li>
                                 );
                               })}
-                            </SidebarMenuSub>
-                          </CollapsibleContent>
-                        </SidebarMenuItem>
-                      </Collapsible>
+                            </ul>
+                          </SmoothCollapse>
+                        )}
+                      </SidebarMenuItem>
                     );
                   })
                 )}
               </SidebarMenu>
             </SidebarGroupContent>
           </SidebarGroup>
+
+          <SidebarSeparator className="mx-3 my-1 bg-sidebar-border/80" />
+
+          {/* Settings collapsible tree right inside the shared sidebar */}
+          <React.Suspense fallback={null}>
+            <SettingsSidebarTree
+              pathname={pathname}
+              onlineRunnerCount={onlineRunners.length}
+              totalRunnerCount={data.runners.length}
+            />
+          </React.Suspense>
         </SidebarContent>
 
-        <SidebarFooter className="gap-2 p-2.5">
-          {/* Finish setup card — mirrors app.factory.ai bottom-left onboarding card */}
+        <SidebarFooter className="gap-2 border-t border-sidebar-border/70 p-2.5 group-data-[collapsible=icon]:p-2">
+          {/* Finish setup card */}
           {setupCompleted < 2 && (
-            <div className="flex flex-col gap-2.5 rounded-[4px] border bg-card p-3 group-data-[collapsible=icon]:hidden">
+            <div className="flex flex-col gap-2.5 rounded-lg border bg-card p-3 group-data-[collapsible=icon]:hidden">
               <div className="flex items-center justify-between text-xs">
                 <span className="text-muted-foreground">Finish setup</span>
                 <span className="flex items-center gap-1.5 font-mono text-[11px] text-muted-foreground">
@@ -444,36 +859,31 @@ export function AppShell({
             </div>
           )}
 
-          {/* Minimal footer row — Avatar + Name + single Settings gear */}
-          <div className="flex items-center justify-between gap-2 px-1 py-0.5">
-            <Link
-              href="/settings"
-              className="flex min-w-0 items-center gap-2 text-sidebar-foreground hover:text-foreground"
-            >
-              <Avatar className="size-6">
-                {data.user?.avatarUrl && (
-                  <AvatarImage src={data.user.avatarUrl} alt={userName} />
-                )}
-                <AvatarFallback className="text-[10px] font-medium">
-                  {initials}
-                </AvatarFallback>
-              </Avatar>
-              <span className="truncate text-xs font-medium group-data-[collapsible=icon]:hidden">
-                {userName}
-              </span>
-            </Link>
-
-            <Button
-              variant="ghost"
-              size="icon-xs"
-              title="Settings"
-              className="group-data-[collapsible=icon]:hidden"
-              nativeButton={false}
-              render={<Link href="/settings" />}
-            >
-              <SettingsIcon />
-            </Button>
-          </div>
+          {/* Clean footer row — Avatar + Name */}
+          <Link
+            href="/settings?tab=general"
+            className={cn(
+              "flex min-w-0 items-center gap-2.5 rounded-lg px-2 py-1.5 text-sidebar-foreground transition-colors hover:bg-sidebar-accent/70 hover:text-foreground group-data-[collapsible=icon]:justify-center group-data-[collapsible=icon]:px-0",
+              pathname.startsWith("/settings") && "text-sidebar-accent-foreground",
+            )}
+          >
+            <Avatar className="size-6 shrink-0">
+              {data.user?.avatarUrl && (
+                <AvatarImage src={data.user.avatarUrl} alt={userName} />
+              )}
+              <AvatarFallback className="text-[10px] font-medium">
+                {initials}
+              </AvatarFallback>
+            </Avatar>
+            <div className="flex min-w-0 flex-1 flex-col group-data-[collapsible=icon]:hidden">
+              <span className="truncate text-xs font-medium leading-tight">{userName}</span>
+              {data.user?.githubLogin && (
+                <span className="truncate font-mono text-[10px] text-muted-foreground">
+                  @{data.user.githubLogin}
+                </span>
+              )}
+            </div>
+          </Link>
         </SidebarFooter>
       </Sidebar>
 
@@ -539,6 +949,24 @@ export function AppShell({
               <SettingsIcon />
               <span>Open Settings &amp; Appearance</span>
             </CommandItem>
+            <CommandItem
+              onSelect={() => {
+                setSearchOpen(false);
+                router.push("/automations");
+              }}
+            >
+              <RefreshCwIcon />
+              <span>Automations</span>
+            </CommandItem>
+            <CommandItem
+              onSelect={() => {
+                setSearchOpen(false);
+                router.push("/analytics");
+              }}
+            >
+              <BarChart3Icon />
+              <span>Usage &amp; Analytics</span>
+            </CommandItem>
           </CommandGroup>
 
           {data.projects.length > 0 && (
@@ -571,13 +999,19 @@ export function AppShell({
                       key={run.id}
                       onSelect={() => {
                         setSearchOpen(false);
+                        markRunSeen(run.id);
                         router.push(`/sessions/${run.id}`);
                       }}
                     >
-                      <StatusDot status={run.status} />
                       <span className="truncate">{run.title}</span>
-                      <span className="ml-auto font-mono text-xs text-muted-foreground">
-                        {p.name} · {run.currentPhase}
+                      <span className="ml-auto flex shrink-0 items-center gap-2 font-mono text-xs text-muted-foreground">
+                        <span>
+                          {p.name} · {run.currentPhase}
+                        </span>
+                        <SidebarStatusIndicator
+                          status={run.status}
+                          unread={Boolean(unreadFinishedRuns[run.id])}
+                        />
                       </span>
                     </CommandItem>
                   )),

@@ -3,7 +3,7 @@ import { emitFactoryEvent } from "@/lib/events";
 import { prisma } from "@/lib/prisma";
 import { getProjectDashboardData } from "@/lib/project-stats";
 import { getCurrentSession } from "@/lib/session";
-import { getProjectAccess } from "@/lib/team-access";
+import { getAccessibleRunners, getProjectAccess } from "@/lib/team-access";
 
 export async function GET(
   _request: Request,
@@ -42,21 +42,65 @@ export async function PATCH(
 
   const body = (await request.json().catch(() => null)) as {
     initStatus?: unknown;
+    defaultRunnerId?: unknown;
   } | null;
 
-  const initStatusRaw = typeof body?.initStatus === "string" ? body.initStatus.trim() : "";
-  if (initStatusRaw !== "complete" && initStatusRaw !== "none") {
+  const hasInitStatus = body !== null && "initStatus" in body && body.initStatus !== undefined;
+  const hasDefaultRunnerId =
+    body !== null && "defaultRunnerId" in body && body.defaultRunnerId !== undefined;
+
+  if (!hasInitStatus && !hasDefaultRunnerId) {
     return NextResponse.json(
-      { error: "initStatus must be 'complete' or 'none'" },
+      { error: "Provide initStatus or defaultRunnerId to update" },
       { status: 400 },
     );
+  }
+
+  const updateData: { initStatus?: string; defaultRunnerId?: string | null } = {};
+  let initStatusRaw = "";
+
+  if (hasInitStatus) {
+    initStatusRaw = typeof body?.initStatus === "string" ? body.initStatus.trim() : "";
+    if (initStatusRaw !== "complete" && initStatusRaw !== "none") {
+      return NextResponse.json(
+        { error: "initStatus must be 'complete' or 'none'" },
+        { status: 400 },
+      );
+    }
+    updateData.initStatus = initStatusRaw;
+  }
+
+  if (hasDefaultRunnerId) {
+    const rawRunner = body?.defaultRunnerId;
+    if (rawRunner === null || rawRunner === "") {
+      updateData.defaultRunnerId = null;
+    } else if (typeof rawRunner === "string" && rawRunner.trim()) {
+      const candidateId = rawRunner.trim();
+      const accessible = await getAccessibleRunners(session.user.id, {
+        projectId: access.project.id,
+        githubLogin: session.user.githubLogin,
+      });
+      const matched = accessible.find((r) => r.id === candidateId);
+      if (!matched) {
+        return NextResponse.json(
+          { error: "Selected daemon is not accessible for this project" },
+          { status: 404 },
+        );
+      }
+      updateData.defaultRunnerId = matched.id;
+    } else {
+      return NextResponse.json(
+        { error: "defaultRunnerId must be a runner ID or null" },
+        { status: 400 },
+      );
+    }
   }
 
   const now = new Date();
   const updated = await prisma.project.update({
     where: { id: access.project.id },
-    data: { initStatus: initStatusRaw },
-    select: { id: true, initStatus: true },
+    data: updateData,
+    select: { id: true, initStatus: true, defaultRunnerId: true },
   });
 
   if (initStatusRaw === "complete") {
@@ -80,7 +124,10 @@ export async function PATCH(
     type: "project:updated",
     userId: access.project.userId,
     projectId: access.project.id,
-    payload: { initStatus: updated.initStatus },
+    payload: {
+      initStatus: updated.initStatus,
+      defaultRunnerId: updated.defaultRunnerId,
+    },
   });
 
   return NextResponse.json({ ok: true, project: updated });

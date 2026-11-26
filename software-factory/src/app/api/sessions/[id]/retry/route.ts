@@ -2,7 +2,7 @@ import { type NextRequest, NextResponse } from "next/server";
 import { authenticateRequest } from "@/lib/api-auth";
 import { emitFactoryEvent } from "@/lib/events";
 import { prisma } from "@/lib/prisma";
-import { findAccessibleRun } from "@/lib/team-access";
+import { findAccessibleRun, getAccessibleRunners } from "@/lib/team-access";
 
 export async function POST(
   request: NextRequest,
@@ -30,7 +30,42 @@ export async function POST(
   }
 
   const now = new Date();
+  const cutoffMs = Date.now() - 65_000;
+  const onlineRunners = (
+    await getAccessibleRunners(auth.user.id, {
+      projectId: run.projectId,
+      githubLogin: auth.user.githubLogin,
+    })
+  ).filter((r) => r.status === "online" && r.lastHeartbeatAt.getTime() > cutoffMs);
+  const targetRunner =
+    (run.runnerMachineId
+      ? onlineRunners.find((r) => r.id === run.runnerMachineId) ?? null
+      : null) ??
+    onlineRunners
+      .filter((r) => r.userId === auth.user.id)
+      .sort((a, b) => a.activeRuns - b.activeRuns)[0] ??
+    onlineRunners
+      .filter((r) => r.visibility === "team")
+      .sort((a, b) => a.activeRuns - b.activeRuns)[0] ??
+    null;
+
+  if (!targetRunner) {
+    return NextResponse.json(
+      {
+        error:
+          "No local daemon is connected. Start `sf daemon` on your machine before retrying.",
+        code: "NO_RUNNER_ONLINE",
+      },
+      { status: 503 },
+    );
+  }
+
   await prisma.$transaction(async (tx) => {
+    await tx.runnerCommand.updateMany({
+      where: { runId: run.id, status: "pending" },
+      data: { status: "failed", error: "Superseded by retry" },
+    });
+
     const lastStep = await tx.runStep.findFirst({
       where: { runId: run.id },
       orderBy: { seq: "desc" },
@@ -41,6 +76,7 @@ export async function POST(
       where: { id: run.id },
       data: {
         status: "queued",
+        runnerMachineId: targetRunner.id,
         currentPhase: phase,
         finishedAt: null,
         lastHeartbeatAt: now,
@@ -73,8 +109,8 @@ export async function POST(
 
     await tx.runnerCommand.create({
       data: {
-        userId: run.runner?.userId ?? run.project.userId,
-        runnerMachineId: run.runnerMachineId,
+        userId: targetRunner.userId,
+        runnerMachineId: targetRunner.id,
         projectId: run.projectId,
         runId: run.id,
         type: "retry_phase",

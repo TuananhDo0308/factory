@@ -120,24 +120,12 @@ export async function POST(request: NextRequest) {
   ]);
 
   const result = await prisma.$transaction(async (tx) => {
-    let run = await tx.factoryRun.findUnique({
+    const run = await tx.factoryRun.findUnique({
       where: { projectId_runKey: { projectId: project.id, runKey } },
     });
 
     if (!run) {
-      run = await tx.factoryRun.create({
-        data: {
-          projectId: project.id,
-          userId: auth.user.id,
-          runKey: runKey.slice(0, 120),
-          title: str(body.title) || runKey,
-          engine: project.engine || "antigravity",
-          status: "running",
-          currentPhase: phase,
-          model,
-          lastHeartbeatAt: now,
-        },
-      });
+      return { notFound: true as const };
     }
 
     const stepKey = stepName.slice(0, 80);
@@ -154,9 +142,9 @@ export async function POST(request: NextRequest) {
             where: { id: alreadyRecorded.id },
             data: { createdAt: stepCreatedAt },
           });
-          return { step: patched, run, skipped: true };
+          return { notFound: false as const, step: patched, run, skipped: true };
         }
-        return { step: alreadyRecorded, run, skipped: true };
+        return { notFound: false as const, step: alreadyRecorded, run, skipped: true };
       }
     }
 
@@ -178,8 +166,9 @@ export async function POST(request: NextRequest) {
         })
       : null;
 
-    if (idempotent && existingForUpsert && existingForUpsert.status !== "started") {
-      return { step: existingForUpsert, run, skipped: true };
+    // Never duplicate or double-increment tokens/cost if a finalized upserted step is retried/replayed.
+    if (existingForUpsert && existingForUpsert.status !== "started") {
+      return { notFound: false as const, step: existingForUpsert, run, skipped: true };
     }
 
     let runAgentId: string | null = null;
@@ -370,8 +359,18 @@ export async function POST(request: NextRequest) {
         .catch(() => {});
     }
 
-    return { step: createdStep, run: updatedRun, skipped: false };
+    return { notFound: false as const, step: createdStep, run: updatedRun, skipped: false };
   });
+
+  if (result.notFound) {
+    return NextResponse.json(
+      {
+        error:
+          "Run not found. Only sessions and runs created on Software Factory Web can be tracked.",
+      },
+      { status: 404 },
+    );
+  }
 
   if (result.skipped) {
     return NextResponse.json({

@@ -484,7 +484,7 @@ export function ContextLakeViewer({
   const srcMeta = sourceLabel(source);
 
   return (
-    <div className="flex min-h-[540px] flex-col overflow-hidden rounded-lg border bg-card md:h-[calc(100vh-230px)] md:flex-row">
+    <div className="flex h-full min-h-[520px] flex-col overflow-hidden rounded-lg border bg-card md:flex-row">
       {/* LEFT SIDEBAR: Nested Collapsible Folder Tree (mirrors App Sidebar style) */}
       <aside className="flex w-full shrink-0 flex-col border-b bg-sidebar text-sidebar-foreground md:w-64 md:border-r md:border-b-0 lg:w-72">
         <div className="flex items-center justify-between gap-2 border-b border-sidebar-border px-2.5 py-2">

@@ -23,12 +23,30 @@ export async function GET(
   const access = await getProjectAccess(auth.user, id);
   if (!access) return NextResponse.json({ error: "Project not found" }, { status: 404 });
 
-  const lake = await getProjectContextLake({
-    project: access.project,
-    githubAccessToken: auth.githubAccessToken,
-  });
+  const commandId = request.nextUrl.searchParams.get("commandId")?.trim() || "";
+  const [lake, cmd] = await Promise.all([
+    getProjectContextLake({
+      project: access.project,
+      githubAccessToken: auth.githubAccessToken,
+    }),
+    commandId
+      ? prisma.runnerCommand.findFirst({
+          where: { id: commandId, projectId: access.project.id, type: "sync_context" },
+          select: { id: true, status: true, error: true, updatedAt: true },
+        })
+      : Promise.resolve(null),
+  ]);
 
-  return NextResponse.json({ ok: true, ...lake });
+  return NextResponse.json({
+    ok: true,
+    ...lake,
+    ...(cmd
+      ? {
+          commandStatus: cmd.status,
+          commandError: cmd.error,
+        }
+      : {}),
+  });
 }
 
 export async function POST(
@@ -57,8 +75,9 @@ export async function POST(
   }
 
   const preferredSource = typeof body.source === "string" ? body.source : "auto";
+  const requestedRunnerId = typeof body.runnerId === "string" ? body.runnerId.trim() : "";
 
-  // 1. If local disk is reachable on this server host, scan directly and persist to DB.
+  // 1. If local disk is reachable on this server host (localhost), scan directly and persist to DB.
   if (preferredSource !== "github" && preferredSource !== "daemon" && project.localPath) {
     const localFiles = scanLocalContextFiles(project.localPath);
     if (localFiles.length > 0) {
@@ -86,7 +105,9 @@ export async function POST(
   }
 
   // 2. Ask an online `sf daemon` runner to push the latest local `.factory/` files (works on Vercel!).
+  // Prefer explicit runnerId -> project.defaultRunnerId -> user's own runner -> shared team runner.
   let queuedRunnerName: string | null = null;
+  let commandId: string | null = null;
   if (preferredSource !== "github") {
     const cutoffMs = Date.now() - 65_000;
     const runners = (
@@ -95,9 +116,14 @@ export async function POST(
         githubLogin: auth.user.githubLogin,
       })
     ).filter((r) => r.status === "online" && r.lastHeartbeatAt.getTime() > cutoffMs);
-    const runner = runners.find((r) => r.userId === auth.user.id) ?? runners[0] ?? null;
+    const preferredId = requestedRunnerId || project.defaultRunnerId || "";
+    const runner =
+      (preferredId ? runners.find((r) => r.id === preferredId) : null) ??
+      runners.find((r) => r.userId === auth.user.id) ??
+      runners[0] ??
+      null;
     if (runner) {
-      await prisma.runnerCommand.create({
+      const createdCmd = await prisma.runnerCommand.create({
         data: {
           userId: runner.userId,
           runnerMachineId: runner.id,
@@ -106,16 +132,56 @@ export async function POST(
           payloadJson: JSON.stringify({
             projectId: project.id,
             projectSlug: project.slug,
+            projectName: project.name,
             localPath: project.localPath,
           }),
           status: "pending",
         },
+        select: { id: true },
       });
       queuedRunnerName = runner.name;
+      commandId = createdCmd.id;
     }
   }
 
-  // 3. Also pull from GitHub API immediately if connected (works on Vercel even without daemon online!).
+  // 3. If an online daemon was queued, let it push complete local `.factory/` files without
+  // overwriting existing daemon-synced files with a partial GitHub snapshot (where `.factory/` is often gitignored).
+  if (queuedRunnerName) {
+    let lake = await getProjectContextLake({
+      project,
+      githubAccessToken: auth.githubAccessToken,
+    });
+    // If DB is still empty and GitHub is connected, hydrate immediately (non-destructive) while daemon pushes.
+    if (lake.files.length === 0 && project.githubFullName && preferredSource !== "daemon") {
+      const gh = await fetchGitHubContextFiles({
+        fullName: project.githubFullName,
+        branch: project.defaultBranch,
+        accessToken: auth.githubAccessToken,
+      });
+      if (gh.ok && gh.files.length > 0) {
+        await upsertProjectContextFiles({
+          projectId: project.id,
+          files: gh.files,
+          source: "github",
+          replaceAll: false,
+        }).catch(() => {});
+        lake = {
+          files: gh.files,
+          source: "github",
+          syncedAt: new Date().toISOString(),
+        };
+      }
+    }
+    return NextResponse.json({
+      ok: true,
+      queuedRunnerName,
+      commandId,
+      message: `Requested context sync from online runner "${queuedRunnerName}"`,
+      ...lake,
+    });
+  }
+
+  // 4. Fallback when no daemon is online: pull directly from GitHub API if connected.
   if (project.githubFullName && preferredSource !== "daemon") {
     const gh = await fetchGitHubContextFiles({
       fullName: project.githubFullName,
@@ -140,33 +206,17 @@ export async function POST(
         source: "github",
         savedCount: saved.savedCount,
         initComplete: saved.initComplete,
-        queuedRunnerName,
         files: gh.files,
         syncedAt: new Date().toISOString(),
       });
     }
 
-    if (!queuedRunnerName) {
-      return NextResponse.json(
-        {
-          error: `${gh.error}. Connect a local \`sf daemon\` runner to push local .factory/ files automatically.`,
-        },
-        { status: 502 },
-      );
-    }
-  }
-
-  if (queuedRunnerName) {
-    const lake = await getProjectContextLake({
-      project,
-      githubAccessToken: auth.githubAccessToken,
-    });
-    return NextResponse.json({
-      ok: true,
-      queuedRunnerName,
-      message: `Requested context sync from online runner "${queuedRunnerName}"`,
-      ...lake,
-    });
+    return NextResponse.json(
+      {
+        error: `${gh.error}. Connect a local \`sf daemon\` runner to push local .factory/ files automatically.`,
+      },
+      { status: 502 },
+    );
   }
 
   return NextResponse.json(

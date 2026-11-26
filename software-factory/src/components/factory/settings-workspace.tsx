@@ -4,9 +4,7 @@ import * as React from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
-  ActivityIcon,
   CheckIcon,
-  ChevronLeftIcon,
   CopyIcon,
   CpuIcon,
   GitBranchIcon,
@@ -16,7 +14,6 @@ import {
   PaletteIcon,
   PlugIcon,
   PlusIcon,
-  RefreshCwIcon,
   SearchIcon,
   SettingsIcon,
   TerminalIcon,
@@ -49,9 +46,8 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
-  FactoryMark,
-  FactoryWordmark,
   formatRelativeTime,
   StatusDot,
 } from "@/components/factory/factory-primitives";
@@ -375,16 +371,15 @@ export function SettingsWorkspace({
   );
 
   const validTab = NAV_ITEMS.some((t) => t.id === initialTab) ? initialTab : "general";
-  const [activeTab, setActiveTab] = React.useState(validTab);
+  const [tabOverride, setTabOverride] = React.useState<{ base: string; value: string } | null>(
+    null,
+  );
+  const activeTab = tabOverride?.base === validTab ? tabOverride.value : validTab;
   const [search, setSearch] = React.useState("");
 
   function selectTab(nextTab: string) {
-    setActiveTab(nextTab);
-    if (typeof window !== "undefined") {
-      const url = new URL(window.location.href);
-      url.searchParams.set("tab", nextTab);
-      window.history.replaceState(null, "", url.toString());
-    }
+    setTabOverride({ base: validTab, value: nextTab });
+    router.replace(`/settings?tab=${encodeURIComponent(nextTab)}`, { scroll: false });
   }
 
   // General preferences persisted in localStorage
@@ -640,7 +635,11 @@ export function SettingsWorkspace({
       item.title.toLowerCase().includes(q) ||
       item.keywords.includes(q),
   );
-  const currentMeta = NAV_ITEMS.find((n) => n.id === activeTab) ?? NAV_ITEMS[0];
+  const effectiveTab =
+    q && filteredNav.length > 0 && !filteredNav.some((item) => item.id === activeTab)
+      ? filteredNav[0].id
+      : activeTab;
+  const currentMeta = NAV_ITEMS.find((n) => n.id === effectiveTab) ?? NAV_ITEMS[0];
 
   const surfaceSwatches = isDark
     ? [
@@ -657,216 +656,47 @@ export function SettingsWorkspace({
       ];
 
   return (
-    <div className="flex h-screen w-full flex-col overflow-hidden bg-background text-foreground md:flex-row">
-      {/* Mobile Header + Horizontal Tab Strip */}
-      <header className="flex shrink-0 flex-col border-b bg-sidebar md:hidden">
-        <div className="flex items-center justify-between px-4 py-2.5">
-          <div className="flex items-center gap-3">
-            <Link
-              href="/sessions"
-              aria-label="Back to sessions"
-              className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
-            >
-              <ChevronLeftIcon className="size-4" />
-              <span>App</span>
-            </Link>
-            <span className="h-3.5 w-px bg-border" />
-            <div className="flex items-center gap-1.5 text-foreground">
-              <FactoryMark className="size-4" />
-              <FactoryWordmark className="text-[15px]" />
-            </div>
-          </div>
-          <Button
-            variant="ghost"
-            size="icon-xs"
-            aria-label="Sign out"
-            onClick={() => void handleLogout()}
-          >
-            <LogOutIcon />
-          </Button>
-        </div>
-        <nav
-          aria-label="Settings sections"
-          className="flex items-center gap-1 overflow-x-auto px-3 pb-2"
-        >
-          {NAV_ITEMS.map((item) => {
-            const Icon = item.icon;
-            const isActive = activeTab === item.id;
-            return (
-              <button
-                key={item.id}
-                type="button"
-                aria-current={isActive ? "page" : undefined}
-                onClick={() => selectTab(item.id)}
-                className={cn(
-                  "flex shrink-0 items-center gap-1.5 rounded-md px-2.5 py-1.5 text-xs transition-colors",
-                  isActive
-                    ? "bg-sidebar-accent font-medium text-sidebar-accent-foreground"
-                    : "text-sidebar-foreground hover:bg-sidebar-accent/60 hover:text-foreground",
-                )}
-              >
-                <Icon className="size-3.5" aria-hidden="true" />
-                <span>{item.label}</span>
-              </button>
-            );
-          })}
-        </nav>
-      </header>
-
-      {/* Desktop Left Sidebar */}
-      <aside className="hidden w-60 shrink-0 flex-col border-r bg-sidebar md:flex">
-        <div className="flex items-center justify-between px-4 py-3.5">
-          <Link href="/sessions" className="flex items-center gap-2 text-foreground">
-            <FactoryMark className="size-5" />
-            <FactoryWordmark className="text-[17px]" />
-          </Link>
-        </div>
-
-        <div className="flex flex-col gap-2.5 px-3 pb-3">
-          <Link
-            href="/sessions"
-            className="flex items-center gap-1.5 rounded-md px-2 py-1 text-xs text-muted-foreground transition-colors hover:bg-sidebar-accent/60 hover:text-foreground"
-          >
-            <ChevronLeftIcon className="size-3.5" aria-hidden="true" />
-            <span>Back to App</span>
-          </Link>
-
-          <div className="relative">
-            <label htmlFor="settings-nav-search" className="sr-only">
-              Search settings
-            </label>
-            <SearchIcon
-              aria-hidden="true"
-              className="pointer-events-none absolute top-1/2 left-2.5 size-3.5 -translate-y-1/2 text-muted-foreground"
-            />
-            <Input
-              id="settings-nav-search"
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              placeholder="Find a setting..."
-              className="h-8 pr-7 pl-8 text-xs"
-            />
-            {search && (
-              <button
-                type="button"
-                aria-label="Clear search"
-                onClick={() => setSearch("")}
-                className="absolute top-1/2 right-2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
-              >
-                <XIcon className="size-3.5" />
-              </button>
-            )}
-          </div>
-        </div>
-
-        <nav
-          aria-label="Settings navigation"
-          className="flex flex-1 flex-col gap-5 overflow-y-auto px-3 py-1"
-        >
-          <div className="flex flex-col gap-0.5">
-            <div className="px-2 pb-1.5 font-mono text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
-              Settings
-            </div>
-            {filteredNav.length === 0 ? (
-              <p className="px-2 py-2 text-xs text-muted-foreground">No matching sections.</p>
-            ) : (
-              filteredNav.map((item) => {
-                const Icon = item.icon;
-                const isActive = activeTab === item.id;
-                return (
-                  <button
-                    key={item.id}
-                    type="button"
-                    aria-current={isActive ? "page" : undefined}
-                    onClick={() => selectTab(item.id)}
-                    className={cn(
-                      "flex w-full items-center justify-between gap-2 rounded-md px-2.5 py-1.5 text-left text-xs transition-colors",
-                      isActive
-                        ? "bg-sidebar-accent font-medium text-sidebar-accent-foreground"
-                        : "text-sidebar-foreground hover:bg-sidebar-accent/60 hover:text-foreground",
-                    )}
-                  >
-                    <span className="flex items-center gap-2.5">
-                      <Icon className="size-3.5 shrink-0" aria-hidden="true" />
-                      <span>{item.label}</span>
-                    </span>
-                    {item.id === "runners" && runnerList.length > 0 && (
-                      <span className="flex items-center gap-1 font-mono text-[10px] text-muted-foreground tabular-nums">
-                        <StatusDot status={onlineRunnerCount > 0 ? "online" : "offline"} />
-                        {onlineRunnerCount}/{runnerList.length}
-                      </span>
-                    )}
-                    {item.id === "keys" && tokens.length > 0 && (
-                      <span className="font-mono text-[10px] text-muted-foreground tabular-nums">
-                        {tokens.length}
-                      </span>
-                    )}
-                  </button>
-                );
-              })
-            )}
+    <div className="flex min-w-0 flex-1 flex-col gap-6 p-5 sm:px-8 sm:py-7 lg:px-12">
+      <div className="mx-auto flex w-full max-w-3xl flex-col gap-6 pb-10">
+        {/* Consistent Page Header — Settings sub-nav lives in the shared left sidebar */}
+        <div className="flex flex-wrap items-end justify-between gap-4 border-b pb-5">
+          <div className="flex min-w-0 flex-col gap-1">
+            <h1 className="text-xl font-semibold tracking-tight text-foreground">
+              {currentMeta.title}
+            </h1>
+            <p className="text-xs text-muted-foreground">{currentMeta.description}</p>
           </div>
 
-          <div className="flex flex-col gap-0.5">
-            <div className="px-2 pb-1.5 font-mono text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
-              Shortcuts
-            </div>
-            <Link
-              href="/automations"
-              className="flex items-center gap-2.5 rounded-md px-2.5 py-1.5 text-xs text-sidebar-foreground transition-colors hover:bg-sidebar-accent/60 hover:text-foreground"
-            >
-              <RefreshCwIcon className="size-3.5 shrink-0" aria-hidden="true" />
-              <span>Automations</span>
-            </Link>
-            <Link
-              href="/analytics"
-              className="flex items-center gap-2.5 rounded-md px-2.5 py-1.5 text-xs text-sidebar-foreground transition-colors hover:bg-sidebar-accent/60 hover:text-foreground"
-            >
-              <ActivityIcon className="size-3.5 shrink-0" aria-hidden="true" />
-              <span>Usage &amp; Analytics</span>
-            </Link>
-          </div>
-        </nav>
-
-        <div className="flex items-center justify-between gap-2 border-t px-3 py-2.5">
-          <div className="flex min-w-0 items-center gap-2">
-            <Avatar className="size-6">
-              {user.avatarUrl && <AvatarImage src={user.avatarUrl} alt={displayName} />}
-              <AvatarFallback className="text-[10px] font-medium">{initials}</AvatarFallback>
-            </Avatar>
-            <div className="flex min-w-0 flex-col">
-              <span className="truncate text-xs font-medium leading-tight">{displayName}</span>
-              <span className="truncate font-mono text-[10px] text-muted-foreground">
-                @{user.githubLogin}
-              </span>
-            </div>
-          </div>
-          <Button
-            variant="ghost"
-            size="icon-xs"
-            aria-label="Sign out"
-            title="Sign out"
-            onClick={() => void handleLogout()}
-          >
-            <LogOutIcon />
-          </Button>
-        </div>
-      </aside>
-
-      {/* Main Scrollable Settings Content */}
-      <main className="min-w-0 flex-1 overflow-y-auto px-5 py-7 sm:px-8 lg:px-14">
-        <div className="mx-auto flex w-full max-w-3xl flex-col gap-7 pb-10">
-          {/* Consistent Page Header */}
-          <div className="flex flex-wrap items-end justify-between gap-4 border-b pb-5">
-            <div className="flex flex-col gap-1">
-              <h1 className="text-xl font-semibold tracking-tight text-foreground">
-                {currentMeta.title}
-              </h1>
-              <p className="text-xs text-muted-foreground">{currentMeta.description}</p>
+          <div className="flex flex-wrap items-center gap-2">
+            <div className="relative w-44 sm:w-52">
+              <label htmlFor="settings-nav-search" className="sr-only">
+                Search settings
+              </label>
+              <SearchIcon
+                aria-hidden="true"
+                className="pointer-events-none absolute top-1/2 left-2.5 size-3.5 -translate-y-1/2 text-muted-foreground"
+              />
+              <Input
+                id="settings-nav-search"
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                placeholder="Find a setting..."
+                className="h-8 pr-7 pl-8 text-xs"
+              />
+              {search && (
+                <button
+                  type="button"
+                  aria-label="Clear search"
+                  onClick={() => setSearch("")}
+                  className="absolute top-1/2 right-2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                >
+                  <XIcon className="size-3.5" />
+                </button>
+              )}
             </div>
 
-            {activeTab === "appearance" && (
-              <div className="flex items-center gap-2">
+            {effectiveTab === "appearance" && (
+              <>
                 <Button variant="outline" size="sm" onClick={resetAppearance}>
                   Reset
                 </Button>
@@ -896,19 +726,54 @@ export function SettingsWorkspace({
                   )}
                   Copy JSON
                 </Button>
-              </div>
+              </>
             )}
 
-            {activeTab === "runners" && (
+            {effectiveTab === "runners" && (
               <Badge variant={onlineRunnerCount > 0 ? "secondary" : "outline"} className="gap-1.5">
                 <StatusDot status={onlineRunnerCount > 0 ? "online" : "offline"} />
                 {onlineRunnerCount} of {runnerList.length} online
               </Badge>
             )}
           </div>
+        </div>
 
+        {/* Mobile section switcher & instant search-match bar */}
+        <div className={cn("no-scrollbar overflow-x-auto", !q && "md:hidden")}>
+          {filteredNav.length === 0 ? (
+            <p className="py-1 text-xs text-muted-foreground">No matching settings sections.</p>
+          ) : (
+            <Tabs value={effectiveTab} onValueChange={(v) => selectTab(String(v))}>
+              <TabsList variant="line" className="w-max justify-start border-b border-border/70">
+                {filteredNav.map((item) => {
+                  const Icon = item.icon;
+                  return (
+                    <TabsTrigger key={item.id} value={item.id} className="shrink-0 gap-1.5 px-2.5">
+                      <Icon className="size-3.5" aria-hidden="true" />
+                      <span>{item.label}</span>
+                      {item.id === "runners" && runnerList.length > 0 && (
+                        <span className="ml-0.5 flex items-center gap-1 font-mono text-[10px] text-muted-foreground tabular-nums">
+                          <StatusDot status={onlineRunnerCount > 0 ? "online" : "offline"} />
+                          {onlineRunnerCount}/{runnerList.length}
+                        </span>
+                      )}
+                      {item.id === "keys" && tokens.length > 0 && (
+                        <span className="ml-0.5 font-mono text-[10px] text-muted-foreground tabular-nums">
+                          {tokens.length}
+                        </span>
+                      )}
+                    </TabsTrigger>
+                  );
+                })}
+              </TabsList>
+            </Tabs>
+          )}
+        </div>
+
+        {/* Settings Section Body */}
+        <div className="flex flex-col gap-7">
           {/* SECTION 1: GENERAL */}
-          {activeTab === "general" && (
+          {effectiveTab === "general" && (
             <>
               <section className="flex flex-col gap-2.5">
                 <h2 className="font-mono text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
@@ -1166,7 +1031,7 @@ export function SettingsWorkspace({
           )}
 
           {/* SECTION 2: APPEARANCE */}
-          {activeTab === "appearance" && (
+          {effectiveTab === "appearance" && (
             <>
               <section className="flex flex-col gap-3">
                 <h2 className="font-mono text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
@@ -1353,7 +1218,7 @@ export function SettingsWorkspace({
           )}
 
           {/* SECTION 3: TEAM */}
-          {activeTab === "team" && (
+          {effectiveTab === "team" && (
             <SettingsTeamPanel
               projects={teamProjects}
               initialProjectId={initialProjectId}
@@ -1364,7 +1229,7 @@ export function SettingsWorkspace({
           )}
 
           {/* SECTION 4: RUNNERS */}
-          {activeTab === "runners" && (
+          {effectiveTab === "runners" && (
             <>
               <section className="flex flex-col gap-2.5">
                 <h2 className="font-mono text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
@@ -1532,7 +1397,7 @@ export function SettingsWorkspace({
           )}
 
           {/* SECTION 5: API KEYS */}
-          {activeTab === "keys" && (
+          {effectiveTab === "keys" && (
             <>
               <section className="flex flex-col gap-2.5">
                 <h2 className="font-mono text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
@@ -1654,7 +1519,7 @@ export function SettingsWorkspace({
           )}
 
           {/* SECTION 6: MCP CONTEXT LAKE */}
-          {activeTab === "mcp" && (
+          {effectiveTab === "mcp" && (
             <>
               <section className="flex flex-col gap-2.5">
                 <div className="flex items-center justify-between gap-2">
@@ -1716,7 +1581,7 @@ export function SettingsWorkspace({
             </>
           )}
         </div>
-      </main>
+      </div>
     </div>
   );
 }

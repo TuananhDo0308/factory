@@ -258,6 +258,7 @@ async function pickOnlineRunner(params: {
   projectId: string;
   triggeredByGithubLogin?: string | null;
   runnerId?: string | null;
+  defaultRunnerId?: string | null;
 }) {
   const cutoffMs = Date.now() - 65_000;
   const candidateRunners = (
@@ -270,6 +271,9 @@ async function pickOnlineRunner(params: {
   let onlineRunner = params.runnerId
     ? candidateRunners.find((r) => r.id === params.runnerId) ?? null
     : null;
+  if (!onlineRunner && params.defaultRunnerId) {
+    onlineRunner = candidateRunners.find((r) => r.id === params.defaultRunnerId) ?? null;
+  }
   if (!onlineRunner) {
     const ownOnline = candidateRunners
       .filter((r) => r.userId === params.triggeredByUserId)
@@ -328,8 +332,18 @@ export async function launchProjectInitRun(params: {
     projectId: project.id,
     triggeredByGithubLogin: params.triggeredByGithubLogin,
     runnerId: params.runnerId,
+    defaultRunnerId: project.defaultRunnerId,
   });
-  const initialStatus = onlineRunner ? "queued" : "running";
+  if (!onlineRunner) {
+    return {
+      ok: false as const,
+      code: "NO_RUNNER_ONLINE" as const,
+      error:
+        "No local daemon is connected. Start `sf daemon` on your machine before running Factory Init.",
+      status: 503,
+    };
+  }
+  const initialStatus = "queued";
 
   const run = await prisma.$transaction(async (tx) => {
     const createdRun = await tx.factoryRun.create({
@@ -485,8 +499,18 @@ export async function launchIssueClarifyRun(params: {
     projectId: project.id,
     triggeredByGithubLogin: params.triggeredByGithubLogin,
     runnerId: params.runnerId,
+    defaultRunnerId: project.defaultRunnerId,
   });
-  const initialStatus = onlineRunner ? "queued" : "running";
+  if (!onlineRunner) {
+    return {
+      ok: false as const,
+      code: "NO_RUNNER_ONLINE" as const,
+      error:
+        "No local daemon is connected. Start `sf daemon` on your machine before running Factory Clarify.",
+      status: 503,
+    };
+  }
+  const initialStatus = "queued";
 
   const parsedCriteria = safeJsonParse<Array<{ id: string; text: string }>>(issue.criteriaJson, []).map(
     (c) => ({ id: c.id, text: c.text, status: "" }),
@@ -750,11 +774,21 @@ export async function launchIssueFactoryRun(params: {
     projectId: project.id,
     triggeredByGithubLogin: params.triggeredByGithubLogin,
     runnerId: params.runnerId,
+    defaultRunnerId: project.defaultRunnerId,
   });
+  if (!onlineRunner) {
+    return {
+      ok: false as const,
+      code: "NO_RUNNER_ONLINE" as const,
+      error:
+        "No local daemon is connected. Start `sf daemon` on your machine before launching a Factory build.",
+      status: 503,
+    };
+  }
 
   const isSharedDispatch = Boolean(onlineRunner && onlineRunner.userId !== params.triggeredByUserId);
   const useWorktree = isSharedDispatch ? true : params.useWorktree !== false;
-  const initialStatus = onlineRunner ? "queued" : "running";
+  const initialStatus = "queued";
 
   const effectiveCriteria =
     localPlan && localPlan.criteria.length > 0
@@ -1017,7 +1051,7 @@ export async function dispatchReadyIssuesForProject(params: {
       issueId: issue.id,
       triggeredByUserId: params.actorUserId,
       triggeredByGithubLogin: params.actorGithubLogin,
-      runnerId: params.preferredRunnerId,
+      runnerId: params.preferredRunnerId || project.defaultRunnerId,
     });
     if (res.ok) {
       dispatched.push({

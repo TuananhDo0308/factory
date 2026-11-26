@@ -87,9 +87,10 @@ model RunnerMachine {
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
 
-  user     User            @relation(fields: [userId], references: [id], onDelete: Cascade)
-  runs     FactoryRun[]
-  commands RunnerCommand[]
+  user               User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  runs               FactoryRun[]
+  commands           RunnerCommand[]
+  defaultForProjects Project[]       @relation("ProjectDefaultRunner")
 
   @@unique([userId, name])
   @@index([userId, status])
@@ -119,12 +120,14 @@ model Project {
   readinessScore      Int?
   autoDispatch        Boolean  @default(false)
   autoApprove         Boolean  @default(false)
+  defaultRunnerId     String?
   maxConcurrency      Int      @default(2)
   stallTimeoutMinutes Int      @default(15)
   createdAt           DateTime @default(now())
   updatedAt           DateTime @updatedAt
 
-  user           User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user           User                 @relation(fields: [userId], references: [id], onDelete: Cascade)
+  defaultRunner  RunnerMachine?       @relation("ProjectDefaultRunner", fields: [defaultRunnerId], references: [id], onDelete: SetNull)
   members        ProjectMember[]
   invites        ProjectInvite[]
   runs           FactoryRun[]
@@ -139,6 +142,7 @@ model Project {
   @@unique([userId, slug])
   @@unique([userId, githubRepoId])
   @@index([userId])
+  @@index([defaultRunnerId])
 }
 
 model ProjectMember {

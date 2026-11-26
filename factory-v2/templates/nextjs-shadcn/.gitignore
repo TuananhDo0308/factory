@@ -1,0 +1,10 @@
+node_modules
+.next
+out
+coverage
+tsconfig.tsbuildinfo
+next-env.d.ts
+.DS_Store
+.factory/worktrees
+.factory/batches/*/qc
+.factory-test.db*

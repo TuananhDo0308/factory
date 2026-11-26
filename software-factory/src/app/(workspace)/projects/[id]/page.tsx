@@ -4,7 +4,8 @@ import { getProjectBoardSnapshot } from "@/lib/board-data";
 import { getProjectContextLake } from "@/lib/context-lake";
 import { prisma } from "@/lib/prisma";
 import { getCurrentSession } from "@/lib/session";
-import { getProjectAccess } from "@/lib/team-access";
+import { getAccessibleRunners, getProjectAccess } from "@/lib/team-access";
+import { isRunnerOnline } from "@/lib/workspace-data";
 
 export default async function ProjectDetailPage({
   params,
@@ -22,7 +23,7 @@ export default async function ProjectDetailPage({
   const access = await getProjectAccess(session.user, id);
   if (!access) notFound();
 
-  const [project, board] = await Promise.all([
+  const [project, board, accessibleRunners] = await Promise.all([
     prisma.project.findUnique({
       where: { id: access.project.id },
       include: {
@@ -38,6 +39,10 @@ export default async function ProjectDetailPage({
       projectId: access.project.id,
       viewerUserId: session.user.id,
       viewerGithubLogin: session.user.githubLogin,
+    }),
+    getAccessibleRunners(session.user.id, {
+      projectId: access.project.id,
+      githubLogin: session.user.githubLogin,
     }),
   ]);
 
@@ -61,9 +66,20 @@ export default async function ProjectDetailPage({
         githubFullName: project.githubFullName,
         githubUrl: project.githubUrl,
         defaultBranch: project.defaultBranch || "main",
+        defaultRunnerId: project.defaultRunnerId ?? null,
         initStatus: board.initStatus,
         readinessScore: project.readinessScore,
       }}
+      runners={accessibleRunners.map((r) => ({
+        id: r.id,
+        name: r.name,
+        hostname: r.hostname,
+        os: r.os,
+        status: isRunnerOnline(r.status, r.lastHeartbeatAt) ? "online" : "offline",
+        isOwn: r.userId === session.user.id,
+        ownerLogin: r.user?.githubLogin ?? session.user.githubLogin,
+        visibility: r.visibility === "team" ? "team" : "personal",
+      }))}
       myRole={access.role}
       currentUserId={session.user.id}
       ownerLogin={project.user?.githubLogin ?? "local"}

@@ -81,6 +81,128 @@ export function StatusDot({ status }: { status: string }) {
   return <span className={cn("inline-block size-2 shrink-0 rounded-full", color)} />;
 }
 
+/** Antigravity-style 2x2 four-dot chasing loader for active runs in the sidebar */
+export function AntigravityLoader({ className }: { className?: string }) {
+  return (
+    <svg
+      viewBox="0 0 12 12"
+      aria-hidden="true"
+      className={cn("size-3 shrink-0 text-foreground/90", className)}
+    >
+      <circle
+        cx="3.2"
+        cy="3.2"
+        r="1.85"
+        fill="currentColor"
+        className="agy-loader-dot agy-loader-dot-1"
+      />
+      <circle
+        cx="8.8"
+        cy="3.2"
+        r="1.85"
+        fill="currentColor"
+        className="agy-loader-dot agy-loader-dot-2"
+      />
+      <circle
+        cx="8.8"
+        cy="8.8"
+        r="1.85"
+        fill="currentColor"
+        className="agy-loader-dot agy-loader-dot-3"
+      />
+      <circle
+        cx="3.2"
+        cy="8.8"
+        r="1.85"
+        fill="currentColor"
+        className="agy-loader-dot agy-loader-dot-4"
+      />
+    </svg>
+  );
+}
+
+export type SidebarIndicatorKind = "loading" | "failed" | "done" | null;
+
+export function getSidebarIndicatorKind(
+  status: string,
+  unread = false,
+): SidebarIndicatorKind {
+  const s = status.toLowerCase();
+  if (s === "working" || s === "running" || s === "in_progress" || s === "queued") {
+    return "loading";
+  }
+  if (
+    s === "failed" ||
+    s === "blocked" ||
+    s === "stalled" ||
+    s === "failing" ||
+    s === "conflict"
+  ) {
+    return "failed";
+  }
+  if (
+    s === "waiting_on_you" ||
+    s === "awaiting_input" ||
+    s === "needs_human" ||
+    ((s === "passed" || s === "completed" || s === "merged") && unread)
+  ) {
+    return "done";
+  }
+  return null;
+}
+
+/** Right-aligned Antigravity-style status indicator for sidebar runs & subagents */
+export function SidebarStatusIndicator({
+  status,
+  unread = false,
+  className,
+}: {
+  status: string;
+  unread?: boolean;
+  className?: string;
+}) {
+  const kind = getSidebarIndicatorKind(status, unread);
+  if (!kind) return null;
+
+  if (kind === "loading") {
+    return (
+      <span
+        role="status"
+        aria-label="Running"
+        className={cn("inline-flex size-4 shrink-0 items-center justify-center", className)}
+      >
+        <AntigravityLoader />
+      </span>
+    );
+  }
+
+  if (kind === "failed") {
+    return (
+      <span
+        aria-label="Failed"
+        className={cn(
+          "inline-flex size-4 shrink-0 items-center justify-center rounded-full bg-red-500/20",
+          className,
+        )}
+      >
+        <span className="size-[6.5px] rounded-full bg-red-500" />
+      </span>
+    );
+  }
+
+  return (
+    <span
+      aria-label="Finished"
+      className={cn(
+        "inline-flex size-4 shrink-0 items-center justify-center rounded-full bg-[#3b82f6]/20",
+        className,
+      )}
+    >
+      <span className="size-[6.5px] rounded-full bg-[#3b82f6]" />
+    </span>
+  );
+}
+
 export function formatRelativeTime(iso: string | null | undefined): string {
   if (!iso) return "—";
   const diffSec = Math.max(0, Math.floor((Date.now() - new Date(iso).getTime()) / 1000));

@@ -684,8 +684,8 @@ export function FactoryPipelineView({
       ));
   const hasAnyRetry = repairRounds > 0 || sentBackSpecs.size > 0 || flakyList.length > 0;
 
-  // Token & cost telemetry
-  const totalTokens = run.inputTokens + run.outputTokens + run.cacheReadTokens;
+  // Token & cost telemetry (active = uncached input + output; cache reads reported separately)
+  const totalTokens = run.inputTokens + run.outputTokens;
   const cacheBase = run.inputTokens + run.cacheReadTokens;
   const cacheHitPct = cacheBase > 0 ? Math.round((run.cacheReadTokens / cacheBase) * 100) : 0;
 
@@ -782,7 +782,7 @@ export function FactoryPipelineView({
     return {
       rows: rows.map((r) => ({
         ...r,
-        totalTokens: r.input + r.output + r.cacheRead,
+        totalTokens: r.input + r.output,
         sharePct: denom > 0 ? Math.round((r.cost / denom) * 100) : 0,
       })),
       total: {
@@ -1040,7 +1040,10 @@ export function FactoryPipelineView({
                 {passedSubagents}/{Math.max(totalTrackedAgents, 1)}
               </span>
             </div>
-            <div className="flex flex-col gap-0.5">
+            <div
+              className="flex flex-col gap-0.5"
+              title={`Active: ${totalTokens.toLocaleString()} (in ${run.inputTokens.toLocaleString()} · out ${run.outputTokens.toLocaleString()}) · Cached: ${run.cacheReadTokens.toLocaleString()} (${cacheHitPct}% cache hit)`}
+            >
               <span className="text-xs text-muted-foreground">Tokens</span>
               <div className="flex items-baseline gap-1.5">
                 <span className="font-mono text-base font-semibold text-foreground tabular-nums">
@@ -1048,7 +1051,7 @@ export function FactoryPipelineView({
                 </span>
                 {cacheHitPct > 0 && (
                   <span className="text-xs font-medium text-primary tabular-nums">
-                    {cacheHitPct}%
+                    {cacheHitPct}% cache
                   </span>
                 )}
               </div>
@@ -1499,7 +1502,7 @@ export function FactoryPipelineView({
                   </TableHeader>
                   <TableBody>
                     {run.agents.map((ag) => {
-                      const agTotal = ag.inputTokens + ag.outputTokens + ag.cacheReadTokens;
+                      const agTotal = ag.inputTokens + ag.outputTokens;
                       const agCacheBase = ag.inputTokens + ag.cacheReadTokens;
                       const agCachePct =
                         agCacheBase > 0 ? Math.round((ag.cacheReadTokens / agCacheBase) * 100) : 0;
@@ -1532,7 +1535,10 @@ export function FactoryPipelineView({
                               {ag.status.replace("_", " ")}
                             </span>
                           </TableCell>
-                          <TableCell className="text-right font-mono text-xs tabular-nums">
+                          <TableCell
+                            className="text-right font-mono text-xs tabular-nums"
+                            title={`Input: ${ag.inputTokens.toLocaleString()} · Output: ${ag.outputTokens.toLocaleString()} · Cached: ${ag.cacheReadTokens.toLocaleString()} (${agCachePct}% cache hit)`}
+                          >
                             <span>{formatCompactTokens(agTotal)}</span>
                             {agCachePct > 0 && (
                               <span className="ml-1.5 text-muted-foreground">({agCachePct}%)</span>

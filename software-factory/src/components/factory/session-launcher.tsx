@@ -13,6 +13,7 @@ import {
   FolderIcon,
   GitBranchIcon,
   LaptopIcon,
+  PaperclipIcon,
   PlusIcon,
   SparklesIcon,
   XIcon,
@@ -40,7 +41,14 @@ import {
 } from "@/components/ui/input-group";
 import { Spinner } from "@/components/ui/spinner";
 import { FactoryMark, StatusDot } from "@/components/factory/factory-primitives";
+import {
+  AttachmentPreviewStrip,
+  prepareFilesForAttachment,
+  toAttachmentPayload,
+  type PendingAttachment,
+} from "@/components/factory/chat-attachments";
 import { NewProjectDialog } from "@/components/factory/new-project-dialog";
+import { ATTACHMENT_ACCEPT_ATTR } from "@/lib/attachments";
 import {
   buildModelFamilies,
   defaultModelForEngine,
@@ -60,12 +68,14 @@ export function SessionLauncher({
   projects,
   runners,
   initialProjectId,
+  initialRunnerId,
   initialSkill,
   initialPrompt,
 }: {
   projects: SidebarData["projects"];
   runners: SidebarData["runners"];
   initialProjectId?: string;
+  initialRunnerId?: string;
   initialSkill?: string;
   initialPrompt?: string;
 }) {
@@ -90,30 +100,74 @@ export function SessionLauncher({
   const [slashDismissed, setSlashDismissed] = React.useState(false);
   const [slashIndex, setSlashIndex] = React.useState(0);
 
-  const [projectId, setProjectId] = React.useState(resolvedInitialProject?.id ?? "");
+  const baseProjectId = resolvedInitialProject?.id ?? "";
+  const [projectOverride, setProjectOverride] = React.useState<{
+    base: string;
+    value: string;
+  } | null>(null);
+  const projectId =
+    projectOverride?.base === baseProjectId ? projectOverride.value : baseProjectId;
   const selectedProject = projects.find((p) => p.id === projectId) ?? projects[0] ?? null;
 
   const initialEngine = selectedProject?.engine === "claude" ? "claude" : "antigravity";
-  const [engine, setEngine] = React.useState<"antigravity" | "claude">(initialEngine);
-  const [model, setModel] = React.useState(defaultModelForEngine(initialEngine));
-  const [branch, setBranch] = React.useState(selectedProject?.defaultBranch || "main");
+  const [engineOverride, setEngineOverride] = React.useState<{
+    projectId: string;
+    value: "antigravity" | "claude";
+  } | null>(null);
+  const engine: "antigravity" | "claude" =
+    engineOverride?.projectId === (selectedProject?.id ?? "")
+      ? engineOverride.value
+      : initialEngine;
+
+  const [modelOverride, setModelOverride] = React.useState<{
+    projectId: string;
+    value: string;
+  } | null>(null);
+  const model =
+    modelOverride?.projectId === (selectedProject?.id ?? "")
+      ? modelOverride.value
+      : defaultModelForEngine(engine);
+
+  const [branchOverride, setBranchOverride] = React.useState<{
+    projectId: string;
+    value: string;
+  } | null>(null);
+  const branch =
+    branchOverride?.projectId === (selectedProject?.id ?? "")
+      ? branchOverride.value
+      : selectedProject?.defaultBranch || "main";
+
+  const setEngine = React.useCallback(
+    (next: "antigravity" | "claude") => {
+      setEngineOverride({ projectId: selectedProject?.id ?? "", value: next });
+    },
+    [selectedProject?.id],
+  );
+  const setModel = React.useCallback(
+    (next: string) => {
+      setModelOverride({ projectId: selectedProject?.id ?? "", value: next });
+    },
+    [selectedProject?.id],
+  );
+
   const [useWorktree, setUseWorktree] = React.useState(resolvedInitialSkill.defaultWorktree);
   const [submitting, setSubmitting] = React.useState(false);
   const [addProjectOpen, setAddProjectOpen] = React.useState(false);
   const [noticeDismissed, setNoticeDismissed] = React.useState(false);
+  const [daemonWarningHighlight, setDaemonWarningHighlight] = React.useState(false);
 
   const activeSkill =
     SESSION_SKILLS.find((s) => s.id === skillId) ?? SESSION_SKILLS[SESSION_SKILLS.length - 1];
 
-  // Auto-focus at the end of `/skill ` when jumped here from a skill shortcut (e.g. BA Create Tickets)
+  // Auto-focus prompt when jumped here from a project's "New Chat" button or skill shortcut
   React.useEffect(() => {
-    if (!initialSkill) return;
+    if (!initialSkill && !initialProjectId) return;
     const el = textareaRef.current;
     if (!el) return;
     el.focus();
     const pos = el.value.length;
     el.setSelectionRange(pos, pos);
-  }, [initialSkill]);
+  }, [initialSkill, initialProjectId]);
 
   const slashSuggestions = React.useMemo(
     () => (slashDismissed ? [] : getSlashSuggestions(prompt)),
@@ -158,23 +212,38 @@ export function SessionLauncher({
   }
 
   function handleSelectProject(nextProject: SidebarData["projects"][number]) {
-    setProjectId(nextProject.id);
+    setProjectOverride({ base: baseProjectId, value: nextProject.id });
     const nextEngine = nextProject.engine === "claude" ? "claude" : "antigravity";
-    setEngine(nextEngine);
-    setBranch(nextProject.defaultBranch || "main");
-    setModel(defaultModelForEngine(nextEngine));
+    setEngineOverride({ projectId: nextProject.id, value: nextEngine });
+    setBranchOverride({ projectId: nextProject.id, value: nextProject.defaultBranch || "main" });
+    setModelOverride({ projectId: nextProject.id, value: defaultModelForEngine(nextEngine) });
+    // Clear manual runner override so the newly selected project uses its own default daemon
+    setRunnerOverride(null);
   }
 
   const onlineRunners = React.useMemo(
     () => runners.filter((r) => r.status === "online"),
     [runners],
   );
-  const [selectedRunnerId, setSelectedRunnerId] = React.useState<string>("");
+  const [runnerOverride, setRunnerOverride] = React.useState<{
+    projectId: string;
+    runnerId: string;
+  } | null>(null);
+  const preferredRunnerId =
+    runnerOverride?.projectId === (selectedProject?.id ?? "")
+      ? runnerOverride.runnerId
+      : initialRunnerId && selectedProject?.id === baseProjectId
+        ? initialRunnerId
+        : selectedProject?.defaultRunnerId || "";
   const onlineRunner =
-    onlineRunners.find((r) => r.id === selectedRunnerId) ??
+    (preferredRunnerId ? onlineRunners.find((r) => r.id === preferredRunnerId) : null) ??
     onlineRunners.find((r) => r.isOwn) ??
     onlineRunners[0] ??
     null;
+  const selectedOfflineDefaultRunner =
+    !onlineRunner || (preferredRunnerId && onlineRunner.id !== preferredRunnerId)
+      ? runners.find((r) => r.id === preferredRunnerId && r.status !== "online") ?? null
+      : null;
   const usingSharedRunner = Boolean(onlineRunner && !onlineRunner.isOwn);
   const supportedEngines = React.useMemo(() => {
     const raw = onlineRunner?.engines || [];
@@ -222,18 +291,58 @@ export function SessionLauncher({
     };
   })();
 
+  const [attachments, setAttachments] = React.useState<PendingAttachment[]>([]);
+  const [dragOver, setDragOver] = React.useState(false);
+  const fileInputRef = React.useRef<HTMLInputElement | null>(null);
+
+  async function handleAddFiles(files: FileList | File[]) {
+    const { added, errors } = await prepareFilesForAttachment(files, attachments);
+    for (const err of errors) toast.error(err);
+    if (added.length > 0) {
+      setAttachments((prev) => [...prev, ...added]);
+    }
+  }
+
+  function handlePaste(e: React.ClipboardEvent<HTMLTextAreaElement>) {
+    const items = e.clipboardData?.files;
+    if (items && items.length > 0) {
+      e.preventDefault();
+      void handleAddFiles(items);
+    }
+  }
+
+  function handleDrop(e: React.DragEvent<HTMLDivElement>) {
+    e.preventDefault();
+    setDragOver(false);
+    if (e.dataTransfer?.files && e.dataTransfer.files.length > 0) {
+      void handleAddFiles(e.dataTransfer.files);
+    }
+  }
+
   async function launchSession() {
     const trimmed = prompt.trim();
-    if (!trimmed) {
-      toast.error("Describe a task or type / to pick a skill first.");
+    if (!trimmed && attachments.length === 0) {
+      toast.error("Describe a task, attach a file/image, or type / to pick a skill first.");
       return;
     }
 
-    const detected = detectSkillFromPrompt(trimmed);
+    const detected = trimmed ? detectSkillFromPrompt(trimmed) : null;
     const effectiveSkill = detected?.skill ?? activeSkill;
-    if (detected && !detected.body && effectiveSkill.id !== "factory-init") {
+    if (detected && !detected.body && effectiveSkill.id !== "factory-init" && attachments.length === 0) {
       toast.error(`Describe what you want ${effectiveSkill.slash} to do after the command.`);
       focusPromptEnd(prompt.endsWith(" ") ? prompt : `${prompt} `);
+      return;
+    }
+
+    if (!onlineRunner) {
+      setNoticeDismissed(false);
+      setDaemonWarningHighlight(true);
+      toast.error("No local daemon connected — start `sf daemon` on your machine first.", {
+        action: {
+          label: "Connect",
+          onClick: () => router.push("/settings?tab=runners"),
+        },
+      });
       return;
     }
 
@@ -244,6 +353,7 @@ export function SessionLauncher({
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
           prompt: trimmed,
+          attachments: attachments.length > 0 ? toAttachmentPayload(attachments) : undefined,
           projectId: selectedProject?.id,
           runnerId: onlineRunner?.id,
           mode: effectiveSkill.mode,
@@ -263,10 +373,22 @@ export function SessionLauncher({
       const data = (await res.json().catch(() => null)) as {
         run?: { id: string; runKey: string };
         dispatchedToRunner?: string | null;
+        code?: string;
         error?: string;
       } | null;
       if (!res.ok || !data?.run) {
-        toast.error(data?.error || "Could not start session");
+        if (data?.code === "NO_RUNNER_ONLINE" || res.status === 503) {
+          setNoticeDismissed(false);
+          setDaemonWarningHighlight(true);
+          toast.error(data?.error || "No local daemon connected — start `sf daemon` locally first.", {
+            action: {
+              label: "Connect",
+              onClick: () => router.push("/settings?tab=runners"),
+            },
+          });
+        } else {
+          toast.error(data?.error || "Could not start session");
+        }
         return;
       }
       toast.success(
@@ -282,6 +404,8 @@ export function SessionLauncher({
   }
 
   function handleKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>) {
+    if (e.nativeEvent.isComposing || e.keyCode === 229) return;
+
     if (slashSuggestions.length > 0) {
       if (e.key === "ArrowDown") {
         e.preventDefault();
@@ -293,7 +417,7 @@ export function SessionLauncher({
         setSlashIndex((i) => (i - 1 + slashSuggestions.length) % slashSuggestions.length);
         return;
       }
-      if (e.key === "Tab" || (e.key === "Enter" && !e.shiftKey && !e.metaKey && !e.ctrlKey)) {
+      if (e.key === "Tab" || (e.key === "Enter" && !e.shiftKey && !e.metaKey && !e.ctrlKey && !e.altKey)) {
         e.preventDefault();
         const chosen = slashSuggestions[effectiveSlashIndex];
         if (chosen) handleSelectSkill(chosen);
@@ -306,9 +430,26 @@ export function SessionLauncher({
       }
     }
 
-    if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
+    if (e.key === "Enter") {
+      if (e.metaKey || e.ctrlKey) {
+        e.preventDefault();
+        const el = e.currentTarget;
+        const start = el.selectionStart ?? prompt.length;
+        const end = el.selectionEnd ?? prompt.length;
+        const next = `${prompt.slice(0, start)}\n${prompt.slice(end)}`;
+        handlePromptChange(next);
+        requestAnimationFrame(() => {
+          el.setSelectionRange(start + 1, start + 1);
+        });
+        return;
+      }
+      if (e.shiftKey || e.altKey) {
+        return;
+      }
       e.preventDefault();
-      void launchSession();
+      if ((prompt.trim() || attachments.length > 0) && !submitting) {
+        void launchSession();
+      }
     }
   }
 
@@ -325,11 +466,21 @@ export function SessionLauncher({
 
         {/* Runner Status Callout Card */}
         {!onlineRunner && !noticeDismissed && (
-          <div className="flex w-full items-center justify-between gap-3 rounded-lg border bg-card px-4 py-3">
+          <div
+            className={`flex w-full items-center justify-between gap-3 rounded-lg border px-4 py-3 transition-colors ${
+              daemonWarningHighlight
+                ? "border-warning/60 bg-warning/10"
+                : "border-warning/30 bg-card"
+            }`}
+          >
             <div className="flex min-w-0 items-center gap-2.5 text-xs">
-              <LaptopIcon className="size-4 shrink-0 text-muted-foreground" />
+              <LaptopIcon
+                className={`size-4 shrink-0 ${
+                  daemonWarningHighlight ? "text-warning" : "text-muted-foreground"
+                }`}
+              />
               <span className="truncate text-muted-foreground">
-                No local runner connected — start{" "}
+                No local daemon connected — start{" "}
                 <code className="font-mono text-foreground">sf daemon</code> to execute locally.
               </span>
             </div>
@@ -346,7 +497,10 @@ export function SessionLauncher({
                 variant="ghost"
                 size="icon-xs"
                 title="Dismiss"
-                onClick={() => setNoticeDismissed(true)}
+                onClick={() => {
+                  setNoticeDismissed(true);
+                  setDaemonWarningHighlight(false);
+                }}
               >
                 <XIcon />
               </Button>
@@ -427,24 +581,68 @@ export function SessionLauncher({
             </div>
           )}
 
-          {/* Clean bordered composer card */}
-          <InputGroup className="rounded-lg bg-card shadow-xs">
+          {/* Clean bordered composer card (supports file picker, Cmd+V image paste, and drag-and-drop) */}
+          <InputGroup
+            onDragOver={(e) => {
+              e.preventDefault();
+              if (!dragOver) setDragOver(true);
+            }}
+            onDragLeave={() => setDragOver(false)}
+            onDrop={handleDrop}
+            className={`rounded-lg bg-card shadow-xs transition-colors ${
+              dragOver ? "border-primary ring-2 ring-primary/30" : ""
+            }`}
+          >
+            <input
+              ref={fileInputRef}
+              type="file"
+              multiple
+              accept={ATTACHMENT_ACCEPT_ATTR}
+              className="hidden"
+              onChange={(e) => {
+                if (e.target.files && e.target.files.length > 0) {
+                  void handleAddFiles(e.target.files);
+                }
+                e.target.value = "";
+              }}
+            />
+
+            {attachments.length > 0 && (
+              <div className="w-full px-3 pt-2.5">
+                <AttachmentPreviewStrip
+                  attachments={attachments}
+                  onRemove={(id) => setAttachments((prev) => prev.filter((a) => a.id !== id))}
+                />
+              </div>
+            )}
+
             <InputGroupTextarea
               ref={textareaRef}
               value={prompt}
               onChange={(e) => handlePromptChange(e.target.value)}
               onKeyDown={handleKeyDown}
+              onPaste={handlePaste}
               rows={3}
               placeholder={
                 activeSkill.mode === "ba"
-                  ? "/ba-ticket Describe a feature to break into tickets..."
-                  : "Describe a task, or type / for skills..."
+                  ? "/ba-ticket Describe a feature to break into tickets (or paste/drop images & specs)..."
+                  : "Describe a task, type / for skills, or paste/drop images & files..."
               }
               className="min-h-24 px-4 pt-3.5 text-sm"
             />
 
             <InputGroupAddon align="block-end" className="flex-wrap justify-between gap-2 px-3 pb-2.5">
               <div className="flex flex-wrap items-center gap-1.5">
+                <InputGroupButton
+                  variant="ghost"
+                  size="icon-sm"
+                  title="Attach images (PNG, JPG, WEBP, GIF, AVIF, BMP, SVG) or files (PDF, MD, JSON, CSV, code)"
+                  aria-label="Attach images or files"
+                  onClick={() => fileInputRef.current?.click()}
+                >
+                  <PaperclipIcon />
+                </InputGroupButton>
+
                 <InputGroupButton
                   variant="ghost"
                   size="icon-sm"
@@ -609,11 +807,19 @@ export function SessionLauncher({
                 {/* Sharp square Send button */}
                 <Button
                   type="button"
-                  variant={prompt.trim() ? "default" : "secondary"}
+                  variant={
+                    onlineRunner && (prompt.trim() || attachments.length > 0)
+                      ? "default"
+                      : "secondary"
+                  }
                   size="icon-sm"
-                  disabled={submitting || !prompt.trim()}
+                  disabled={submitting || (!prompt.trim() && attachments.length === 0)}
                   onClick={() => void launchSession()}
-                  title="Start Session (⌘Enter)"
+                  title={
+                    !onlineRunner
+                      ? "Connect sf daemon before sending"
+                      : "Send (Enter · Shift/⌘/Ctrl+Enter for new line)"
+                  }
                 >
                   {submitting ? <Spinner /> : <ArrowUpIcon />}
                 </Button>
@@ -625,13 +831,32 @@ export function SessionLauncher({
         {/* Single-row target context bar */}
         <div className="flex w-full flex-wrap items-center justify-between gap-x-3 gap-y-1.5 px-1 text-xs text-muted-foreground">
           <div className="flex flex-wrap items-center gap-1.5">
-            {onlineRunners.length > 1 ? (
+            {runners.length > 0 ? (
               <DropdownMenu>
                 <DropdownMenuTrigger
                   render={
-                    <Button type="button" variant="ghost" size="xs">
-                      <StatusDot status="online" />
-                      <span className="max-w-[180px] truncate font-mono">{onlineRunner?.name}</span>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="xs"
+                      title={
+                        selectedOfflineDefaultRunner
+                          ? `Project default daemon "${selectedOfflineDefaultRunner.name}" is offline — falling back to "${onlineRunner?.name ?? "offline"}"`
+                          : onlineRunner
+                            ? `Daemon: ${onlineRunner.name}`
+                            : "All daemons offline"
+                      }
+                    >
+                      <StatusDot status={onlineRunner ? "online" : "offline"} />
+                      <span className="max-w-[180px] truncate font-mono">
+                        {onlineRunner ? onlineRunner.name : "Daemon offline"}
+                      </span>
+                      {onlineRunner &&
+                        selectedProject?.defaultRunnerId === onlineRunner.id && (
+                          <Badge variant="outline" className="h-4 px-1 text-[10px]">
+                            default
+                          </Badge>
+                        )}
                       {usingSharedRunner && (
                         <Badge variant="secondary" className="h-4 px-1 text-[10px]">
                           shared
@@ -641,43 +866,46 @@ export function SessionLauncher({
                     </Button>
                   }
                 />
-                <DropdownMenuContent align="start" className="w-64">
+                <DropdownMenuContent align="start" className="w-68">
                   <DropdownMenuGroup>
-                    <DropdownMenuLabel>Runner</DropdownMenuLabel>
-                    {onlineRunners.map((r) => (
-                      <DropdownMenuItem
-                        key={r.id}
-                        onClick={() => setSelectedRunnerId(r.id)}
-                        className="justify-between gap-2"
-                      >
-                        <div className="flex min-w-0 items-center gap-1.5">
-                          <StatusDot status="online" />
-                          <span className="truncate font-mono text-xs">{r.name}</span>
-                          {!r.isOwn && (
-                            <Badge variant="outline" className="h-4 px-1 text-[10px]">
-                              @{r.ownerLogin}
-                            </Badge>
-                          )}
-                        </div>
-                        {onlineRunner?.id === r.id && <CheckIcon className="size-3.5" />}
-                      </DropdownMenuItem>
-                    ))}
+                    <DropdownMenuLabel>Daemon / Runner</DropdownMenuLabel>
+                    {runners.map((r) => {
+                      const isProjectDefault = selectedProject?.defaultRunnerId === r.id;
+                      const isOnline = r.status === "online";
+                      const isSelected = onlineRunner?.id === r.id;
+                      return (
+                        <DropdownMenuItem
+                          key={r.id}
+                          disabled={!isOnline}
+                          onClick={() =>
+                            setRunnerOverride({
+                              projectId: selectedProject?.id ?? "",
+                              runnerId: r.id,
+                            })
+                          }
+                          className="justify-between gap-2"
+                        >
+                          <div className="flex min-w-0 items-center gap-1.5">
+                            <StatusDot status={r.status} />
+                            <span className="truncate font-mono text-xs">{r.name}</span>
+                            {isProjectDefault && (
+                              <Badge variant="secondary" className="h-4 px-1 text-[10px]">
+                                default
+                              </Badge>
+                            )}
+                            {!r.isOwn && (
+                              <Badge variant="outline" className="h-4 px-1 text-[10px]">
+                                @{r.ownerLogin}
+                              </Badge>
+                            )}
+                          </div>
+                          {isSelected && <CheckIcon className="size-3.5 shrink-0" />}
+                        </DropdownMenuItem>
+                      );
+                    })}
                   </DropdownMenuGroup>
                 </DropdownMenuContent>
               </DropdownMenu>
-            ) : onlineRunner ? (
-              <span
-                className="inline-flex items-center gap-1.5 px-1.5 font-mono text-xs text-muted-foreground"
-                title="Connected local runner"
-              >
-                <StatusDot status="online" />
-                <span className="max-w-[200px] truncate">{onlineRunner.name}</span>
-                {usingSharedRunner && (
-                  <Badge variant="secondary" className="h-4 px-1 text-[10px]">
-                    shared
-                  </Badge>
-                )}
-              </span>
             ) : (
               <Link
                 href="/settings?tab=runners"

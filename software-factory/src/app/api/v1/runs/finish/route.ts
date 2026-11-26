@@ -85,23 +85,11 @@ export async function POST(request: NextRequest) {
   const autoApprove = await getProjectAutoApprove(project.id);
 
   const updated = await prisma.$transaction(async (tx) => {
-    let run = await tx.factoryRun.findUnique({
+    const run = await tx.factoryRun.findUnique({
       where: { projectId_runKey: { projectId: project.id, runKey } },
     });
     if (!run) {
-      run = await tx.factoryRun.create({
-        data: {
-          projectId: project.id,
-          userId: auth.user.id,
-          runKey: runKey.slice(0, 120),
-          title: str(body.title) || runKey,
-          engine: project.engine || "antigravity",
-          status: outcomeRaw,
-          currentPhase: "Verdict",
-          startedAt: now,
-          finishedAt: now,
-        },
-      });
+      return null;
     }
 
     const computedDuration = durationMs ?? Math.max(0, now.getTime() - run.startedAt.getTime());
@@ -281,6 +269,16 @@ export async function POST(request: NextRequest) {
 
     return finalRun;
   });
+
+  if (!updated) {
+    return NextResponse.json(
+      {
+        error:
+          "Run not found. Only sessions and runs created on Software Factory Web can be finished.",
+      },
+      { status: 404 },
+    );
+  }
 
   if (updated.issueId) {
     emitFactoryEvent({

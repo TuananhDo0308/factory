@@ -6,6 +6,7 @@ import { useRouter } from "next/navigation";
 import {
   ActivityIcon,
   AlertCircleIcon,
+  AlertTriangleIcon,
   ArrowDownIcon,
   ArrowLeftIcon,
   ArrowUpIcon,
@@ -24,10 +25,12 @@ import {
   FileTextIcon,
   GitBranchIcon,
   GitPullRequestIcon,
+  LaptopIcon,
   Link2Icon,
   LockIcon,
   MessageSquareIcon,
   PanelRightIcon,
+  PaperclipIcon,
   PauseIcon,
   PlayIcon,
   RotateCcwIcon,
@@ -117,7 +120,23 @@ import {
   toPrototypeViewModel,
   type PrototypeViewModel,
 } from "@/components/factory/prototype-viewer";
-import { useFactoryStream } from "@/components/factory/use-factory-stream";
+import {
+  useFactoryStream,
+  useLiveRunStream,
+} from "@/components/factory/use-factory-stream";
+import {
+  AttachmentPreviewStrip,
+  MessageAttachments,
+  prepareFilesForAttachment,
+  toAttachmentPayload,
+  type PendingAttachment,
+} from "@/components/factory/chat-attachments";
+import {
+  ATTACHMENT_ACCEPT_ATTR,
+  extractStepAttachments,
+  type StoredAttachmentRef,
+} from "@/lib/attachments";
+import type { LiveChunkEvent } from "@/lib/realtime";
 import { effortBarsForModel, formatModelLabel } from "@/lib/models";
 import { isFactoryInitIssue } from "@/lib/init-issue-shared";
 import {
@@ -562,10 +581,12 @@ function UserChatBubble({
   text,
   label = "You",
   timestamp,
+  attachments,
 }: {
   text: string;
   label?: string;
   timestamp: string;
+  attachments?: StoredAttachmentRef[];
 }) {
   const [expanded, setExpanded] = React.useState(false);
   const cleaned = React.useMemo(() => cleanPromptDisplay(text), [text]);
@@ -586,7 +607,7 @@ function UserChatBubble({
           <UserIcon className="size-3 text-muted-foreground" />
         </div>
         <div className="rounded-lg border border-border/80 bg-muted/40 px-3.5 py-2.5 text-sm leading-relaxed text-foreground">
-          <p className="whitespace-pre-wrap">{displayText}</p>
+          {displayText && <p className="whitespace-pre-wrap">{displayText}</p>}
           {isLong && (
             <button
               type="button"
@@ -595,6 +616,9 @@ function UserChatBubble({
             >
               {expanded ? "Collapse prompt" : "Show full prompt"}
             </button>
+          )}
+          {attachments && attachments.length > 0 && (
+            <MessageAttachments attachments={attachments} />
           )}
         </div>
       </div>
@@ -1249,6 +1273,123 @@ export function MissionControl({
     };
   }, [getChatViewport, viewMode]);
 
+  type LiveOverlayState = {
+    streamingTextByStep: Record<
+      string,
+      { agentKey: string; agentName?: string; text: string; model?: string; ts: number }
+    >;
+    activeToolsByStep: Record<
+      string,
+      { agentKey: string; agentName?: string; tool: string; label: string; output?: string; ts: number }
+    >;
+    liveThinking: {
+      stepKey: string;
+      agentKey: string;
+      agentName?: string;
+      text: string;
+      ts: number;
+    } | null;
+    liveActivityByAgent: Record<string, { activity: string; status: string; ts: number }>;
+  };
+
+  const [liveOverlay, setLiveOverlay] = React.useState<LiveOverlayState>({
+    streamingTextByStep: {},
+    activeToolsByStep: {},
+    liveThinking: null,
+    liveActivityByAgent: {},
+  });
+
+  const applyLiveChunks = React.useCallback((chunks: LiveChunkEvent[]) => {
+    if (!chunks || chunks.length === 0) return;
+    setLiveOverlay((prev) => {
+      let nextTexts = prev.streamingTextByStep;
+      let nextTools = prev.activeToolsByStep;
+      let nextThinking = prev.liveThinking;
+      let nextActivities = prev.liveActivityByAgent;
+      let changed = false;
+
+      for (const chunk of chunks) {
+        if (chunk.kind === "text_delta" && chunk.delta) {
+          if (nextTexts === prev.streamingTextByStep) nextTexts = { ...prev.streamingTextByStep };
+          const cur = nextTexts[chunk.stepKey];
+          const combined = `${cur?.text || ""}${chunk.delta}`;
+          nextTexts[chunk.stepKey] = {
+            agentKey: chunk.agentKey,
+            agentName: chunk.agentName ?? cur?.agentName,
+            text: combined.length > 200_000 ? combined.slice(0, 200_000) : combined,
+            model: chunk.model ?? cur?.model,
+            ts: chunk.ts,
+          };
+          changed = true;
+        } else if (chunk.kind === "thinking" && chunk.text) {
+          nextThinking = {
+            stepKey: chunk.stepKey,
+            agentKey: chunk.agentKey,
+            agentName: chunk.agentName,
+            text: chunk.text,
+            ts: chunk.ts,
+          };
+          changed = true;
+        } else if (chunk.kind === "tool_active") {
+          if (nextTools === prev.activeToolsByStep) nextTools = { ...prev.activeToolsByStep };
+          nextTools[chunk.stepKey] = {
+            agentKey: chunk.agentKey,
+            agentName: chunk.agentName,
+            tool: chunk.tool,
+            label: chunk.label,
+            output: nextTools[chunk.stepKey]?.output,
+            ts: chunk.ts,
+          };
+          if (nextActivities === prev.liveActivityByAgent) {
+            nextActivities = { ...prev.liveActivityByAgent };
+          }
+          nextActivities[chunk.agentKey] = {
+            activity: chunk.label,
+            status: "working",
+            ts: chunk.ts,
+          };
+          changed = true;
+        } else if (chunk.kind === "tool_output") {
+          if (nextTools === prev.activeToolsByStep) nextTools = { ...prev.activeToolsByStep };
+          const cur = nextTools[chunk.stepKey];
+          nextTools[chunk.stepKey] = {
+            agentKey: chunk.agentKey,
+            agentName: chunk.agentName ?? cur?.agentName,
+            tool: chunk.tool,
+            label: chunk.label || cur?.label || chunk.tool,
+            output: chunk.output,
+            ts: chunk.ts,
+          };
+          changed = true;
+        } else if (chunk.kind === "tool_done") {
+          if (nextTools[chunk.stepKey]) {
+            if (nextTools === prev.activeToolsByStep) nextTools = { ...prev.activeToolsByStep };
+            delete nextTools[chunk.stepKey];
+            changed = true;
+          }
+        } else if (chunk.kind === "activity") {
+          if (nextActivities === prev.liveActivityByAgent) {
+            nextActivities = { ...prev.liveActivityByAgent };
+          }
+          nextActivities[chunk.agentKey] = {
+            activity: chunk.activity,
+            status: chunk.status,
+            ts: chunk.ts,
+          };
+          changed = true;
+        }
+      }
+
+      if (!changed) return prev;
+      return {
+        streamingTextByStep: nextTexts,
+        activeToolsByStep: nextTools,
+        liveThinking: nextThinking,
+        liveActivityByAgent: nextActivities,
+      };
+    });
+  }, []);
+
   const refreshRun = React.useCallback(async () => {
     try {
       const res = await fetch(`/api/sessions/${run.id}`, { cache: "no-store" });
@@ -1261,17 +1402,72 @@ export function MissionControl({
     }
   }, [run.id]);
 
-  useFactoryStream(() => void refreshRun(), { runId: run.id });
+  const runnerOnlineCount =
+    run.runnerState?.onlineCount ?? (run.runner?.status === "online" ? 1 : 0);
+  const hasLiveStreamActivity = Boolean(
+    liveOverlay.liveThinking ||
+      Object.keys(liveOverlay.activeToolsByStep).length > 0 ||
+      Object.keys(liveOverlay.streamingTextByStep).length > 0,
+  );
+  const isWaitingForDaemon =
+    (run.status === "running" || run.status === "queued") &&
+    !hasLiveStreamActivity &&
+    runnerOnlineCount === 0 &&
+    (Boolean(run.runnerState?.hasPendingCommand) ||
+      run.steps.length <= 1 ||
+      run.agents.some(
+        (a) =>
+          a.status === "waiting_on_you" &&
+          (a.activity || "").toLowerCase().includes("sf daemon"),
+      ));
 
-  const isActive = run.status === "running" || run.status === "queued" || run.status === "awaiting_input";
+  const isActive =
+    !isWaitingForDaemon &&
+    (run.status === "running" || run.status === "queued" || run.status === "awaiting_input");
+
+  const handleFactoryStreamEvent = React.useCallback(
+    (eventType: string, payload: unknown) => {
+      if (eventType === "live:chunk") {
+        const raw =
+          payload && typeof payload === "object"
+            ? (payload as { payload?: { chunks?: LiveChunkEvent[] }; chunks?: LiveChunkEvent[] })
+            : null;
+        const chunks = raw?.payload?.chunks ?? raw?.chunks;
+        if (Array.isArray(chunks) && chunks.length > 0) {
+          applyLiveChunks(chunks);
+        }
+        return;
+      }
+      void refreshRun();
+    },
+    [applyLiveChunks, refreshRun],
+  );
+
+  useFactoryStream(handleFactoryStreamEvent, {
+    runId: run.id,
+    pollIntervalMs: isActive ? 1500 : isWaitingForDaemon ? 3000 : 4000,
+  });
+
+  const liveTransport = useLiveRunStream({
+    runId: run.id,
+    active: isActive,
+    onChunks: applyLiveChunks,
+    onCommit: () => void refreshRun(),
+  });
+
   React.useEffect(() => {
     if (!isActive) return;
     const t = setInterval(() => setNowTick(Date.now()), 1000);
     return () => clearInterval(t);
   }, [isActive]);
 
-  const elapsedMs = run.durationMs ?? Math.max(0, nowTick - new Date(run.startedAt).getTime());
-  const totalTokens = run.inputTokens + run.outputTokens + run.cacheReadTokens;
+  const elapsedMs = isWaitingForDaemon
+    ? (run.durationMs ?? 0)
+    : (run.durationMs ?? Math.max(0, nowTick - new Date(run.startedAt).getTime()));
+  // Active tokens = uncached input + output (matching Antigravity `total_tokens`).
+  // Prompt-cache reads are tracked and shown separately so multi-turn prefix re-reads
+  // don't visually inflate headline token counts by 5x–15x.
+  const activeTokens = run.inputTokens + run.outputTokens;
   const cacheRate =
     run.inputTokens + run.cacheReadTokens > 0
       ? Math.round((run.cacheReadTokens / (run.inputTokens + run.cacheReadTokens)) * 100)
@@ -1288,25 +1484,131 @@ export function MissionControl({
   const pendingInteractions = run.interactions.filter((i) => i.status === "pending");
   const selectedAgent = run.agents.find((a) => a.id === selectedAgentId) ?? null;
 
-  const filteredSteps = selectedAgent
-    ? run.steps.filter((s) => {
-        if (s.runAgentId || s.agentId) {
-          return s.runAgentId === selectedAgent.id || s.agentId === selectedAgent.agentKey;
+  const committedStepMap = React.useMemo(() => {
+    const map = new Map<string, RunDetailData["steps"][number]>();
+    for (const s of run.steps) {
+      map.set(s.step, s);
+    }
+    return map;
+  }, [run.steps]);
+
+  const filteredSteps = React.useMemo(() => {
+    const base = selectedAgent
+      ? run.steps.filter((s) => {
+          if (s.runAgentId || s.agentId) {
+            return s.runAgentId === selectedAgent.id || s.agentId === selectedAgent.agentKey;
+          }
+          return Boolean(selectedAgent.specId && s.spec === selectedAgent.specId);
+        })
+      : run.steps;
+    if (!isActive) return base;
+    return base.map((s) => {
+      if (s.status !== "started") return s;
+      const liveText = liveOverlay.streamingTextByStep[s.step];
+      if (liveText && liveText.text.length > (s.summary?.length ?? 0)) {
+        return { ...s, summary: liveText.text };
+      }
+      const liveTool = liveOverlay.activeToolsByStep[s.step];
+      if (liveTool?.output) {
+        const prevData =
+          s.data && typeof s.data === "object" && !Array.isArray(s.data)
+            ? (s.data as Record<string, unknown>)
+            : {};
+        if (String(prevData.output || "") !== liveTool.output) {
+          return { ...s, data: { ...prevData, output: liveTool.output } };
         }
-        return Boolean(selectedAgent.specId && s.spec === selectedAgent.specId);
+      }
+      return s;
+    });
+  }, [run.steps, selectedAgent, isActive, liveOverlay]);
+
+  const visibleLiveEntries = React.useMemo(() => {
+    if (!isActive) {
+      return {
+        texts: [] as Array<{
+          stepKey: string;
+          agentKey: string;
+          agentName?: string;
+          text: string;
+          model?: string;
+          ts: number;
+        }>,
+        tools: [] as Array<{
+          stepKey: string;
+          agentKey: string;
+          agentName?: string;
+          tool: string;
+          label: string;
+          output?: string;
+          ts: number;
+        }>,
+        thinking: null as LiveOverlayState["liveThinking"],
+      };
+    }
+
+    const matchesSelected = (agentKey: string) =>
+      !selectedAgent || selectedAgent.agentKey === agentKey;
+
+    const texts = Object.entries(liveOverlay.streamingTextByStep)
+      .filter(([stepKey, entry]) => {
+        if (!entry.text.trim() || !matchesSelected(entry.agentKey)) return false;
+        // If DB already has this step (either draft patched above or finalized), don't duplicate
+        return !committedStepMap.has(stepKey);
       })
-    : run.steps;
+      .map(([stepKey, entry]) => ({ stepKey, ...entry }))
+      .sort((a, b) => a.ts - b.ts);
+
+    const tools = Object.entries(liveOverlay.activeToolsByStep)
+      .filter(([stepKey, entry]) => {
+        if (!matchesSelected(entry.agentKey)) return false;
+        const dbStep = committedStepMap.get(stepKey);
+        if (dbStep) return false;
+        return true;
+      })
+      .map(([stepKey, entry]) => ({ stepKey, ...entry }))
+      .sort((a, b) => a.ts - b.ts);
+
+    const thinking =
+      liveOverlay.liveThinking &&
+      matchesSelected(liveOverlay.liveThinking.agentKey) &&
+      !committedStepMap.has(liveOverlay.liveThinking.stepKey)
+        ? liveOverlay.liveThinking
+        : null;
+
+    return { texts, tools, thinking };
+  }, [isActive, selectedAgent, liveOverlay, committedStepMap]);
+
+  const liveOverlaySig =
+    visibleLiveEntries.texts.map((t) => `${t.stepKey}:${t.text.length}`).join("|") +
+    "#" +
+    visibleLiveEntries.tools.map((t) => `${t.stepKey}:${t.output?.length ?? 0}`).join("|") +
+    "#" +
+    (visibleLiveEntries.thinking?.text.length ?? 0);
 
   const lastStepSig = filteredSteps.at(-1)
     ? `${filteredSteps.at(-1)!.id}:${filteredSteps.at(-1)!.summary?.length ?? 0}`
     : "";
-  const workingActivity = run.agents.find((a) => a.status === "working")?.activity ?? "";
+  const workingActivity =
+    (selectedAgent
+      ? liveOverlay.liveActivityByAgent[selectedAgent.agentKey]?.activity
+      : liveOverlay.liveActivityByAgent["orchestrator"]?.activity) ||
+    run.agents.find((a) => a.status === "working")?.activity ||
+    "";
 
   React.useEffect(() => {
     if (viewMode === "chat") {
       scrollChatToBottom(false);
     }
-  }, [filteredSteps.length, lastStepSig, workingActivity, run.status, selectedAgentId, viewMode, scrollChatToBottom]);
+  }, [
+    filteredSteps.length,
+    lastStepSig,
+    liveOverlaySig,
+    workingActivity,
+    run.status,
+    selectedAgentId,
+    viewMode,
+    scrollChatToBottom,
+  ]);
 
   // Ticket status map & resolved inspected issue for Right Pane
   const ticketStatusByKey = React.useMemo(() => {
@@ -1503,9 +1805,35 @@ export function MissionControl({
     (a) => a.status !== "waiting_on_you" && a.status !== "working",
   );
 
+  const [steerAttachments, setSteerAttachments] = React.useState<PendingAttachment[]>([]);
+  const [steerDragOver, setSteerDragOver] = React.useState(false);
+  const steerFileInputRef = React.useRef<HTMLInputElement | null>(null);
+
+  const initialPromptAttachments = React.useMemo(() => {
+    const createdStep = run.steps.find((s) => s.step === "session-created");
+    return extractStepAttachments(createdStep?.data);
+  }, [run.steps]);
+
+  async function handleAddSteerFiles(files: FileList | File[]) {
+    const { added, errors } = await prepareFilesForAttachment(files, steerAttachments);
+    for (const err of errors) toast.error(err);
+    if (added.length > 0) {
+      setSteerAttachments((prev) => [...prev, ...added]);
+    }
+  }
+
   async function handleSteerSubmit(e?: React.FormEvent) {
     e?.preventDefault();
-    if (!steerMessage.trim()) return;
+    if (!steerMessage.trim() && steerAttachments.length === 0) return;
+    if (runnerOnlineCount === 0) {
+      toast.error("No local daemon connected — start `sf daemon` on your machine first.", {
+        action: {
+          label: "Connect",
+          onClick: () => router.push("/settings?tab=runners"),
+        },
+      });
+      return;
+    }
     setBusy(true);
     try {
       const res = await fetch(`/api/sessions/${run.id}/steer`, {
@@ -1513,14 +1841,29 @@ export function MissionControl({
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
           message: steerMessage.trim(),
+          attachments:
+            steerAttachments.length > 0 ? toAttachmentPayload(steerAttachments) : undefined,
           agentKey: selectedAgent?.agentKey,
         }),
       });
       if (!res.ok) {
-        toast.error("Failed to send instruction");
+        const errData = (await res.json().catch(() => null)) as {
+          error?: string;
+          code?: string;
+        } | null;
+        toast.error(errData?.error || "Failed to send instruction", {
+          action:
+            errData?.code === "NO_RUNNER_ONLINE" || res.status === 503
+              ? {
+                  label: "Connect",
+                  onClick: () => router.push("/settings?tab=runners"),
+                }
+              : undefined,
+        });
         return;
       }
       setSteerMessage("");
+      setSteerAttachments([]);
       toast.success("Steer instruction dispatched");
       await refreshRun();
       scrollChatToBottom(true);
@@ -1543,7 +1886,8 @@ export function MissionControl({
         }),
       });
       if (!res.ok) {
-        toast.error("Failed to send answers");
+        const errData = (await res.json().catch(() => null)) as { error?: string } | null;
+        toast.error(errData?.error || "Failed to send answers");
         return;
       }
       toast.success("Answers sent — resuming session");
@@ -1571,7 +1915,8 @@ export function MissionControl({
         }),
       });
       if (!res.ok) {
-        toast.error("Failed to submit response");
+        const errData = (await res.json().catch(() => null)) as { error?: string } | null;
+        toast.error(errData?.error || "Failed to submit response");
         return;
       }
       setAnswerDrafts((prev) => ({ ...prev, [interactionId]: "" }));
@@ -1598,6 +1943,47 @@ export function MissionControl({
       if (res.ok) {
         toast.success(pausing ? "Run paused" : "Run resumed");
         await refreshRun();
+      } else {
+        const errData = (await res.json().catch(() => null)) as { error?: string } | null;
+        toast.error(errData?.error || (pausing ? "Could not pause run" : "Could not resume run"));
+      }
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function handleCancelSession() {
+    setBusy(true);
+    try {
+      const res = await fetch(`/api/sessions/${run.id}`, {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ status: "cancelled" }),
+      });
+      if (res.ok) {
+        toast.success("Session cancelled");
+        await refreshRun();
+        router.refresh();
+      } else {
+        const errData = (await res.json().catch(() => null)) as { error?: string } | null;
+        toast.error(errData?.error || "Could not cancel session");
+      }
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function handleDeleteSession() {
+    setBusy(true);
+    try {
+      const res = await fetch(`/api/sessions/${run.id}`, { method: "DELETE" });
+      if (res.ok) {
+        toast.success("Session deleted");
+        router.push(`/projects/${run.project.id}`);
+        router.refresh();
+      } else {
+        const errData = (await res.json().catch(() => null)) as { error?: string } | null;
+        toast.error(errData?.error || "Could not delete session");
       }
     } finally {
       setBusy(false);
@@ -1754,7 +2140,19 @@ export function MissionControl({
         await refreshRun();
         router.refresh();
       } else {
-        toast.error("Retry failed");
+        const errData = (await res.json().catch(() => null)) as {
+          error?: string;
+          code?: string;
+        } | null;
+        toast.error(errData?.error || "Retry failed", {
+          action:
+            errData?.code === "NO_RUNNER_ONLINE" || res.status === 503
+              ? {
+                  label: "Connect",
+                  onClick: () => router.push("/settings?tab=runners"),
+                }
+              : undefined,
+        });
       }
     } finally {
       setBusy(false);
@@ -1779,26 +2177,101 @@ export function MissionControl({
   const steerComposer = (
     <form onSubmit={handleSteerSubmit} className="border-t bg-background px-5 py-3">
       <div className="mx-auto w-full max-w-3xl">
-        <InputGroup className="rounded-lg bg-card">
+        <InputGroup
+          onDragOver={(e) => {
+            e.preventDefault();
+            if (!steerDragOver) setSteerDragOver(true);
+          }}
+          onDragLeave={() => setSteerDragOver(false)}
+          onDrop={(e) => {
+            e.preventDefault();
+            setSteerDragOver(false);
+            if (e.dataTransfer?.files && e.dataTransfer.files.length > 0) {
+              void handleAddSteerFiles(e.dataTransfer.files);
+            }
+          }}
+          className={`rounded-lg bg-card transition-colors ${
+            steerDragOver ? "border-primary ring-2 ring-primary/30" : ""
+          }`}
+        >
+          <input
+            ref={steerFileInputRef}
+            type="file"
+            multiple
+            accept={ATTACHMENT_ACCEPT_ATTR}
+            className="hidden"
+            onChange={(e) => {
+              if (e.target.files && e.target.files.length > 0) {
+                void handleAddSteerFiles(e.target.files);
+              }
+              e.target.value = "";
+            }}
+          />
+          {steerAttachments.length > 0 && (
+            <div className="w-full px-3 pt-2.5">
+              <AttachmentPreviewStrip
+                attachments={steerAttachments}
+                onRemove={(id) =>
+                  setSteerAttachments((prev) => prev.filter((a) => a.id !== id))
+                }
+              />
+            </div>
+          )}
           <InputGroupTextarea
             rows={2}
             value={steerMessage}
             onChange={(e) => setSteerMessage(e.target.value)}
-            onKeyDown={(e) => {
-              if ((e.metaKey || e.ctrlKey) && e.key === "Enter" && steerMessage.trim() && !busy) {
+            onPaste={(e) => {
+              const files = e.clipboardData?.files;
+              if (files && files.length > 0) {
                 e.preventDefault();
-                void handleSteerSubmit();
+                void handleAddSteerFiles(files);
+              }
+            }}
+            onKeyDown={(e) => {
+              if (e.nativeEvent.isComposing || e.keyCode === 229) return;
+              if (e.key === "Enter") {
+                if (e.metaKey || e.ctrlKey) {
+                  e.preventDefault();
+                  const el = e.currentTarget;
+                  const start = el.selectionStart ?? steerMessage.length;
+                  const end = el.selectionEnd ?? steerMessage.length;
+                  const next = `${steerMessage.slice(0, start)}\n${steerMessage.slice(end)}`;
+                  setSteerMessage(next);
+                  requestAnimationFrame(() => {
+                    el.setSelectionRange(start + 1, start + 1);
+                  });
+                  return;
+                }
+                if (e.shiftKey || e.altKey) {
+                  return;
+                }
+                e.preventDefault();
+                if ((steerMessage.trim() || steerAttachments.length > 0) && !busy) {
+                  void handleSteerSubmit();
+                }
               }
             }}
             placeholder={
               selectedAgent
-                ? `Message ${selectedAgent.name}...`
-                : "Message the orchestrator to adjust scope or unblock a worker..."
+                ? `Message ${selectedAgent.name} (paste/drop images or files)...`
+                : "Message the orchestrator, or paste/drop images & files..."
             }
             className="min-h-12 px-3 pt-2.5 text-sm"
           />
           <InputGroupAddon align="block-end" className="justify-between gap-2 px-2.5 pb-2">
             <div className="flex min-w-0 items-center gap-2 font-mono text-xs text-muted-foreground">
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon-xs"
+                disabled={busy}
+                onClick={() => steerFileInputRef.current?.click()}
+                title="Attach images (PNG, JPG, WEBP, GIF, AVIF, BMP, SVG) or files (PDF, MD, JSON, CSV, code)"
+                aria-label="Attach images or files"
+              >
+                <PaperclipIcon />
+              </Button>
               <span
                 className="inline-flex shrink-0 items-center gap-1 rounded bg-muted px-1.5 py-0.5 text-[11px] font-medium text-foreground"
                 title={sessionSkill?.description || `Active skill: ${activeSkillDisplay}`}
@@ -1806,22 +2279,45 @@ export function MissionControl({
                 {sessionSkill?.slash || `/${run.mode}`}
               </span>
               <span className="truncate">{formatModelLabel(run.model)}</span>
+              {runnerOnlineCount === 0 && (
+                <Link
+                  href="/settings?tab=runners"
+                  className="inline-flex shrink-0 items-center gap-1 rounded border border-warning/35 bg-warning/10 px-1.5 py-0.5 text-[10px] font-medium text-warning transition-colors hover:bg-warning/15"
+                  title="No local sf daemon connected"
+                >
+                  <AlertTriangleIcon className="size-3" />
+                  <span>Daemon offline</span>
+                </Link>
+              )}
               {run.humanInterventions > 0 && (
                 <span className="shrink-0">· {run.humanInterventions} steer</span>
               )}
             </div>
             <div className="flex shrink-0 items-center gap-1.5">
-              {(run.status === "running" || run.status === "queued") && (
+              {isWaitingForDaemon ? (
                 <Button
                   type="button"
                   variant="outline"
                   size="sm"
                   disabled={busy}
-                  onClick={() => void handleTogglePause()}
+                  onClick={() => void handleCancelSession()}
                 >
-                  <PauseIcon data-icon="inline-start" />
-                  Pause
+                  <XCircleIcon data-icon="inline-start" />
+                  Cancel
                 </Button>
+              ) : (
+                (run.status === "running" || run.status === "queued") && (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    disabled={busy}
+                    onClick={() => void handleTogglePause()}
+                  >
+                    <PauseIcon data-icon="inline-start" />
+                    Pause
+                  </Button>
+                )
               )}
               {run.status === "awaiting_input" && (
                 <Button
@@ -1849,8 +2345,14 @@ export function MissionControl({
               )}
               <Button
                 type="submit"
+                variant={runnerOnlineCount === 0 ? "secondary" : "default"}
                 size="icon-sm"
-                disabled={busy || !steerMessage.trim()}
+                disabled={busy || (!steerMessage.trim() && steerAttachments.length === 0)}
+                title={
+                  runnerOnlineCount === 0
+                    ? "Connect sf daemon before sending"
+                    : "Send (Enter · Shift/⌘/Ctrl+Enter for new line)"
+                }
               >
                 {busy ? <Spinner /> : <ArrowUpIcon />}
               </Button>
@@ -1910,9 +2412,11 @@ export function MissionControl({
               {!(run.mode === "factory" && viewMode === "pipeline") && (
                 <>
                   <span>·</span>
-                  <span className="inline-flex items-center gap-1.5 capitalize text-foreground/85">
-                    <StatusDot status={run.status} />
-                    <span>{run.status.replace("_", " ")}</span>
+                  <span className="inline-flex items-center gap-1.5 text-foreground/85">
+                    <StatusDot status={isWaitingForDaemon ? "waiting_on_you" : run.status} />
+                    <span className={isWaitingForDaemon ? "text-warning" : "capitalize"}>
+                      {isWaitingForDaemon ? "Waiting for daemon" : run.status.replace("_", " ")}
+                    </span>
                   </span>
                 </>
               )}
@@ -1929,14 +2433,26 @@ export function MissionControl({
 
           {/* Right Controls (KPIs omitted in Factory Live mode since the dashboard band shows them) */}
           <div className="flex flex-wrap items-center gap-3">
+            {isActive && (liveTransport === "ably" || liveTransport === "supabase") && (
+              <span
+                className="inline-flex items-center gap-1.5 rounded-full border border-primary/30 bg-primary/10 px-2 py-0.5 font-mono text-[10px] font-medium text-primary"
+                title={`Real-time token & log streaming via ${liveTransport === "ably" ? "Ably Realtime" : "Supabase Broadcast"}`}
+              >
+                <span className="size-1.5 animate-pulse rounded-full bg-primary" />
+                Live
+              </span>
+            )}
             {!(run.mode === "factory" && viewMode === "pipeline") && (
               <div
                 className="hidden items-center gap-2 font-mono text-xs text-muted-foreground tabular-nums md:flex"
-                title={`Input: ${run.inputTokens.toLocaleString()} · Cached: ${run.cacheReadTokens.toLocaleString()} (${cacheRate}% cache hit) · Output: ${run.outputTokens.toLocaleString()}${run.engine === "antigravity" ? " · Cost is API-equivalent estimate" : ""}`}
+                title={`Active: ${activeTokens.toLocaleString()} (Input: ${run.inputTokens.toLocaleString()} · Output: ${run.outputTokens.toLocaleString()}) · Cached reads: ${run.cacheReadTokens.toLocaleString()} (${cacheRate}% cache hit)${run.engine === "antigravity" ? " · Cost is API-equivalent estimate" : ""}`}
               >
                 <span className="text-foreground">{formatClockDuration(elapsedMs)}</span>
                 <span>·</span>
-                <span>{formatCompactTokens(totalTokens)}</span>
+                <span>
+                  {formatCompactTokens(activeTokens)}
+                  {cacheRate > 0 ? ` (${cacheRate}% cache)` : ""}
+                </span>
                 <span>·</span>
                 <span className="text-foreground">
                   {run.engine === "antigravity" && run.costUsd > 0 ? "~" : ""}
@@ -2048,6 +2564,7 @@ export function MissionControl({
 
         {/* Slim live progress strip — only while actively running in Chat mode */}
         {!(run.mode === "factory" && viewMode === "pipeline") &&
+          !isWaitingForDaemon &&
           (run.status === "running" || run.status === "queued") && (
             <div className="mt-2 flex items-center gap-3">
               <span className="text-xs text-muted-foreground">{run.currentPhase}</span>
@@ -2181,11 +2698,12 @@ export function MissionControl({
                       className="mx-auto flex w-full max-w-3xl flex-col gap-5 px-6 py-5"
                     >
                       {/* Original Prompt Bubble (Right-aligned — User side) */}
-                      {run.prompt && (
+                      {(run.prompt || initialPromptAttachments.length > 0) && (
                         <UserChatBubble
-                          text={run.prompt}
+                          text={run.prompt || ""}
                           label="You"
                           timestamp={run.startedAt}
+                          attachments={initialPromptAttachments}
                         />
                       )}
 
@@ -2286,6 +2804,7 @@ export function MissionControl({
                                         text={step.summary || step.label || ""}
                                         label={step.label || "You"}
                                         timestamp={step.createdAt}
+                                        attachments={extractStepAttachments(step.data)}
                                       />
                                     );
                                   }
@@ -2347,25 +2866,169 @@ export function MissionControl({
                           })()
                         )}
 
-                        {(run.status === "running" || run.status === "queued") && (
-                          <div className="flex w-full justify-start">
-                            <Trace>
-                              <TraceLine status="running">
-                                <TraceIcon>
-                                  <Spinner />
-                                </TraceIcon>
-                                <TraceTitle>
-                                  {(selectedAgent?.status === "working"
-                                    ? selectedAgent.activity
-                                    : null) ||
-                                    workingAgents.find((a) => a.agentKey !== "orchestrator")
-                                      ?.activity ||
-                                    workingAgents[0]?.activity ||
-                                    "Agent is working..."}
-                                </TraceTitle>
-                              </TraceLine>
-                            </Trace>
+                        {/* Real-time Ephemeral Live Overlay (zero-latency thinking, running tool output, and streaming text) */}
+                        {isActive &&
+                          (visibleLiveEntries.thinking ||
+                            visibleLiveEntries.tools.length > 0 ||
+                            visibleLiveEntries.texts.length > 0) && (
+                            <div className="flex flex-col gap-3">
+                              {visibleLiveEntries.thinking && (
+                                <div className="rounded-lg border border-border/70 bg-muted/35 px-3.5 py-2.5 text-xs">
+                                  <div className="mb-1 flex items-center gap-2 font-mono text-[11px] text-muted-foreground">
+                                    <Spinner className="size-3" />
+                                    <span className="shimmer font-medium">
+                                      {visibleLiveEntries.thinking.agentName
+                                        ? `${visibleLiveEntries.thinking.agentName} · Thinking`
+                                        : "Thinking"}
+                                    </span>
+                                  </div>
+                                  <p className="max-h-36 overflow-y-auto whitespace-pre-wrap font-mono text-[11px] leading-relaxed text-muted-foreground/90">
+                                    {visibleLiveEntries.thinking.text}
+                                  </p>
+                                </div>
+                              )}
+
+                              {visibleLiveEntries.tools.map((t) => (
+                                <div
+                                  key={t.stepKey}
+                                  className="rounded-lg border border-primary/25 bg-card px-3.5 py-2.5 text-xs"
+                                >
+                                  <div className="flex items-center justify-between gap-2">
+                                    <div className="flex min-w-0 items-center gap-2">
+                                      <Spinner className="size-3 shrink-0 text-primary" />
+                                      <span className="truncate font-mono text-xs font-medium text-foreground">
+                                        {t.label}
+                                      </span>
+                                    </div>
+                                    {t.agentName && t.agentKey !== "orchestrator" && (
+                                      <Badge variant="outline" className="shrink-0 font-mono text-[10px]">
+                                        {t.agentName}
+                                      </Badge>
+                                    )}
+                                  </div>
+                                  {t.output && (
+                                    <pre className="mt-2 max-h-48 overflow-auto rounded-md bg-muted/60 p-2.5 font-mono text-[11px] leading-relaxed text-foreground/90">
+                                      {t.output}
+                                    </pre>
+                                  )}
+                                </div>
+                              ))}
+
+                              {visibleLiveEntries.texts.map((entry) => (
+                                <div key={entry.stepKey} className="flex flex-col gap-1.5">
+                                  <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                                    <span className="size-1.5 animate-pulse rounded-full bg-primary" />
+                                    <span className="font-medium text-foreground">
+                                      {entry.agentName || "Assistant"}
+                                    </span>
+                                    {entry.model && (
+                                      <span className="font-mono text-[11px]">
+                                        {formatModelLabel(entry.model)}
+                                      </span>
+                                    )}
+                                  </div>
+                                  <div className="pl-3.5">
+                                    <MarkdownContent
+                                      content={entry.text}
+                                      className="text-sm leading-relaxed text-foreground"
+                                    />
+                                  </div>
+                                </div>
+                              ))}
+                            </div>
+                          )}
+
+                        {isWaitingForDaemon ? (
+                          <div className="rounded-lg border border-warning/35 bg-warning/[0.06] px-4 py-3">
+                            <div className="flex flex-wrap items-start justify-between gap-3">
+                              <div className="flex min-w-0 items-start gap-2.5">
+                                <LaptopIcon className="mt-0.5 size-4 shrink-0 text-warning" />
+                                <div className="min-w-0 space-y-1">
+                                  <div className="text-xs font-semibold text-foreground">
+                                    No local daemon connected
+                                  </div>
+                                  <p className="text-xs leading-relaxed text-muted-foreground">
+                                    This session is queued but cannot execute until{" "}
+                                    <code className="rounded bg-muted px-1 py-0.5 font-mono text-[11px] text-foreground">
+                                      sf daemon
+                                    </code>{" "}
+                                    is running on your machine. Start the daemon to resume
+                                    automatically, or cancel/delete this session.
+                                  </p>
+                                </div>
+                              </div>
+                              <div className="flex shrink-0 flex-wrap items-center gap-1.5">
+                                <Button
+                                  type="button"
+                                  variant="outline"
+                                  size="xs"
+                                  onClick={() => {
+                                    void navigator.clipboard?.writeText("sf daemon");
+                                    toast.success("Copied `sf daemon`");
+                                  }}
+                                >
+                                  <CopyIcon data-icon="inline-start" />
+                                  Copy command
+                                </Button>
+                                <Button
+                                  size="xs"
+                                  nativeButton={false}
+                                  render={<Link href="/settings?tab=runners" />}
+                                >
+                                  Connect Runner
+                                </Button>
+                                <Button
+                                  type="button"
+                                  variant="outline"
+                                  size="xs"
+                                  disabled={busy}
+                                  onClick={() => void handleCancelSession()}
+                                >
+                                  <XCircleIcon data-icon="inline-start" />
+                                  Cancel
+                                </Button>
+                                <Button
+                                  type="button"
+                                  variant="ghost"
+                                  size="xs"
+                                  disabled={busy}
+                                  className="text-destructive hover:bg-destructive/10 hover:text-destructive"
+                                  onClick={() => void handleDeleteSession()}
+                                >
+                                  <Trash2Icon data-icon="inline-start" />
+                                  Delete
+                                </Button>
+                              </div>
+                            </div>
                           </div>
+                        ) : (
+                          (run.status === "running" || run.status === "queued") && (
+                            <div className="flex w-full justify-start">
+                              <Trace>
+                                <TraceLine status="running">
+                                  <TraceIcon>
+                                    <Spinner />
+                                  </TraceIcon>
+                                  <TraceTitle>
+                                    {(selectedAgent
+                                      ? liveOverlay.liveActivityByAgent[selectedAgent.agentKey]
+                                          ?.activity
+                                      : liveOverlay.liveActivityByAgent["orchestrator"]
+                                          ?.activity) ||
+                                      (selectedAgent?.status === "working"
+                                        ? selectedAgent.activity
+                                        : null) ||
+                                      workingAgents.find((a) => a.agentKey !== "orchestrator")
+                                        ?.activity ||
+                                      workingAgents[0]?.activity ||
+                                      (run.status === "queued"
+                                        ? "Queued for local daemon..."
+                                        : "Agent is working...")}
+                                  </TraceTitle>
+                                </TraceLine>
+                              </Trace>
+                            </div>
+                          )
                         )}
 
                         {/* Blocked / Failure / Stalled Banner — compact inline alert */}

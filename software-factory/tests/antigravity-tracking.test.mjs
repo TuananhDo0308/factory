@@ -6,6 +6,7 @@ import { describe, it } from "node:test";
 import {
   computeAgyResultTokenDelta,
   copyUncommittedFactoryArtifacts,
+  estimateCostUsd,
   readLocalPlanForSync,
   readPerRunStateFile,
 } from "../cli/sf.ts";
@@ -80,6 +81,17 @@ describe("Antigravity multi-turn token accounting", () => {
       outputTokens: 7_200,
       cacheReadTokens: 12_500,
     });
+  });
+
+  it("prices Antigravity model tiers accurately including discounted cache reads", () => {
+    // 100k input + 20k output + 1M cached reads on hydrogen vs neon vs default
+    const hydrogenCost = estimateCostUsd("antigravity", "gemini-4-hydrogen-low", 100_000, 20_000, 1_000_000);
+    const neonCost = estimateCostUsd("antigravity", "gemini-4-neon-high", 100_000, 20_000, 1_000_000);
+    // hydrogen: 0.1*0.35 + 0.02*1.4 + 1*0.04 = 0.035 + 0.028 + 0.04 = 0.103
+    assert.equal(hydrogenCost, 0.103);
+    // neon: 0.1*3.5 + 0.02*14 + 1*0.35 = 0.35 + 0.28 + 0.35 = 0.98
+    assert.equal(neonCost, 0.98);
+    assert.ok(hydrogenCost < neonCost);
   });
 });
 

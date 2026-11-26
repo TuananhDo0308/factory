@@ -10,7 +10,7 @@ export const SESSION_MAX_AGE_SECONDS = 30 * 24 * 60 * 60;
 export const STATE_MAX_AGE_SECONDS = 600;
 
 export function isLocalAutoAuthEnabled(): boolean {
-  return process.env.SF_REQUIRE_OAUTH !== "true";
+  return false;
 }
 
 export function getCookieBase() {
@@ -75,18 +75,6 @@ export async function getCurrentSession() {
     if (session) {
       await prisma.session.delete({ where: { id: sessionId } }).catch(() => {});
     }
-  }
-
-  // Local Single-User Mode fallback for zero-friction localhost workflows.
-  const explicitlySignedOut = cookieStore.get(SIGNED_OUT_COOKIE)?.value === "1";
-  if (isLocalAutoAuthEnabled() && !explicitlySignedOut) {
-    const user = await ensureLocalOperatorUser();
-    return {
-      sessionId: "local-session",
-      user,
-      githubAccessToken: null,
-      isLocalMode: true,
-    };
   }
 
   return null;
