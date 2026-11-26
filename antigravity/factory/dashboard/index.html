@@ -1,0 +1,595 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Factory Dashboard</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Be+Vietnam+Pro:wght@400;500;600&family=Bricolage+Grotesque:wght@700;800&family=JetBrains+Mono:wght@500&display=swap">
+<style>
+/* Layout: four hash-routed views under one thick-ruled header; flat pastel blocks with hard ink borders and offset shadows, one hue per phase. */
+:root {
+  --bg: #FFFFFF; --ink: #1A1A1A; --muted: #555555;
+  --on-fill: #1A1A1A; --chip: #FFFFFF;
+  --spec: #8FB8FF; --build: #FFC94D; --check: #7FE3C4; --review: #D3A8FF; --repair: #FF9F80; --result: #B6EE7A;
+  --mark: #FFE14D; --hot: #FF7A59;
+  --display: 'Bricolage Grotesque', system-ui, sans-serif;
+  --body: 'Be Vietnam Pro', system-ui, sans-serif;
+  --mono: 'JetBrains Mono', ui-monospace, monospace;
+}
+/* Single light look by choice: the canvas this page comes from is white in every theme. */
+
+html, body { height: 100%; margin: 0 }
+/* Views are switched with the hidden attribute; without this, any rule that sets display would show them all. */
+[hidden] { display: none !important }
+body { background: var(--bg); color: var(--ink); font-family: var(--body); font-size: 16px; line-height: 1.4 }
+* { box-sizing: border-box }
+a { color: inherit }
+button { font: inherit }
+:focus-visible { outline: 3px solid var(--hot); outline-offset: 2px }
+h1, h2, h3, p, ul, dl, dd { margin: 0 }
+ul { padding: 0; list-style: none }
+h1, h2, h3 { font-family: var(--display); font-weight: 800; letter-spacing: -0.02em; line-height: 1.1; text-wrap: balance }
+
+.wrap { padding-left: max(clamp(16px, 3vw, 40px), env(safe-area-inset-left, 0px)); padding-right: max(clamp(16px, 3vw, 40px), env(safe-area-inset-right, 0px)) }
+.page { min-height: 100%; display: flex; flex-direction: column }
+.top { border-bottom: 3px solid var(--ink) }
+.top .wrap { min-height: 68px; display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 24px }
+.brand { display: flex; align-items: center; min-height: 44px; text-decoration: none; font-family: var(--display); font-weight: 800; font-size: 26px; letter-spacing: -0.02em }
+.nav { display: flex; flex-wrap: wrap; gap: 6px; font-weight: 600 }
+.nav a { display: flex; align-items: center; min-height: 44px; padding: 0 16px; border-radius: 999px; text-decoration: none }
+.nav a[aria-current="page"] { background: var(--ink); color: var(--bg) }
+.foot { margin-top: auto; border-top: 3px solid var(--ink) }
+.foot .wrap { padding-block: 8px; display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 24px; font-size: 14px }
+.foot a { display: inline-flex; align-items: center; min-height: 44px }
+
+.view { padding-block: 32px 64px; display: flex; flex-direction: column; gap: 40px }
+.h-page { font-size: clamp(2.5rem, 5vw, 4rem); line-height: 1; letter-spacing: -0.03em }
+.h-sec { font-size: 2rem }
+.sec { display: flex; flex-direction: column; gap: 18px }
+.mono { font-family: var(--mono); font-weight: 500 }
+.pill { padding: 1px 10px; border-radius: 999px; border: 2px solid currentColor; font-size: 12px; font-weight: 600; white-space: nowrap }
+.note { color: var(--muted); font-size: 14px; max-width: 70ch }
+
+/* Filled blocks keep dark text on a light fill. */
+.fill { color: var(--on-fill); border: 3px solid var(--ink); border-radius: 20px; box-shadow: 6px 6px 0 var(--ink) }
+.fill .pill { border-color: var(--on-fill) }
+.pill.white { background: var(--chip); color: var(--on-fill) }
+.pill.solid { background: var(--on-fill); color: var(--chip); border-color: var(--on-fill) }
+.f-spec { background: var(--spec) } .f-build { background: var(--build) } .f-check { background: var(--check) }
+.f-review { background: var(--review) } .f-repair { background: var(--repair) } .f-result { background: var(--result) }
+.f-plain { background: var(--chip) }
+
+/* Overview */
+.hero { display: flex; flex-wrap: wrap; align-items: center; gap: 48px; padding-block: 32px 8px }
+.hero-text { flex: 1 1 480px; min-width: 0; display: flex; flex-direction: column; align-items: flex-start; gap: 24px }
+.hero h1 { font-size: clamp(2.75rem, 6.5vw, 6rem); line-height: 0.98; letter-spacing: -0.03em }
+.hero h1 span { padding: 0 0.12em; border-radius: 14px; background: var(--mark); color: var(--on-fill) }
+.hero p { max-width: 32rem; font-size: 1.25rem }
+.tag { padding: 4px 14px; border-radius: 999px; border: 2px solid var(--ink); font-size: 14px; font-weight: 600 }
+.cta { display: flex; flex-wrap: wrap; gap: 14px }
+.btn { display: inline-flex; align-items: center; gap: 8px; min-height: 52px; padding: 0 24px; border-radius: 999px; border: 3px solid var(--ink); font-weight: 600; text-decoration: none }
+.btn.primary { background: var(--ink); color: var(--bg) }
+.btn.ghost { background: var(--bg); box-shadow: 4px 4px 0 var(--ink) }
+.demo { flex: 1 1 420px; min-width: 0; display: flex; flex-direction: column; gap: 12px; padding: 20px; background: var(--chip); border-radius: 24px; box-shadow: 8px 8px 0 var(--ink) }
+.cmd { padding: 10px 14px; border-radius: 12px; background: var(--on-fill); color: var(--chip); font-size: 14px; overflow-wrap: anywhere }
+.cmd b { color: var(--mark); font-weight: 500 }
+.row { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 4px 12px; padding: 10px 14px; border-radius: 12px; border: 2px solid var(--on-fill); color: var(--on-fill) }
+.row b { font-family: var(--display); font-weight: 800; font-size: 1.25rem }
+.row span { font-size: 14px; font-weight: 500 }
+.grid-3 { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(250px, 100%), 1fr)); gap: 18px }
+.card { display: flex; flex-direction: column; align-items: flex-start; gap: 10px; padding: 20px }
+.card h2, .card h3 { font-size: 1.5rem }
+
+/* Factory */
+.flow { display: flex; flex-wrap: wrap; align-items: stretch; gap: 12px }
+.flow svg { flex: 0 0 auto; align-self: center }
+.end { flex: 1 1 150px; min-width: 0; display: flex; flex-direction: column; align-items: flex-start; gap: 6px; padding: 16px; box-shadow: none }
+.end b, .step b { font-family: var(--display); font-weight: 800; font-size: 1.5rem; line-height: 1.1 }
+.end b { margin-top: auto }
+.end span:last-child, .step span:last-child { font-size: 14px }
+.script { flex: 999 1 560px; min-width: 0; display: flex; flex-direction: column; align-items: flex-start; gap: 12px; padding: 16px 20px 20px 16px; border: 3px dashed var(--ink); border-radius: 24px }
+.script > .mono { padding: 2px 12px; border-radius: 999px; background: var(--ink); color: var(--bg); font-size: 13px }
+.steps { align-self: stretch; display: flex; flex-wrap: wrap; align-items: stretch; gap: 12px }
+.step { flex: 1 1 130px; min-width: 0; display: flex; flex-direction: column; gap: 4px; padding: 14px; border-radius: 16px; box-shadow: 4px 4px 0 var(--ink) }
+.step i { font-style: normal; font-family: var(--display); font-weight: 800; font-size: 2.75rem; line-height: 1 }
+.step.dashed { border-style: dashed; box-shadow: none }
+.roles { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(230px, 100%), 1fr)); gap: 18px }
+.role { gap: 12px; padding: 18px }
+.role p { font-size: 15px }
+.role .pill:last-child { margin-top: auto; font-size: 13px; padding: 2px 12px }
+.rules { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(300px, 100%), 1fr)); gap: 12px }
+.rules li { display: flex; flex-direction: column; gap: 4px; padding: 12px 16px; border: 2px solid var(--ink); border-radius: 14px }
+.rules .mono { font-size: 13px }
+
+/* Progress */
+.bar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 16px 40px }
+.picker { display: flex; flex-wrap: wrap; gap: 12px }
+.pick { display: flex; align-items: center; gap: 10px; min-height: 48px; padding: 6px 18px; text-align: left; cursor: pointer; color: var(--ink); background: var(--bg); border: 3px solid var(--ink); border-radius: 999px }
+.pick[aria-pressed="true"] { background: var(--mark); color: var(--on-fill); box-shadow: 4px 4px 0 var(--ink) }
+.pick b { font-weight: 600 }
+.pick small { font-size: 13px }
+.dot { flex: 0 0 auto; width: 14px; height: 14px; border-radius: 999px; border: 2px solid currentColor; background: transparent }
+.dot.ok { background: currentColor } .dot.run, .dot.fail { background: var(--hot) }
+.cols { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(210px, 100%), 1fr)); gap: 18px; align-items: start }
+.col { min-width: 0; display: flex; flex-direction: column; gap: 12px; padding: 14px }
+.col-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 6px }
+.col h2 { font-size: 1.625rem }
+.items { display: flex; flex-direction: column; gap: 8px }
+.item { display: flex; flex-direction: column; gap: 4px; padding: 10px 12px; border-radius: 12px; border: 2px dashed var(--on-fill); font-size: 14px; overflow-wrap: anywhere }
+.item.ok, .item.run { border-style: solid; background: var(--chip) }
+.item.fail { border-style: solid; background: var(--on-fill); color: var(--chip) }
+.item-top { display: flex; align-items: center; gap: 8px }
+.item-top b { font-weight: 600 }
+.item-top small { margin-left: auto; font-size: 12px; font-weight: 500; white-space: nowrap }
+.empty { padding: 28px 20px; border: 3px dashed var(--ink); border-radius: 20px; max-width: 60ch }
+
+/* Benchmark */
+.stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(190px, 100%), 1fr)); gap: 18px }
+.stat { min-width: 0; display: flex; flex-direction: column-reverse; gap: 6px; padding: 18px }
+.stat dt { font-weight: 600 }
+.stat dd { font-family: var(--display); font-weight: 800; font-size: 3.5rem; line-height: 0.95; letter-spacing: -0.03em; font-variant-numeric: tabular-nums }
+.table-box { overflow-x: auto; border: 3px solid var(--ink); border-radius: 20px }
+table { width: 100%; min-width: 860px; border-collapse: collapse; font-variant-numeric: tabular-nums }
+th { padding: 12px 16px; font-weight: 600; text-align: left; background: var(--ink); color: var(--bg) }
+td { padding: 14px 16px; border-top: 2px solid var(--ink) }
+th.n, td.n { text-align: right }
+td .pill { color: var(--on-fill); border-color: var(--on-fill); font-size: 13px; padding: 2px 12px }
+.sec-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px 16px }
+.groups { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(360px, 100%), 1fr)); gap: 18px; align-items: start }
+.group { min-width: 0; display: flex; flex-direction: column; gap: 12px; padding: 16px }
+.group ul { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(240px, 100%), 1fr)); gap: 8px }
+.g { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border-radius: 12px; border: 2px dashed var(--on-fill); font-size: 14px }
+.g.pass { border-style: solid; background: var(--chip) }
+.g.fail { border-style: solid; background: var(--on-fill); color: var(--chip) }
+.g span:nth-child(2) { flex: 1 1 0; min-width: 0 }
+.g small { font-size: 12px; font-weight: 600; white-space: nowrap }
+</style>
+</head>
+<body>
+
+<div class="page">
+<header class="top">
+  <div class="wrap">
+    <a class="brand" href="#overview">Factory</a>
+    <nav class="nav" aria-label="Pages">
+      <a href="#overview" data-view="overview">Overview</a>
+      <a href="#factory" data-view="factory">Factory</a>
+      <a href="#progress" data-view="progress">Progress</a>
+      <a href="#benchmark" data-view="benchmark">Benchmark</a>
+    </nav>
+  </div>
+</header>
+
+<main class="wrap">
+
+<!-- Overview -->
+<div class="view" id="view-overview">
+  <section class="hero">
+    <div class="hero-text">
+      <span class="tag">A skill for Gemini Antigravity</span>
+      <h1>A team of agents, orchestrated by <span>code</span>.</h1>
+      <p>Every spec gets its own test-first implementer and its own QA agent, and a QC agent uses the product before anything passes. The script decides the order, what each agent sees, and pass or fail.</p>
+      <div class="cta">
+        <a class="btn primary" href="#progress">See progress
+          <svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M13 6l6 6-6 6"></path></svg></a>
+        <a class="btn ghost" href="#factory">How it works</a>
+      </div>
+    </div>
+    <div class="demo fill">
+      <div class="cmd mono"><b>/factory</b> add a --json flag to wordstats</div>
+      <div class="row f-spec"><b>Spec</b><span>planner writes the specs</span></div>
+      <div class="row f-build"><b>Build</b><span>test-first implementer, then QA, per spec</span></div>
+      <div class="row f-check"><b>Check</b><span>checker runs the commands</span></div>
+      <div class="row f-review"><b>Review + QC</b><span>1 whole change + 1 per spec; QC uses the product</span></div>
+      <div class="row f-repair"><b>Back to Build</b><span>a spec QA, review or QC fails is rebuilt · at most 2 times</span></div>
+      <div class="row f-result" id="last-run"><b>Latest run</b><span>loading</span></div>
+    </div>
+  </section>
+
+  <section class="grid-3" aria-label="Principles">
+    <article class="card fill f-spec">
+      <h2>One spec, one agent</h2>
+      <p>Each agent sees only its own spec, in its own session.</p>
+    </article>
+    <article class="card fill f-check">
+      <h2>Red before green</h2>
+      <p>The implementer writes each test first and sees it fail. A QA agent then reads the tests against the spec, without the plan, and closes the gaps.</p>
+    </article>
+    <article class="card fill f-build">
+      <h2>Code owns the skeleton</h2>
+      <p>Order, file ownership, skills, models and the rebuild cap live in the script.</p>
+    </article>
+    <article class="card fill f-result">
+      <h2>Passing is computed</h2>
+      <p>Exit codes and criteria decide. No agent declares its own work passing.</p>
+    </article>
+  </section>
+</div>
+
+<!-- Factory -->
+<div class="view" id="view-factory" hidden>
+  <section class="sec">
+    <h1 class="h-page">One run</h1>
+    <div class="flow">
+      <div class="end fill f-plain">
+        <span class="pill">chat session</span>
+        <b>Contract</b>
+        <span>C1..Cn, check commands, how to run the product, base commit, run branch</span>
+      </div>
+      <svg aria-hidden="true" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M13 6l6 6-6 6"></path></svg>
+      <div class="script">
+        <span class="mono">factory.py</span>
+        <div class="steps">
+          <div class="step fill f-spec"><i>1</i><b>Spec</b><span>planner; code validates the specs</span></div>
+          <svg aria-hidden="true" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M13 6l6 6-6 6"></path></svg>
+          <div class="step fill f-build"><i>2</i><b>Build</b><span>per spec: implementer writes tests first, then code; then QA. QA fails it: back to the implementer</span></div>
+          <svg aria-hidden="true" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M13 6l6 6-6 6"></path></svg>
+          <div class="step fill f-check"><i>3</i><b>Check</b><span>checker runs the commands, lists changed files; if tests fail only after another test file, finds that file</span></div>
+          <svg aria-hidden="true" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M13 6l6 6-6 6"></path></svg>
+          <div class="step fill f-review"><i>4</i><b>Review + QC</b><span>1 whole change + 1 per spec; once the checks pass, QC starts the product and tries each criterion</span></div>
+          <svg aria-hidden="true" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M4 9h13a3 3 0 0 1 0 6H4M8 5L4 9l4 4"></path></svg>
+          <div class="step fill f-repair dashed"><i>5</i><b>Back to Build</b><span>on failure: the specs concerned are rebuilt, go through QA again, then check, review and QC again · at most 2 times per spec</span></div>
+        </div>
+      </div>
+      <svg aria-hidden="true" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M13 6l6 6-6 6"></path></svg>
+      <div class="end fill f-result">
+        <span class="pill white">chat session</span>
+        <b>Merge and report</b>
+        <span>reruns the checks itself, and CI's test jobs in a Linux container when Docker is there; merges only a passed run, an issue run only once the pull request's CI is green</span>
+      </div>
+    </div>
+    <p class="note">Agents before any return to Build: 6 for one spec, 3N+4 for N specs (N implementers, N QA, N spec reviewers, plus planner, checker, reviewer and QC). The workflow script writes this dashboard's progress file directly at each step. The outcome is <span class="mono">passed</span>, <span class="mono">failed</span>, or <span class="mono">blocked</span> when the run needs a decision code cannot make.</p>
+  </section>
+
+  <section class="sec">
+    <h2 class="h-sec">Agents</h2>
+    <div class="roles">
+      <article class="card role fill f-spec"><span class="pill white">1 per run</span><h3>Planner</h3><p>Sees: the contract, the repo</p><span class="pill white">Read only</span></article>
+      <article class="card role fill f-build"><span class="pill white">1 per spec + 1 per return</span><h3>Implementer</h3><p>Sees: its own spec. Writes each test first and sees it fail, then the code. Sent back to Build, a fresh session gets the failures for its files</p><span class="pill solid">Edits source + test files</span></article>
+      <article class="card role fill f-build"><span class="pill white">1 per spec, again after each return</span><h3>QA</h3><p>Sees: its own spec, minus the planned changes, and its files. Checks the tests for gaps, writes tests for the serious ones, runs the security pass</p><span class="pill solid">Edits test files</span></article>
+      <article class="card role fill f-check"><span class="pill white">1 per round</span><h3>Checker</h3><p>Sees: the check commands, the base commit, each spec's test files</p><span class="pill white">Read only</span></article>
+      <article class="card role fill f-review"><span class="pill white">1 per round</span><h3>Reviewer</h3><p>Sees: the contract, the diff, the check results, the interfaces between specs</p><span class="pill white">Read only</span></article>
+      <article class="card role fill f-review"><span class="pill white">1 per spec, with 2+ specs</span><h3>Spec reviewer</h3><p>Sees: one spec and its files</p><span class="pill white">Read only</span></article>
+      <article class="card role fill f-review"><span class="pill white">1 per round, once the checks pass</span><h3>QC</h3><p>Sees: the contract and how to run the product, not the diff. Starts it and tries each criterion as a user would: CLI, HTTP, public API, or a browser it clicks by hand through Playwright MCP, with no script</p><span class="pill white">Changes nothing</span></article>
+    </div>
+    <p class="note">No reviewer or QA agent sees an implementer's narrative. No file has two owners across specs.</p>
+  </section>
+
+  <section class="sec">
+    <h2 class="h-sec">Rules enforced in code</h2>
+    <ul class="rules">
+      <li><span class="mono">validateSpecs()</span><span>Every criterion is covered by a spec</span></li>
+      <li><span class="mono">validateSpecs()</span><span>One owner per file; inside a spec, a file is source or test, never both</span></li>
+      <li><span class="mono">skillsFor()</span><span>super-board's skill registry: an implementer loads its spec kind's row (bug: diagnosing-bugs + tdd; feature: tdd + codebase-design; ...) plus verification-before-completion and mp-code-review; QA always tdd, diagnosing-bugs, verification-before-completion, testing-strategy, mp-code-review, pr-security-review; reviewers mp-code-review and codebase-design; QC none, so it does not read the code like the reviewers. A run with one missing stops before the planner</span></li>
+      <li><span class="mono">conditionalFor()</span><span>Implementers are also offered vitest, playwright-best-practices, testing-strategy and domain-modeling, QA vitest and playwright-best-practices, each with the rule for when to load it; QC gets no browser-test skill because it clicks through Playwright MCP by hand</span></li>
+      <li><span class="mono">model_for()</span><span>Balanced default: Planner on Gemini 4 Neon (XHigh), whole-change reviewer and rebuilds on Gemini 4 Neon (High), implementers, QA and spec reviewers on Gemini 4 Carbon (Medium), QC on Gemini 4 Hydrogen (Medium), checker on Gemini 4 Hydrogen (Low); modelProfile (balanced, fast, flagship, orchestrator, inherit) and the models arg accept any Gemini 4 / Orchestrator / Gemini 3.8 model ID or tier alias (pro, flash, flash_lite, inherit), with automatic tier fallback on tier-only runners</span></li>
+      <li><span class="mono">maxSpecRevisions</span><span>Rejected specs go back to the planner, at most 2 times</span></li>
+      <li><span class="mono">buildLevels()</span><span>Dependent specs wait; specs on one level run in parallel</span></li>
+      <li><span class="mono">specText()</span><span>QA is not shown the planned Changes, so it judges the tests against what is required</span></li>
+      <li><span class="mono">standardsFailures()</span><span>Every reviewer judges each coding standard kept by review (CODING_STANDARDS.md, S1..Sn); a broken blocking rule goes back to the spec owning the file, a minor one is reported; rules kept by a check follow its exit code (standardsReport)</span></li>
+      <li><span class="mono">qcText()</span><span>QC is shown the contract and how to run the product, never the specs, their files or the checks</span></li>
+      <li><span class="mono">scratchDir()</span><span>Every agent gets a scratch folder of its own, so no agent can delete another's files or write through a link another made into the repository</span></li>
+      <li><span class="mono">filesOutsideAssignment()</span><span>An agent that reports changing a file it may not change stops the run; QA may change test files only</span></li>
+      <li><span class="mono">filesOutsideOwnership()</span><span>A changed file that no spec owns stops the run</span></li>
+      <li><span class="mono">evaluate()</span><span>Passed: every check exits 0, every criterion met by every reviewer and seen working by QC (or not observable), no blocking finding, nothing sent back by QA. QC runs only once the checks pass; QC blocked, or leaving files in the repository, stops the run</span></li>
+      <li><span class="mono">routeFailures()</span><span>Each failure goes back to the implementer of the spec it concerns: the owner of the file, the specs of the criterion, the owner of the test file the checker found breaking a failing check's tests, or else the specs named in its output</span></li>
+      <li><span class="mono">testsChanged()</span><span>Every test file an implementer changes after the first build is recorded and reported</span></li>
+      <li><span class="mono">maxRebuilds</span><span>A spec goes back to Build at most 2 times, from QA, review or QC; past that the run fails</span></li>
+      <li><span class="mono">runRecord()</span><span>What this dashboard shows is built from the raw results, not written by an agent</span></li>
+      <li><span class="mono">failureEntries()</span><span>Every failure that sent a spec back to Build, or ended the run, is filed with the run in its failure log: what it was, where it pointed, which specs answered for it</span></li>
+    </ul>
+  </section>
+
+  <section class="sec">
+    <div class="sec-head">
+      <h2 class="h-sec">Lessons</h2>
+      <span class="mono" style="font-size: 14px">lessons.js</span>
+    </div>
+    <p class="note">After each run the chat session reads the failure logs of recent runs. A mistake the team made in 3 or more runs becomes a proposal: a rule in factory.py, or one sentence in a role brief. You decide; the fix is made later as an ordinary change to the skill, with tests, never by an agent during a run.</p>
+    <ul class="items" id="lessons"><li class="item">Loading lessons.</li></ul>
+  </section>
+</div>
+
+<!-- Progress -->
+<div class="view" id="view-progress" hidden>
+  <div class="bar">
+    <h1 class="h-page">Progress</h1>
+    <div class="picker" id="picker" role="group" aria-label="Choose a run"></div>
+  </div>
+  <p class="note" id="run-note" hidden></p>
+  <section class="cols" id="cols" aria-label="Phases"></section>
+  <p class="empty" id="runs-empty">Loading runs.</p>
+  <section class="sec" id="flog-sec" hidden>
+    <h2 class="h-sec">Failure log</h2>
+    <ul class="items" id="flog"></ul>
+  </section>
+</div>
+
+<!-- Benchmark -->
+<div class="view" id="view-benchmark" hidden>
+  <h1 class="h-page">Benchmark</h1>
+  <dl class="stats" id="stats"></dl>
+  <section class="sec">
+    <h2 class="h-sec">Runs</h2>
+    <div class="table-box">
+      <table>
+        <thead><tr>
+          <th scope="col">Run</th><th scope="col">Outcome</th>
+          <th scope="col" class="n">Specs</th><th scope="col" class="n">Agents</th><th scope="col" class="n">Back to Build</th>
+          <th scope="col" class="n">Time</th><th scope="col" class="n">Criteria</th><th scope="col" class="n">Graders</th>
+        </tr></thead>
+        <tbody id="runs-body"><tr><td colspan="8">Loading runs.</td></tr></tbody>
+      </table>
+    </div>
+    <p class="note">Only finished runs are counted. Sample runs are left out.</p>
+  </section>
+  <section class="sec">
+    <div class="sec-head">
+      <h2 class="h-sec">Graders</h2>
+      <span class="mono" style="font-size: 14px">adds-json-flag-to-cli</span>
+      <span class="note" id="grader-run"></span>
+    </div>
+    <div class="groups" id="groups"></div>
+  </section>
+</div>
+
+</main>
+
+<footer class="foot">
+  <div class="wrap">
+    <div>Factory · branch <span class="mono">implementer-tdd</span></div>
+    <a href="https://github.com/sangtruong-rgb/factory/tree/implementer-tdd">github.com/sangtruong-rgb/factory</a>
+  </div>
+</footer>
+</div>
+
+<script src="runs.js"></script>
+<script src="lessons.js"></script>
+<script>
+(function () {
+  var VIEWS = ['overview', 'factory', 'progress', 'benchmark'];
+  var PHASES = ['Spec', 'Build', 'Check', 'Review', 'Repair'];
+  var HUE = { Spec: 'f-spec', Build: 'f-build', Check: 'f-check', Review: 'f-review', Repair: 'f-repair', 'Back to Build': 'f-repair', Result: 'f-result' };
+  var WORD = { ok: 'done', run: 'running', wait: 'waiting', skip: 'not needed', fail: 'stopped' };
+  var GRADERS = [
+    { id: '01', group: 'Product', text: '--json prints the right counts' },
+    { id: '02', group: 'Product', text: 'Default output unchanged' },
+    { id: '03', group: 'Product', text: 'Tests cover --json and pass' },
+    { id: '04', group: 'Process', text: 'Planner produced the spec' },
+    { id: '05', group: 'Process', text: 'Implementation was delegated' },
+    { id: '06', group: 'Process', text: 'Independent review happened' },
+    { id: '07', group: 'Process', text: 'Chat session reran the checks' },
+    { id: '08', group: 'Process', text: 'Report lists criteria with evidence' },
+    { id: '09', group: 'Process', text: 'Tests written first by the implementer, then checked by QA' }
+  ];
+
+  var runs = null;      // null = loading, [] = none
+  var problem = '';     // why runs cannot be shown
+  var picked = null;
+
+  function h(tag, props) {
+    var e = document.createElement(tag);
+    for (var k in props || {}) {
+      if (k === 'class') e.className = props[k];
+      else if (k === 'onclick') e.addEventListener('click', props[k]);
+      else e.setAttribute(k, props[k]);
+    }
+    for (var i = 2; i < arguments.length; i++) {
+      var kid = arguments[i];
+      if (kid === null || kid === undefined || kid === '') continue;
+      e.appendChild(typeof kid === 'string' ? document.createTextNode(kid) : kid);
+    }
+    return e;
+  }
+  function fill(el, kids) { el.replaceChildren.apply(el, kids); }
+  function $(id) { return document.getElementById(id); }
+  function arr(v) { return Array.isArray(v) ? v : []; }
+  function finished(r) { return r.outcome === 'passed' || r.outcome === 'failed'; }
+
+  // --- views ---------------------------------------------------------------
+  function route() {
+    var name = location.hash.replace('#', '');
+    if (VIEWS.indexOf(name) < 0) name = VIEWS[0];
+    VIEWS.forEach(function (v) { $('view-' + v).hidden = v !== name; });
+    document.querySelectorAll('.nav a').forEach(function (a) {
+      if (a.dataset.view === name) a.setAttribute('aria-current', 'page');
+      else a.removeAttribute('aria-current');
+    });
+  }
+  window.addEventListener('hashchange', route);
+  route();
+
+  // --- tracker -------------------------------------------------------------
+  function phaseKind(run, name) {
+    if (finished(run)) return name === 'Repair' && !(run.repairRounds > 0) ? 'skip' : 'ok';
+    var at = PHASES.indexOf(run.phase), i = PHASES.indexOf(name);
+    if (at < 0) return 'wait';
+    if (i < at) return name === 'Repair' ? 'skip' : 'ok';
+    if (i === at) return run.outcome === 'blocked' ? 'fail' : 'run';
+    return 'wait';
+  }
+  function item(tag, text, kind, label) {
+    return h('li', { class: 'item ' + kind },
+      h('span', { class: 'item-top' }, h('span', { class: 'dot ' + kind, 'aria-hidden': 'true' }), h('b', {}, tag), h('small', {}, label || WORD[kind])),
+      text ? h('span', {}, text) : null);
+  }
+  function column(name, kind, items, label) {
+    return h('div', { class: 'col fill ' + HUE[name] },
+      h('div', { class: 'col-head' }, h('h2', {}, name), h('span', { class: 'pill ' + (kind === 'ok' ? 'solid' : 'white') }, label || WORD[kind])),
+      h('ul', { class: 'items' }, ...items));
+  }
+  function columns(run) {
+    var specs = arr(run.specs), cols = [];
+    var k = phaseKind(run, 'Spec');
+    cols.push(column('Spec', k, [item('planner', run.specLine || (specs.length ? specs.length + (specs.length === 1 ? ' spec' : ' specs') : ''), k)]));
+
+    k = phaseKind(run, 'Build');
+    var parts = [], done = 0;
+    specs.forEach(function (s) {
+      var impl = s.impl || k, test = s.test || k;
+      if (k === 'ok') { if (impl !== 'none') impl = 'ok'; if (test !== 'none') test = 'ok'; }
+      if ((impl === 'ok' || impl === 'none') && (test === 'ok' || test === 'none')) done++;
+      var waits = s.waitFor ? 'after ' + s.waitFor : '';
+      if (impl !== 'none') parts.push(item(s.id + ' · code', s.implNote || s.title, impl, impl === 'wait' ? waits : ''));
+      if (test !== 'none') parts.push(item(s.id + ' · tests', s.testNote || s.title, test, test === 'wait' ? waits : ''));
+    });
+    cols.push(column('Build', k, parts, specs.length ? done + '/' + specs.length + (specs.length === 1 ? ' spec' : ' specs') : ''));
+
+    k = phaseKind(run, 'Check');
+    var check = run.check || {};
+    cols.push(column('Check', k, [item('checker', check.text || '', check.state || k)]));
+
+    k = phaseKind(run, 'Review');
+    var reviews = arr(run.review);
+    if (!reviews.length) {
+      reviews = [{ tag: 'whole change', text: 'Contract, diff, where the parts meet' }];
+      if (specs.length > 1) specs.forEach(function (s) { reviews.push({ tag: s.id, text: s.title }); });
+    }
+    cols.push(column('Review', k, reviews.map(function (r) { return item(r.tag, r.text, r.state || k, r.label); })));
+
+    // Runs before implementer-tdd had a Repair phase; later ones send specs back to Build.
+    var back = arr(run.repairs);
+    k = back.length ? (back.some(function (r) { return r.state === 'run'; }) ? 'run' : 'ok') : phaseKind(run, 'Repair');
+    var max = run.maxRepairRounds === undefined ? 2 : run.maxRepairRounds;
+    var repairs = back.map(function (r) { return item(r.tag || 'round ' + r.round, r.text, r.state || 'ok'); });
+    if (!repairs.length) repairs = [item('back to Build', 'none · at most ' + max + ' per spec', k)];
+    cols.push(column('Back to Build', k, repairs, back.length + (back.length === 1 ? ' time' : ' times')));
+
+    var end = run.outcome === 'passed' ? 'ok' : run.outcome === 'failed' || run.outcome === 'blocked' ? 'fail' : 'wait';
+    cols.push(column('Result', end, arr(run.criteria).map(function (c) {
+      return c.status === 'met' ? item(c.id, c.text, 'ok', 'met')
+        : c.status === 'not_met' ? item(c.id, c.text, 'fail', 'not met')
+        : item(c.id, c.text, 'wait', 'not judged');
+    }), run.outcome === 'running' ? 'not judged' : run.outcome));
+    return cols;
+  }
+  // One line per failure that sent a spec back to Build (or ended the run).
+  // Runs filed before the failure log existed have none.
+  function failureItems(run) {
+    return arr(run.failureLog).map(function (f) {
+      var where = f.file ? f.file + (f.line !== undefined ? ':' + f.line : '') : f.criterion || f.check || '';
+      var tag = (f.stage === 'qa' ? 'QA' + (f.round > 0 ? ' after rebuild ' + f.round : '') : 'review ' + f.round + ' · ' + f.kind) + (arr(f.specs).length ? ' · ' + arr(f.specs).join(', ') : '');
+      return item(tag, [where, f.problem].filter(Boolean).join(' · '), f.sentBack ? 'ok' : 'fail', f.sentBack ? 'sent back' : 'ended the run');
+    });
+  }
+  var LESSON = { proposed: 'run', accepted: 'ok', done: 'ok', rejected: 'skip' };
+  function renderLessons() {
+    var list = arr(window.FACTORY_LESSONS).slice().reverse();
+    fill($('lessons'), list.length ? list.map(function (l) {
+      var text = [l.pattern, l.proposal ? 'Fix: ' + l.proposal + (l.target ? ' (' + l.target + ')' : '') : '', arr(l.runs).length ? arr(l.runs).length + ' run(s): ' + arr(l.runs).join(', ') : ''].filter(Boolean).join(' · ');
+      return item(l.id || 'lesson', text, LESSON[l.status] || 'wait', l.status || '');
+    }) : [h('li', { class: 'item' }, 'No recurring failures yet.')]);
+  }
+  function statusText(r) { return r.outcome + (r.live ? ' · live' : '') + (r.sample ? ' · sample' : ''); }
+
+  function renderTracker() {
+    var empty = $('runs-empty'), note = $('run-note');
+    if (!runs || !runs.length) {
+      fill($('picker'), []); fill($('cols'), []); note.hidden = true; $('flog-sec').hidden = true;
+      empty.hidden = false;
+      empty.textContent = problem || (runs ? 'No runs yet. Start one with /factory and it will appear here.' : 'Loading runs.');
+      return;
+    }
+    empty.hidden = true;
+    var run = runs.find(function (r) { return r.id === picked; }) || runs[0];
+    picked = run.id;
+    fill($('picker'), runs.map(function (r) {
+      var kind = r.outcome === 'passed' ? 'ok' : r.outcome === 'running' ? 'run' : 'fail';
+      return h('button', { type: 'button', class: 'pick', 'aria-pressed': String(r.id === picked), onclick: function () { picked = r.id; renderTracker(); } },
+        h('span', { class: 'dot ' + kind, 'aria-hidden': 'true' }), h('b', {}, r.title || r.id), h('small', {}, statusText(r)));
+    }));
+    var text = [run.outcome === 'blocked' || run.outcome === 'failed' ? run.reason : '', run.note].filter(Boolean).join(' ');
+    note.hidden = !text; note.textContent = text;
+    fill($('cols'), columns(run));
+    var flog = failureItems(run);
+    $('flog-sec').hidden = !flog.length;
+    fill($('flog'), flog);
+  }
+
+  // --- overview and benchmark ----------------------------------------------
+  function renderLast() {
+    var real = (runs || []).filter(function (r) { return !r.sample; });
+    var last = real.find(function (r) { return r.live; }) || real.find(finished) || real[0];
+    fill($('last-run'), [h('b', {}, last ? last.outcome : 'Latest run'),
+      h('span', {}, last ? last.title : problem ? 'unavailable' : runs ? 'no runs yet' : 'loading')]);
+  }
+  function renderBench() {
+    var done = (runs || []).filter(function (r) { return finished(r) && !r.sample; });
+    var n = done.length;
+    var avg = function (key) {
+      var have = done.filter(function (r) { return typeof r[key] === 'number'; });
+      return have.length ? String(Math.round(have.reduce(function (s, r) { return s + r[key]; }, 0) / have.length * 10) / 10) : '–';
+    };
+    var stat = function (label, value, hue) { return h('div', { class: 'stat fill ' + hue }, h('dt', {}, label), h('dd', {}, value)); };
+    fill($('stats'), [
+      stat('runs', String(n), 'f-spec'),
+      stat('passed', n ? done.filter(function (r) { return r.outcome === 'passed'; }).length + '/' + n : '–', 'f-result'),
+      stat('seconds per run', avg('seconds'), 'f-build'),
+      stat('agents per run', avg('agents'), 'f-check'),
+      stat('returns to Build per run', avg('repairRounds'), 'f-repair')
+    ]);
+    var gradeCount = function (r) {
+      var g = r.grades || {}, ids = Object.keys(g);
+      return ids.length ? ids.filter(function (i) { return g[i] === 'pass'; }).length + '/' + GRADERS.length : 'not graded';
+    };
+    var num = function (v, unit) { return h('td', { class: 'n' }, typeof v === 'number' ? v + (unit || '') : '–'); };
+    fill($('runs-body'), n ? done.map(function (r) {
+      var crit = arr(r.criteria);
+      return h('tr', {},
+        h('td', {}, h('div', { class: 'mono', style: 'font-size: 14px' }, r.caseName || r.id), h('div', { style: 'font-size: 14px' }, r.title || '')),
+        h('td', {}, h('span', { class: 'pill ' + (r.outcome === 'passed' ? 'f-result' : 'f-repair') }, r.outcome)),
+        num(arr(r.specs).length), num(r.agents), num(r.repairRounds || 0), num(r.seconds, ' s'),
+        h('td', { class: 'n' }, crit.length ? crit.filter(function (c) { return c.status === 'met'; }).length + '/' + crit.length : '–'),
+        h('td', { class: 'n' }, gradeCount(r)));
+    }) : [h('tr', {}, h('td', { colspan: '8' }, problem || (runs ? 'No finished runs yet.' : 'Loading runs.')))]);
+
+    var graded = done.find(function (r) { return r.caseName === 'adds-json-flag-to-cli'; });
+    var grades = (graded && graded.grades) || {};
+    $('grader-run').textContent = graded ? 'run: ' + (graded.title || graded.id) : 'no run of this case yet';
+    var group = function (name, hue) {
+      var mine = GRADERS.filter(function (g) { return g.group === name; });
+      var seen = mine.filter(function (g) { return grades[g.id]; }).length;
+      return h('div', { class: 'group fill ' + hue },
+        h('div', { class: 'col-head' }, h('h3', { style: 'font-size: 1.5rem' }, name),
+          h('span', { class: 'pill white' }, seen ? mine.filter(function (g) { return grades[g.id] === 'pass'; }).length + '/' + mine.length + ' passed' : 'not graded')),
+        h('ul', {}, ...mine.map(function (g) {
+          var v = grades[g.id];
+          return h('li', { class: 'g ' + (v || '') }, h('span', { class: 'mono' }, g.id), h('span', {}, g.text),
+            h('small', {}, v === 'pass' ? 'pass' : v === 'fail' ? 'fail' : 'not graded'));
+        })));
+    };
+    fill($('groups'), [group('Product', 'f-result'), group('Process', 'f-review')]);
+  }
+  function renderAll() { renderTracker(); renderLast(); renderBench(); renderLessons(); }
+  renderAll();
+
+  // --- data: runs.js (window.FACTORY_RUNS) and live.js (window.FACTORY_LIVE) ---
+  // Both files are read again every few seconds, so the page follows a run
+  // without a reload: live.js is rewritten by the workflow at every step, and
+  // runs.js gains the run once it has finished. The run in live.js is shown on
+  // top, marked live, until a run with the same id appears in runs.js.
+  var seen = '';
+  function merge() {
+    var history = arr(window.FACTORY_RUNS).slice().reverse();
+    var live = window.FACTORY_LIVE || null;
+    var text = JSON.stringify([history, live, window.FACTORY_LESSONS || null]);
+    if (text === seen) return;
+    seen = text;
+    var known = live && history.some(function (r) { return r.id === live.id; });
+    runs = (live && !known ? [Object.assign({ live: true }, live)] : []).concat(history);
+    renderAll();
+  }
+  function load(file, then) {
+    var s = document.createElement('script');
+    s.src = file + '?t=' + Date.now();
+    s.onload = s.onerror = function () { s.remove(); then(); };
+    document.head.appendChild(s);
+  }
+  function poll() { load('runs.js', function () { load('lessons.js', function () { load('live.js', merge); }); }); }
+  merge();
+  poll();
+  setInterval(poll, 3000);
+})();
+</script>
+</body>
+</html>

@@ -1,12 +1,27 @@
 # Test run outputs (disposable)
 factory-workspace/
-
-# Local Claude Code state
-.claude/
+antigravity/factory-workspace/
+claude/factory-workspace/
+.agents/worktrees/
 
 __pycache__/
 *.pyc
 .DS_Store
+*.swp
+*.swo
 
 # Progress of the run in flight, rewritten by the workflow
-factory/dashboard/live.js
+antigravity/factory/dashboard/live.js
+claude/factory/dashboard/live.js
+
+# Software Factory app (Next.js / PostgreSQL / Prisma)
+software-factory/node_modules/
+software-factory/.next/
+software-factory/src/generated/
+software-factory/*.db
+software-factory/*.db-journal
+software-factory/prisma/*.db
+software-factory/prisma/*.db-journal
+software-factory/.env
+software-factory/.env.local
+software-factory/.vercel/

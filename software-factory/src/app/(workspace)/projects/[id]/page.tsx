@@ -1,0 +1,84 @@
+import { notFound, redirect } from "next/navigation";
+import { ProjectWorkspace } from "@/components/factory/project-workspace";
+import { getProjectBoardSnapshot } from "@/lib/board-data";
+import { prisma } from "@/lib/prisma";
+import { getCurrentSession } from "@/lib/session";
+import { getProjectAccess } from "@/lib/team-access";
+import { readProjectContextFiles } from "@/lib/workspace-data";
+
+export default async function ProjectDetailPage({
+  params,
+  searchParams,
+}: {
+  params: Promise<{ id: string }>;
+  searchParams: Promise<{ tab?: string }>;
+}) {
+  const session = await getCurrentSession();
+  if (!session) redirect("/login");
+
+  const { id } = await params;
+  const sp = await searchParams;
+
+  const access = await getProjectAccess(session.user, id);
+  if (!access) notFound();
+
+  const [project, board] = await Promise.all([
+    prisma.project.findUnique({
+      where: { id: access.project.id },
+      include: {
+        user: { select: { githubLogin: true } },
+        _count: { select: { members: true } },
+        missions: {
+          orderBy: { updatedAt: "desc" },
+          include: { issues: { select: { status: true } } },
+        },
+      },
+    }),
+    getProjectBoardSnapshot({
+      projectId: access.project.id,
+      viewerUserId: session.user.id,
+      viewerGithubLogin: session.user.githubLogin,
+    }),
+  ]);
+
+  if (!project || !board) notFound();
+
+  const contextFiles = readProjectContextFiles(project.localPath);
+
+  return (
+    <ProjectWorkspace
+      project={{
+        id: project.id,
+        name: project.name,
+        slug: project.slug,
+        description: project.description,
+        engine: project.engine,
+        source: project.source,
+        localPath: project.localPath,
+        githubFullName: project.githubFullName,
+        githubUrl: project.githubUrl,
+        defaultBranch: project.defaultBranch || "main",
+        initStatus: project.initStatus,
+        readinessScore: project.readinessScore,
+      }}
+      myRole={access.role}
+      currentUserId={session.user.id}
+      ownerLogin={project.user?.githubLogin ?? "local"}
+      memberCount={project._count.members + 1}
+      initialBoard={board}
+      missions={project.missions.map((m) => ({
+        id: m.id,
+        title: m.title,
+        goal: m.goal,
+        status: m.status,
+        autonomy: m.autonomy,
+        validationContractMd: m.validationContractMd,
+        issueCount: m.issues.length,
+        passedCount: m.issues.filter((i) => i.status === "passed").length,
+        updatedAt: m.updatedAt.toISOString(),
+      }))}
+      contextFiles={contextFiles}
+      defaultTab={sp.tab || "dashboard"}
+    />
+  );
+}

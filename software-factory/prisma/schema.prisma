@@ -1,0 +1,503 @@
+datasource db {
+  provider = "postgresql"
+}
+
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+model User {
+  id          String   @id @default(cuid())
+  githubId    Int      @unique
+  githubLogin String   @unique
+  name        String?
+  email       String?
+  avatarUrl   String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  sessions               Session[]
+  githubRepos            GithubRepo[]
+  projects               Project[]
+  projectMemberships     ProjectMember[]
+  invitedProjectMembers  ProjectMember[] @relation("ProjectMemberInviter")
+  projectInvitesCreated  ProjectInvite[]
+  apiTokens              ApiToken[]
+  runs                   FactoryRun[]
+  triggeredRuns          FactoryRun[]    @relation("RunTriggeredBy")
+  missions               Mission[]
+  runners                RunnerMachine[]
+  runnerCommands         RunnerCommand[]
+  lessons                Lesson[]
+}
+
+model Session {
+  id                String   @id // SHA-256 hex of raw cookie token
+  userId            String
+  githubAccessToken String // AES-256-GCM sealed access token
+  createdAt         DateTime @default(now())
+  expiresAt         DateTime
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+model GithubRepo {
+  id            String   @id @default(cuid())
+  userId        String
+  githubRepoId  Int
+  fullName      String
+  name          String
+  owner         String
+  isPrivate     Boolean  @default(false)
+  htmlUrl       String
+  cloneUrl      String?
+  description   String?
+  defaultBranch String?
+  language      String?
+  pushedAt      String?
+  syncedAt      DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, githubRepoId])
+  @@index([userId])
+}
+
+model RunnerMachine {
+  id              String   @id @default(cuid())
+  userId          String
+  name            String
+  hostname        String
+  os              String   @default("darwin")
+  enginesJson      String   @default("[\"antigravity\",\"claude\"]")
+  modelsJson       String?
+  allowedRootsJson       String?
+  workspaceDir           String?
+  discoveredProjectsJson String?
+  cliVersion             String?
+  visibility             String   @default("personal") // "personal" | "team"
+  status           String   @default("online") // "online" | "offline"
+  maxConcurrency  Int      @default(2)
+  activeRuns      Int      @default(0)
+  worktreesJson   String   @default("[]")
+  lastHeartbeatAt DateTime @default(now())
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  user     User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  runs     FactoryRun[]
+  commands RunnerCommand[]
+
+  @@unique([userId, name])
+  @@index([userId, status])
+}
+
+model Project {
+  id                  String   @id @default(cuid())
+  userId              String
+  name                String
+  slug                String
+  description         String?
+  source              String   @default("new") // "github" | "new" | "local"
+  engine              String   @default("antigravity") // "antigravity" | "claude"
+  localPath           String?
+  githubRepoId        Int?
+  githubFullName      String?
+  githubOwner         String?
+  githubUrl           String?
+  defaultBranch       String?
+  isPrivate           Boolean  @default(true)
+  botGithubUsername   String?
+  botAccessStatus     String   @default("none") // "owner" | "active" | "invited" | "failed" | "none"
+  botAccessError      String?
+  botInvitationId     Int?
+  initStatus          String   @default("none") // "none" | "partial" | "stale" | "complete"
+  stackJson           String?
+  readinessScore      Int?
+  autoDispatch        Boolean  @default(false)
+  autoApprove         Boolean  @default(false)
+  maxConcurrency      Int      @default(2)
+  stallTimeoutMinutes Int      @default(15)
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+
+  user           User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  members        ProjectMember[]
+  invites        ProjectInvite[]
+  runs           FactoryRun[]
+  issues         ProjectIssue[]
+  missions       Mission[]
+  pullRequests   PullRequest[]
+  lessons        Lesson[]
+  runnerCommands RunnerCommand[]
+
+  @@unique([userId, slug])
+  @@unique([userId, githubRepoId])
+  @@index([userId])
+}
+
+model ProjectMember {
+  id          String   @id @default(cuid())
+  projectId   String
+  userId      String?
+  githubLogin String
+  role        String   @default("member") // "owner" | "member" | "viewer"
+  invitedById String?
+  joinedAt    DateTime @default(now())
+
+  project   Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  user      User?   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  invitedBy User?   @relation("ProjectMemberInviter", fields: [invitedById], references: [id], onDelete: SetNull)
+
+  @@unique([projectId, githubLogin])
+  @@index([userId])
+  @@index([githubLogin])
+}
+
+model ProjectInvite {
+  id          String    @id @default(cuid())
+  projectId   String
+  token       String    @unique
+  role        String    @default("member") // "member" | "viewer"
+  createdById String
+  expiresAt   DateTime?
+  revokedAt   DateTime?
+  usesCount   Int       @default(0)
+  createdAt   DateTime  @default(now())
+
+  project   Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  createdBy User    @relation(fields: [createdById], references: [id], onDelete: Cascade)
+
+  @@index([projectId])
+}
+
+model Mission {
+  id                   String   @id @default(cuid())
+  projectId            String
+  userId               String
+  title                String
+  goal                 String   @default("")
+  validationContractMd String   @default("")
+  status               String   @default("planning") // "planning" | "active" | "paused" | "completed" | "failed"
+  autonomy             String   @default("medium") // "off" | "low" | "medium" | "high"
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
+
+  project Project        @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  user    User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  issues  ProjectIssue[]
+  runs    FactoryRun[]
+
+  @@index([projectId, status])
+  @@index([userId])
+}
+
+model ProjectIssue {
+  id                String   @id @default(cuid())
+  projectId         String
+  missionId         String?
+  issueKey          String
+  title             String
+  goal              String   @default("")
+  body              String   @default("")
+  criteriaJson      String   @default("[]")
+  dependsOnJson     String   @default("[]")
+  priority          String   @default("P2") // "P0" | "P1" | "P2" | "P3"
+  complexity        String   @default("M") // "XS" | "S" | "M" | "L"
+  tier              String   @default("medium") // "low" | "medium" | "high"
+  tierScore         Int?
+  autonomy          String   @default("auto_build_human_merge") // "full_auto" | "auto_build_human_merge" | "human_required"
+  modelPlanJson     String?
+  status            String   @default("ready") // "backlog" | "ready" | "needs_human" | "in_progress" | "in_review" | "passed" | "failed" | "blocked"
+  currentPhase      String?
+  runKey            String?
+  summary           String?
+  thinking          String?
+  syncMode          String   @default("local") // "local" | "github"
+  githubIssueNumber Int?
+  githubIssueUrl    String?
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  project      Project       @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  mission      Mission?      @relation(fields: [missionId], references: [id], onDelete: SetNull)
+  runs         FactoryRun[]
+  pullRequests PullRequest[]
+
+  @@unique([projectId, issueKey])
+  @@index([projectId, status])
+  @@index([missionId])
+}
+
+model ApiToken {
+  id         String    @id @default(cuid())
+  userId     String
+  label      String
+  prefix     String
+  tokenHash  String    @unique
+  lastUsedAt DateTime?
+  revokedAt  DateTime?
+  createdAt  DateTime  @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+model FactoryRun {
+  id                 String    @id @default(cuid())
+  projectId          String
+  userId             String
+  triggeredById      String?
+  issueId            String?
+  missionId          String?
+  runnerMachineId    String?
+  runKey             String
+  title              String
+  prompt             String?
+  mode               String    @default("factory") // "normal" | "clarify" | "factory" | "mission" | "ui-refine" | "pr-judge"
+  autonomy           String    @default("medium") // "off" | "low" | "medium" | "high"
+  engine             String    @default("antigravity") // "antigravity" | "claude"
+  status             String    @default("running") // "queued" | "running" | "awaiting_input" | "passed" | "failed" | "blocked" | "stalled" | "cancelled"
+  currentPhase       String    @default("Init")
+  baseCommit         String?
+  targetBranch       String?
+  worktreePath       String?
+  mergedCommit       String?
+  model              String?
+  risk               String? // "low" | "medium" | "high"
+  surfacesJson       String?
+  mergeDecision      String? // "auto" | "person"
+  mergeReasonsJson   String?
+  summary            String?
+  specLine           String?
+  specsJson          String?
+  criteriaJson       String?
+  failureLogJson     String?
+  checkpointJson     String?
+  prNumber           Int?
+  prUrl              String?
+  inputTokens        Int       @default(0)
+  outputTokens       Int       @default(0)
+  cacheReadTokens    Int       @default(0)
+  costUsd            Float     @default(0)
+  durationMs         Int?
+  workMs             Int       @default(0)
+  waitMs             Int       @default(0)
+  humanInterventions Int       @default(0)
+  lastHeartbeatAt    DateTime?
+  startedAt          DateTime  @default(now())
+  finishedAt         DateTime?
+  updatedAt          DateTime  @updatedAt
+
+  project      Project          @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  user         User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  triggeredBy  User?            @relation("RunTriggeredBy", fields: [triggeredById], references: [id], onDelete: SetNull)
+  issue        ProjectIssue?    @relation(fields: [issueId], references: [id], onDelete: SetNull)
+  mission      Mission?         @relation(fields: [missionId], references: [id], onDelete: SetNull)
+  runner       RunnerMachine?   @relation(fields: [runnerMachineId], references: [id], onDelete: SetNull)
+  agents       RunAgent[]
+  steps        RunStep[]
+  interactions RunInteraction[]
+  artifacts    RunArtifact[]
+  pullRequests PullRequest[]
+  commands     RunnerCommand[]
+
+  @@unique([projectId, runKey])
+  @@index([projectId, startedAt])
+  @@index([userId, status])
+  @@index([issueId])
+  @@index([missionId])
+}
+
+model RunAgent {
+  id              String    @id @default(cuid())
+  runId           String
+  agentKey        String // e.g. "planner", "S1-impl", "S1-qa", "checker", "reviewer", "qc"
+  name            String
+  role            String // "orchestrator" | "planner" | "implementer" | "qa" | "checker" | "reviewer" | "spec-reviewer" | "qc"
+  specId          String?
+  level           Int?
+  model           String?
+  status          String    @default("working") // "waiting_on_you" | "working" | "idle" | "passed" | "failed"
+  activity        String?
+  summary         String?
+  inputTokens     Int       @default(0)
+  outputTokens    Int       @default(0)
+  cacheReadTokens Int       @default(0)
+  costUsd         Float     @default(0)
+  startedAt       DateTime  @default(now())
+  finishedAt      DateTime?
+  updatedAt       DateTime  @updatedAt
+
+  run          FactoryRun       @relation(fields: [runId], references: [id], onDelete: Cascade)
+  steps        RunStep[]
+  interactions RunInteraction[]
+
+  @@unique([runId, agentKey])
+  @@index([runId, status])
+}
+
+model RunStep {
+  id              String   @id @default(cuid())
+  runId           String
+  runAgentId      String?
+  seq             Int
+  step            String
+  phase           String
+  status          String // "started" | "passed" | "failed" | "blocked" | "skipped" | "info"
+  round           Int?
+  spec            String?
+  role            String?
+  agentId         String?
+  label           String?
+  model           String?
+  durationMs      Int?
+  inputTokens     Int?
+  outputTokens    Int?
+  cacheReadTokens Int?
+  costUsd         Float?
+  summary         String?
+  dataJson        String?
+  createdAt       DateTime @default(now())
+
+  run   FactoryRun @relation(fields: [runId], references: [id], onDelete: Cascade)
+  agent RunAgent?  @relation(fields: [runAgentId], references: [id], onDelete: SetNull)
+
+  @@index([runId, seq])
+  @@index([runAgentId])
+}
+
+model RunInteraction {
+  id           String    @id @default(cuid())
+  runId        String
+  runAgentId   String?
+  type         String // "question" | "plan_approval" | "mockup_approval" | "merge_approval" | "steer"
+  title        String
+  prompt       String?
+  payloadJson  String?
+  status       String    @default("pending") // "pending" | "resolved" | "dismissed"
+  responseJson String?
+  createdAt    DateTime  @default(now())
+  resolvedAt   DateTime?
+
+  run   FactoryRun @relation(fields: [runId], references: [id], onDelete: Cascade)
+  agent RunAgent?  @relation(fields: [runAgentId], references: [id], onDelete: SetNull)
+
+  @@index([runId, status])
+  @@index([status, createdAt])
+}
+
+model RunArtifact {
+  id        String   @id @default(cuid())
+  runId     String
+  kind      String // "plan" | "mockup" | "qc_shot" | "baseline_diff" | "axe" | "pr_judge" | "walkthrough" | "diff" | "log"
+  title     String
+  pathOrUrl String
+  mimeType  String?
+  metaJson  String?
+  createdAt DateTime @default(now())
+
+  run FactoryRun @relation(fields: [runId], references: [id], onDelete: Cascade)
+
+  @@index([runId, kind])
+}
+
+model PullRequest {
+  id              String   @id @default(cuid())
+  projectId       String
+  issueId         String?
+  runId           String?
+  number          Int
+  title           String
+  url             String?
+  headBranch      String
+  baseBranch      String   @default("main")
+  state           String   @default("open") // "open" | "draft" | "merged" | "closed"
+  ciStatus        String   @default("pending") // "pending" | "passing" | "failing" | "unknown"
+  mergeDecision   String   @default("person") // "auto" | "person"
+  autoFix         Boolean  @default(true)
+  queueStatus     String   @default("none") // "none" | "queued" | "rebasing" | "verifying" | "merged" | "conflict"
+  judgeVerdict    String? // "pass" | "fail" | "unknown"
+  judgeReportJson String?
+  walkthroughMd   String?
+  diffSummary     String?
+  additions       Int      @default(0)
+  deletions       Int      @default(0)
+  commentsCount   Int      @default(0)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  project Project       @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  issue   ProjectIssue? @relation(fields: [issueId], references: [id], onDelete: SetNull)
+  run     FactoryRun?   @relation(fields: [runId], references: [id], onDelete: SetNull)
+
+  @@unique([projectId, number])
+  @@index([projectId, state])
+  @@index([queueStatus])
+}
+
+model RunnerCommand {
+  id              String   @id @default(cuid())
+  userId          String
+  runnerMachineId String?
+  projectId       String?
+  runId           String?
+  type            String // "start_run" | "pause_run" | "resume_run" | "retry_phase" | "answer_interaction" | "merge_pr" | "run_clarify" | "run_pr_judge" | "run_ui_refine"
+  payloadJson     String   @default("{}")
+  status          String   @default("pending") // "pending" | "claimed" | "done" | "failed"
+  error           String?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  user    User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  runner  RunnerMachine? @relation(fields: [runnerMachineId], references: [id], onDelete: SetNull)
+  project Project?       @relation(fields: [projectId], references: [id], onDelete: SetNull)
+  run     FactoryRun?    @relation(fields: [runId], references: [id], onDelete: SetNull)
+
+  @@index([userId, status])
+  @@index([runnerMachineId, status])
+}
+
+model Lesson {
+  id           String   @id @default(cuid())
+  userId       String
+  projectId    String?
+  patternKey   String
+  title        String
+  occurrences  Int      @default(1)
+  target       String   @default("role_brief") // "workflow_code" | "role_brief" | "project_rule"
+  proposal     String
+  evidenceJson String?
+  status       String   @default("proposed") // "proposed" | "accepted" | "rejected" | "done"
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  user    User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  project Project? @relation(fields: [projectId], references: [id], onDelete: SetNull)
+
+  @@unique([userId, patternKey])
+  @@index([userId, status])
+}
+
+model DeviceAuthCode {
+  id             String    @id @default(cuid())
+  deviceCodeHash String    @unique
+  userCode       String    @unique
+  runnerName     String
+  hostname       String
+  os             String    @default("darwin")
+  status         String    @default("pending") // "pending" | "approved" | "denied" | "consumed" | "expired"
+  userId         String?
+  plainTokenEnc  String?
+  expiresAt      DateTime
+  approvedAt     DateTime?
+  consumedAt     DateTime?
+  createdAt      DateTime  @default(now())
+
+  @@index([userCode, status])
+  @@index([expiresAt])
+}

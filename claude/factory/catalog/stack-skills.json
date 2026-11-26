@@ -1,0 +1,29 @@
+{
+  "about": "Vetted skills per stack, at pinned commits. factory-init installs from here, into the project's .claude/skills, and records them in .factory/project.json. A stack with an empty list has no vetted skill yet: its conventions go into the project's CLAUDE.md (and, if the tech lead wants, a project skill written for it and reviewed like code). Add an entry only after reading the skill: it becomes part of every agent prompt that loads it.",
+  "sources": {
+    "antfu/skills": { "commit": "d524ed287eef22757297827ce42e3cad88abd20c", "base": "skills" },
+    "currents-dev/playwright-best-practices-skill": { "commit": "0b75b5835a87de1fdd202ba965f3bc5a27738fdf", "base": "." },
+    "mattpocock/skills": { "commit": "5863806dd4e15c63174bee4e7515a4256792ecfa", "base": "skills/engineering" }
+  },
+  "stacks": {
+    "vitest": [{ "name": "vitest", "source": "antfu/skills", "path": "vitest", "roles": ["implementer", "qa"] }],
+    "playwright": [{ "name": "playwright-best-practices", "source": "currents-dev/playwright-best-practices-skill", "path": "playwright-best-practices", "roles": ["implementer", "qa"] }],
+    "domain": [{ "name": "domain-modeling", "source": "mattpocock/skills", "path": "domain-modeling", "roles": ["planner", "implementer"] }],
+    "nextjs": [],
+    "react": [],
+    "vue": [],
+    "svelte": [],
+    "angular": [],
+    "tailwind": [],
+    "prisma": [],
+    "drizzle": [],
+    "supabase": [],
+    "express": [],
+    "nestjs": [],
+    "django": [],
+    "fastapi": [],
+    "flask": [],
+    "jest": [],
+    "pytest": []
+  }
+}
