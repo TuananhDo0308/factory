@@ -25,3 +25,5 @@ software-factory/prisma/*.db-journal
 software-factory/.env
 software-factory/.env.local
 software-factory/.vercel/
+.vercel/
+.env.local
