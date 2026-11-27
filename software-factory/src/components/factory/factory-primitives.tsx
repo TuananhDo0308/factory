@@ -81,8 +81,8 @@ export function StatusDot({ status }: { status: string }) {
   return <span className={cn("inline-block size-2 shrink-0 rounded-full", color)} />;
 }
 
-/** Antigravity-style 2x2 four-dot chasing loader for active runs in the sidebar */
-export function AntigravityLoader({ className }: { className?: string }) {
+/** 2x2 four-dot chasing loader for active runs in the sidebar */
+export function FourDotLoader({ className }: { className?: string }) {
   return (
     <svg
       viewBox="0 0 12 12"
@@ -94,28 +94,28 @@ export function AntigravityLoader({ className }: { className?: string }) {
         cy="3.2"
         r="1.85"
         fill="currentColor"
-        className="agy-loader-dot agy-loader-dot-1"
+        className="sf-loader-dot sf-loader-dot-1"
       />
       <circle
         cx="8.8"
         cy="3.2"
         r="1.85"
         fill="currentColor"
-        className="agy-loader-dot agy-loader-dot-2"
+        className="sf-loader-dot sf-loader-dot-2"
       />
       <circle
         cx="8.8"
         cy="8.8"
         r="1.85"
         fill="currentColor"
-        className="agy-loader-dot agy-loader-dot-3"
+        className="sf-loader-dot sf-loader-dot-3"
       />
       <circle
         cx="3.2"
         cy="8.8"
         r="1.85"
         fill="currentColor"
-        className="agy-loader-dot agy-loader-dot-4"
+        className="sf-loader-dot sf-loader-dot-4"
       />
     </svg>
   );
@@ -151,7 +151,7 @@ export function getSidebarIndicatorKind(
   return null;
 }
 
-/** Right-aligned Antigravity-style status indicator for sidebar runs & subagents */
+/** Right-aligned status indicator for sidebar runs & subagents */
 export function SidebarStatusIndicator({
   status,
   unread = false,
@@ -171,7 +171,7 @@ export function SidebarStatusIndicator({
         aria-label="Running"
         className={cn("inline-flex size-4 shrink-0 items-center justify-center", className)}
       >
-        <AntigravityLoader />
+        <FourDotLoader />
       </span>
     );
   }

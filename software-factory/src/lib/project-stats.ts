@@ -1,7 +1,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { prisma } from "@/lib/prisma";
-import type { IssueCriterion } from "@/lib/triage";
+import type { IssueCriterion } from "@/lib/epics";
 
 export type SerializedRunStep = {
   id: string;
@@ -68,6 +68,12 @@ export type SerializedProjectIssue = {
   runKey: string | null;
   summary: string | null;
   thinking: string | null;
+  epicNumber: number | null;
+  ticketKey: string | null;
+  wave: number | null;
+  rounds: number | null;
+  githubIssueNumber: number | null;
+  githubIssueUrl: string | null;
   createdAt: string;
   updatedAt: string;
 };
@@ -119,7 +125,6 @@ const CONTEXT_PATHS = [
   ".factory/decisions.md",
   ".factory/design/DESIGN.md",
   "CODING_STANDARDS.md",
-  "GEMINI.md",
   "CLAUDE.md",
 ];
 
@@ -166,6 +171,12 @@ export function serializeProjectIssue(issue: {
   runKey: string | null;
   summary: string | null;
   thinking: string | null;
+  epicNumber: number | null;
+  ticketKey: string | null;
+  wave: number | null;
+  rounds: number | null;
+  githubIssueNumber: number | null;
+  githubIssueUrl: string | null;
   createdAt: Date;
   updatedAt: Date;
 }): SerializedProjectIssue {
@@ -188,6 +199,12 @@ export function serializeProjectIssue(issue: {
     runKey: issue.runKey,
     summary: issue.summary,
     thinking: issue.thinking,
+    epicNumber: issue.epicNumber,
+    ticketKey: issue.ticketKey,
+    wave: issue.wave,
+    rounds: issue.rounds,
+    githubIssueNumber: issue.githubIssueNumber,
+    githubIssueUrl: issue.githubIssueUrl,
     createdAt: issue.createdAt.toISOString(),
     updatedAt: issue.updatedAt.toISOString(),
   };

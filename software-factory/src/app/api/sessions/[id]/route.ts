@@ -1,9 +1,9 @@
 import { type NextRequest, NextResponse } from "next/server";
 import { authenticateRequest } from "@/lib/api-auth";
-import { isUnattendedFactoryMode } from "@/lib/auto-dispatch";
+import { pickOnlineRunner } from "@/lib/dispatch";
 import { emitFactoryEvent } from "@/lib/events";
 import { prisma } from "@/lib/prisma";
-import { findAccessibleRun, getAccessibleRunners } from "@/lib/team-access";
+import { findAccessibleRun } from "@/lib/team-access";
 import { getRunDetail } from "@/lib/workspace-data";
 
 export async function GET(
@@ -43,40 +43,25 @@ export async function PATCH(
   }
 
   if (
-    isUnattendedFactoryMode(existing.mode) &&
+    existing.mode === "epic" &&
     (body.action === "pause" || body.action === "resume" || body.status === "awaiting_input")
   ) {
     return NextResponse.json(
       {
         error:
-          "Factory build runs are unattended and cannot be paused or resumed mid-loop. Cancel or wait for completion, then Retry or Clarify.",
+          "An epic run cannot be paused or resumed. Wait for it to end, then run the epic again from the board (it resumes from its state).",
       },
       { status: 409 },
     );
   }
 
-  let targetResumeRunner:
-    | Awaited<ReturnType<typeof getAccessibleRunners>>[number]
-    | null = null;
+  let targetResumeRunner: Awaited<ReturnType<typeof pickOnlineRunner>> = null;
   if (body.action === "resume") {
-    const cutoffMs = Date.now() - 65_000;
-    const onlineRunners = (
-      await getAccessibleRunners(auth.user.id, {
-        projectId: existing.projectId,
-        githubLogin: auth.user.githubLogin,
-      })
-    ).filter((r) => r.status === "online" && r.lastHeartbeatAt.getTime() > cutoffMs);
-    targetResumeRunner =
-      (existing.runnerMachineId
-        ? onlineRunners.find((r) => r.id === existing.runnerMachineId) ?? null
-        : null) ??
-      onlineRunners
-        .filter((r) => r.userId === auth.user.id)
-        .sort((a, b) => a.activeRuns - b.activeRuns)[0] ??
-      onlineRunners
-        .filter((r) => r.visibility === "team")
-        .sort((a, b) => a.activeRuns - b.activeRuns)[0] ??
-      null;
+    targetResumeRunner = await pickOnlineRunner({
+      user: auth.user,
+      projectId: existing.projectId,
+      preferredRunnerId: existing.runnerMachineId,
+    });
     if (!targetResumeRunner) {
       return NextResponse.json(
         {
@@ -143,7 +128,7 @@ export async function PATCH(
             ? {
                 decision: "resumed",
                 message: "Operator resumed the session. Please continue from where you paused.",
-                engine: existing.engine,
+                engine: "claude",
                 model: existing.model,
                 autonomy: existing.autonomy,
                 mode: existing.mode,

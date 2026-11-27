@@ -42,7 +42,6 @@ import {
 export type SettingsTeamProject = {
   id: string;
   name: string;
-  engine: string;
   isOwner: boolean;
   ownerLogin: string;
   memberCount: number;
@@ -405,7 +404,7 @@ export function SettingsTeamPanel({
       {/* Invite Collaborators & Links (Unified Card) */}
       {isOwner && (
         <section className="flex flex-col gap-2.5">
-          <h2 className="font-mono text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
+          <h2 className="font-mono text-xs font-medium uppercase tracking-wider text-muted-foreground">
             Invite Collaborators
           </h2>
           <div className="divide-y rounded-lg border bg-card">
@@ -439,7 +438,7 @@ export function SettingsTeamPanel({
 
                   {dropdownOpen && (
                     <div className="absolute top-full right-0 left-0 z-30 mt-1.5 overflow-hidden rounded-lg border bg-popover shadow-lg">
-                      <div className="border-b px-3 py-1.5 font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
+                      <div className="border-b px-3 py-1.5 font-mono text-2xs uppercase tracking-wider text-muted-foreground">
                         Signed-in users ({suggestions.length})
                       </div>
                       <div className="max-h-56 overflow-y-auto py-1">
@@ -465,7 +464,7 @@ export function SettingsTeamPanel({
                                   {u.avatarUrl && (
                                     <AvatarImage src={u.avatarUrl} alt={u.githubLogin} />
                                   )}
-                                  <AvatarFallback className="text-[10px]">
+                                  <AvatarFallback className="text-2xs">
                                     {initialsFor(u.name, u.githubLogin)}
                                   </AvatarFallback>
                                 </Avatar>
@@ -473,14 +472,14 @@ export function SettingsTeamPanel({
                                   <span className="truncate font-medium text-foreground">
                                     {u.name || u.githubLogin}
                                   </span>
-                                  <span className="truncate font-mono text-[11px] text-muted-foreground">
+                                  <span className="truncate font-mono text-xs text-muted-foreground">
                                     @{u.githubLogin}
                                     {u.email ? ` · ${u.email}` : ""}
                                   </span>
                                 </div>
                               </div>
                               {u.isGitHub && (
-                                <Badge variant="secondary" className="shrink-0 text-[10px]">
+                                <Badge variant="secondary" className="shrink-0 text-2xs">
                                   GitHub
                                 </Badge>
                               )}
@@ -586,7 +585,7 @@ export function SettingsTeamPanel({
                         {origin}/invite/{inv.token}
                       </span>
                       <div className="flex shrink-0 items-center gap-1.5">
-                        <Badge variant="secondary" className="text-[10px]">
+                        <Badge variant="secondary" className="text-2xs">
                           {inv.role} · {inv.usesCount} used
                         </Badge>
                         <Button
@@ -622,7 +621,7 @@ export function SettingsTeamPanel({
 
       {/* Members Table */}
       <section className="flex flex-col gap-2.5">
-        <h2 className="font-mono text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
+        <h2 className="font-mono text-xs font-medium uppercase tracking-wider text-muted-foreground">
           Members ({totalMembers})
         </h2>
         <div className="overflow-hidden rounded-lg border bg-card">
@@ -653,7 +652,7 @@ export function SettingsTeamPanel({
                               alt={teamData.owner.githubLogin}
                             />
                           )}
-                          <AvatarFallback className="text-[10px]">
+                          <AvatarFallback className="text-2xs">
                             {initialsFor(teamData.owner.name, teamData.owner.githubLogin)}
                           </AvatarFallback>
                         </Avatar>
@@ -661,7 +660,7 @@ export function SettingsTeamPanel({
                           <span className="font-medium text-foreground">
                             {teamData.owner.name || teamData.owner.githubLogin}
                           </span>
-                          <span className="font-mono text-[11px] text-muted-foreground">
+                          <span className="font-mono text-xs text-muted-foreground">
                             @{teamData.owner.githubLogin}
                           </span>
                         </div>
@@ -681,7 +680,7 @@ export function SettingsTeamPanel({
                       <div className="flex items-center gap-2.5">
                         <Avatar className="size-7">
                           {m.avatarUrl && <AvatarImage src={m.avatarUrl} alt={m.githubLogin} />}
-                          <AvatarFallback className="text-[10px]">
+                          <AvatarFallback className="text-2xs">
                             {initialsFor(m.name, m.githubLogin)}
                           </AvatarFallback>
                         </Avatar>
@@ -689,7 +688,7 @@ export function SettingsTeamPanel({
                           <span className="font-medium text-foreground">
                             {m.name || `@${m.githubLogin}`}
                           </span>
-                          <span className="font-mono text-[11px] text-muted-foreground">
+                          <span className="font-mono text-xs text-muted-foreground">
                             @{m.githubLogin}
                           </span>
                         </div>
@@ -757,7 +756,7 @@ export function SettingsTeamPanel({
       {/* Project Runners */}
       <section className="flex flex-col gap-2.5">
         <div className="flex items-center justify-between gap-2">
-          <h2 className="font-mono text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
+          <h2 className="font-mono text-xs font-medium uppercase tracking-wider text-muted-foreground">
             Available Runners ({teamData?.runners.length ?? 0})
           </h2>
           {onGoToRunners && (
@@ -777,7 +776,7 @@ export function SettingsTeamPanel({
                 <div className="flex min-w-0 items-center gap-2.5">
                   <StatusDot status={r.status} />
                   <span className="truncate font-medium text-foreground">{r.name}</span>
-                  <span className="truncate font-mono text-[11px] text-muted-foreground">
+                  <span className="truncate font-mono text-xs text-muted-foreground">
                     {r.os} · @{r.ownerLogin}
                   </span>
                 </div>
@@ -798,7 +797,7 @@ export function SettingsTeamPanel({
                     </label>
                   </div>
                 ) : (
-                  <Badge variant="outline" className="font-mono text-[10px]">
+                  <Badge variant="outline" className="font-mono text-2xs">
                     Shared by @{r.ownerLogin}
                   </Badge>
                 )}

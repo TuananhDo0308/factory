@@ -1,0 +1,105 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "new-factory/plan-schema.json",
+  "title": "new_factory batch plan",
+  "description": "The one interface between new-ba and the new factory. new-ba writes it into the epic's body under '## Plan' and keeps a local copy; check-batch.mjs builds it from the tickets and validates it against this file. A draft plan (before the issues exist) names tickets by key (T1) and has no epic; a published plan has epic, repo and an issue number on every ticket.",
+  "type": "object",
+  "required": ["id", "architecture", "waves", "hash"],
+  "additionalProperties": false,
+  "properties": {
+    "id": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]*$", "description": "Short name of the batch, e.g. todo-v1. Also the prototype's folder name." },
+    "title": { "type": "string", "minLength": 1, "description": "The epic's title." },
+    "repo": { "type": "string", "pattern": "^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$" },
+    "epic": { "type": "integer", "minimum": 1, "description": "Issue number of the epic that holds this plan." },
+    "hash": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$", "description": "planHash() in scripts/lib.mjs over each ticket's wave, owns, uses, dependsOn, newDependencies and criteria (id and text) as the issue bodies say them. Equal hash: the tickets are as check-batch passed them." },
+    "waveLimitReason": { "type": "string", "minLength": 1, "description": "Present only when the batch has more than 3 waves: why the code could not be split further. check-batch refuses more than 3 waves without it." },
+    "architecture": {
+      "type": "object",
+      "required": ["layout", "checks", "shared", "extensionPoint", "contracts"],
+      "additionalProperties": false,
+      "properties": {
+        "layout": { "enum": ["pages-features", "existing"], "description": "pages-features: the repository had no code when the batch was written (scripts/detect-layout.mjs), so the batch lays it out as src/app, src/shared, src/pages/<page>/features/<feature>, src/features/<feature>, e2e/<page>/<feature> (references/slicing.md). existing: the repository has code; its own structure, names and test locations are followed and nothing about structure changes." },
+        "checks": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "required": ["name", "command"],
+            "additionalProperties": false,
+            "properties": {
+              "name": { "type": "string", "pattern": "^[a-z][a-z0-9-]*$", "description": "test, e2e, lint, typecheck, build, …" },
+              "command": { "type": "string", "minLength": 1, "description": "The shell command, run from the repository root." }
+            }
+          },
+          "description": "The commands the factory runs as the project's checks. Existing repository: read from package.json, CI or its docs. New repository: the commands the foundation ticket makes work, each with a foundation criterion."
+        },
+        "stack": { "type": "string", "description": "One line: language, framework, test runners." },
+        "shared": { "type": "array", "items": { "$ref": "#/$defs/path" }, "description": "Files several slices would want to change (routes, store, schema, App, config). Each is owned by at most one ticket per wave." },
+        "extensionPoint": { "type": "string", "description": "How a slice plugs in without touching shared files, e.g. src/features/*/index.ts picked up by a registry. Empty string when there is none." },
+        "contracts": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["name", "file", "summary"],
+            "additionalProperties": false,
+            "properties": {
+              "name": { "type": "string", "pattern": "^(?:slot:)?[A-Za-z][A-Za-z0-9_.:-]*$", "description": "What tickets list under Uses. A slot is named slot:<name>." },
+              "file": { "$ref": "#/$defs/path" },
+              "summary": { "type": "string", "minLength": 1, "description": "The exact shape: names, signatures, data, behaviour. The ticket that provides it states the same in its criteria. After wave 0 the file is append-only: later tickets add to it, never change what is there." }
+            }
+          }
+        }
+      }
+    },
+    "prototype": {
+      "type": "object",
+      "required": ["branch", "commit", "path"],
+      "additionalProperties": false,
+      "description": "The approved prototype of the whole flow. The factory copies `git archive <commit>` of the branch into `path` once, when it prepares the batch.",
+      "properties": {
+        "branch": { "type": "string", "pattern": "^prototype/[a-z0-9][a-z0-9-]*$" },
+        "commit": { "type": "string", "pattern": "^[0-9a-f]{40,64}$" },
+        "path": { "type": "string", "pattern": "^(?:[A-Za-z0-9_-][A-Za-z0-9._-]*/)+$", "description": "Folder in the repository, ending in /, holding index.html." }
+      }
+    },
+    "waves": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["wave", "tickets"],
+        "additionalProperties": false,
+        "properties": {
+          "wave": { "type": "integer", "minimum": 0, "description": "Wave 0 is the foundation when there are later waves. Waves run in order; tickets of one wave run in parallel." },
+          "tickets": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/ticket" } }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "path": { "type": "string", "minLength": 1, "pattern": "^(?!/)(?!\\./)(?!.*(?:^|/)\\.\\.(?:/|$))[^\\s{}\\[\\]\\\\]+$" },
+    "ref": {
+      "anyOf": [{ "type": "integer", "minimum": 1 }, { "type": "string", "pattern": "^T[0-9]+$" }],
+      "anyOfMessage": "is an issue number, or T<n> in a draft"
+    },
+    "ticket": {
+      "type": "object",
+      "required": ["owns", "uses", "dependsOn", "newDependencies", "criteria", "size", "sizeReason"],
+      "additionalProperties": false,
+      "anyOf": [{ "required": ["issue"] }, { "required": ["key"] }],
+      "anyOfMessage": "a ticket has an issue number, or a key (T1) in a draft",
+      "properties": {
+        "issue": { "type": "integer", "minimum": 1 },
+        "key": { "type": "string", "pattern": "^T[0-9]+$", "description": "The ticket's name before it had a number; kept for tracing." },
+        "title": { "type": "string" },
+        "owns": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/path" }, "description": "Globs of the only files this ticket may change or create. A folder is written dir/**." },
+        "uses": { "type": "array", "items": { "type": "string" }, "description": "Names of architecture.contracts this ticket builds on." },
+        "dependsOn": { "type": "array", "items": { "$ref": "#/$defs/ref" }, "description": "Tickets of earlier waves this one needs merged first." },
+        "newDependencies": { "type": "array", "items": { "type": "string", "pattern": "^(?:@[a-z0-9][\\w.~-]*/)?[a-z0-9][\\w.~-]*@[^\\s@]+$" }, "description": "Packages this ticket needs installed, name@version, from its 'New dependencies' section ([] for none). The factory adds the union to package.json and installs it once before building; no slice owns package.json (a new repository's foundation owns it for its scripts and settings only). Two tickets naming one package name it at the same version." },
+        "criteria": { "type": "array", "minItems": 1, "items": { "type": "string", "pattern": "^C[0-9]+(?:\\.[0-9]+)*$" }, "description": "Criterion ids, unique across the batch." },
+        "size": { "enum": ["S", "M", "L"] },
+        "sizeReason": { "type": "string", "minLength": 1 }
+      }
+    }
+  }
+}

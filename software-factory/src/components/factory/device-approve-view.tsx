@@ -153,7 +153,7 @@ export function DeviceApproveView({
                     <LaptopIcon className="size-4 text-muted-foreground" />
                     <div className="flex flex-col">
                       <span className="font-medium text-foreground">{device.runnerName}</span>
-                      <span className="font-mono text-[11px] text-muted-foreground">
+                      <span className="font-mono text-xs text-muted-foreground">
                         {device.hostname} ({device.os})
                       </span>
                     </div>
@@ -190,7 +190,7 @@ export function DeviceApproveView({
                 </Button>
               </div>
 
-              <p className="text-center text-[11px] text-muted-foreground">
+              <p className="text-center text-xs text-muted-foreground">
                 This mints a dedicated revocable API key for this machine only. You can revoke it
                 anytime in Settings → API Keys.
               </p>

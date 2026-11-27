@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>new-factory run</title>
+<style>
+  :root { --bg:#fbfbfa; --fg:#1d1d1b; --muted:#6b6b66; --line:#e3e2de; --ok:#1f7a4d; --bad:#b3261e; --warn:#9a6700; --run:#1f5fae; }
+  @media (prefers-color-scheme: dark) { :root { --bg:#161615; --fg:#ecebe8; --muted:#9b9a94; --line:#2e2d2a; --ok:#5cc28f; --bad:#f2827a; --warn:#e0b44c; --run:#7fb0f0; } }
+  body { margin:0; padding:24px 16px; background:var(--bg); color:var(--fg); font:14px/1.5 -apple-system, system-ui, sans-serif; }
+  main { max-width:1100px; margin:0 auto; }
+  h1 { font-size:20px; margin:0 0 4px; } h2 { font-size:15px; margin:28px 0 8px; }
+  .muted { color:var(--muted); }
+  .tiles { display:flex; flex-wrap:wrap; gap:12px; margin-top:16px; }
+  .tile { border:1px solid var(--line); border-radius:8px; padding:10px 14px; min-width:120px; }
+  .tile b { display:block; font-size:20px; }
+  table { width:100%; border-collapse:collapse; } td, th { text-align:left; padding:6px 8px; border-bottom:1px solid var(--line); vertical-align:top; }
+  th { font-weight:600; color:var(--muted); font-size:12px; }
+  .s-merged { color:var(--ok); } .s-needs-decision, .s-blocked { color:var(--bad); } .s-running, .s-reopened { color:var(--run); } .s-waiting { color:var(--warn); }
+  .wrap { overflow-x:auto; } code { font-size:12px; } li { margin:2px 0; }
+</style>
+</head>
+<body>
+<main id="app"><p class="muted">Waiting for state.js…</p></main>
+<script>
+  function esc(s) { return String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]); }
+  function mins(ms) { return ms >= 60000 ? (ms / 60000).toFixed(1) + ' min' : Math.round(ms / 1000) + ' s'; }
+  function span(a, b) { return a ? (b ? Date.parse(b) : Date.now()) - Date.parse(a) : 0; }
+  function render(st) {
+    const ts = Object.values(st.tickets || {}).sort((a, b) => a.wave - b.wave || a.issue - b.issue);
+    const cost = (st.agents || []).reduce((n, a) => n + (a.cost || 0), 0);
+    const live = (st.agents || []).filter((a) => !a.end);
+    const count = (s) => ts.filter((t) => t.status === s).length;
+    let h = `<h1>Epic #${st.epic} · ${esc(st.repo)}</h1><div class="muted">${esc(st.status)} · started ${esc(st.startedAt)} · run ${st.runs}</div>`;
+    h += `<div class="tiles"><div class="tile"><b>${mins(span(st.startedAt, st.finishedAt))}</b>elapsed</div><div class="tile"><b>${count('merged')}/${ts.length}</b>delivered</div><div class="tile"><b>${count('needs-decision')}</b>needs decision</div><div class="tile"><b>${(st.agents || []).length}</b>agent calls</div><div class="tile"><b>$${cost.toFixed(2)}</b>cost</div><div class="tile"><b>${(st.alarms || []).length}</b>alarms</div></div>`;
+    h += `<h2>Tickets</h2><div class="wrap"><table><tr><th>Ticket</th><th>Wave</th><th>Size</th><th>Status</th><th>Phase</th><th>Rounds</th><th>Time</th><th>Last</th></tr>`;
+    for (const t of ts) h += `<tr><td>#${t.issue} ${esc(t.title)}</td><td>${t.wave}</td><td>${t.size}</td><td class="s-${t.status}">${esc(t.status)}</td><td>${esc(t.phase || '')}</td><td>${t.rounds}</td><td>${mins(span(t.startedAt, t.mergedAt))}</td><td class="muted">${esc((t.history || []).slice(-1)[0] || '')}</td></tr>`;
+    h += `</table></div>`;
+    if (live.length) h += `<h2>Running agents</h2><ul>${live.map((a) => `<li>${esc(a.id)} · ${esc(a.model)} · ${esc(a.step)} · ${mins(span(a.start))} · <code>${esc(a.log)}</code></li>`).join('')}</ul>`;
+    h += `<h2>Steps</h2><ul>${Object.entries(st.steps || {}).map(([k, v]) => `<li>${esc(k)}: ${mins(v.ms + (v.end ? 0 : span(v.restart || v.start)))}${v.end ? '' : ' (running)'}</li>`).join('')}</ul>`;
+    if ((st.alarms || []).length) h += `<h2>Alarms</h2><ul>${st.alarms.map((a) => `<li>${esc(a.at)} #${a.issue ?? 'batch'} ${esc(a.step)}: ${esc(a.reason)}. ${esc(a.handled)}</li>`).join('')}</ul>`;
+    document.getElementById('app').innerHTML = h;
+  }
+  function load() {
+    const s = document.createElement('script');
+    s.src = 'state.js?' + Date.now();
+    s.onload = () => { if (window.STATE) render(window.STATE); s.remove(); };
+    s.onerror = () => s.remove();
+    document.head.appendChild(s);
+  }
+  load();
+  setInterval(load, 5000);
+</script>
+</body>
+</html>

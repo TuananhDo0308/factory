@@ -24,11 +24,9 @@ import {
   FileImageIcon,
   FileTextIcon,
   GitBranchIcon,
-  GitPullRequestIcon,
   LaptopIcon,
   Link2Icon,
   LockIcon,
-  MessageSquareIcon,
   PanelRightIcon,
   PaperclipIcon,
   PauseIcon,
@@ -43,7 +41,6 @@ import {
   WrenchIcon,
   XCircleIcon,
   XIcon,
-  ZapIcon,
 } from "lucide-react";
 import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
@@ -73,14 +70,6 @@ import {
   ResizablePanelGroup,
 } from "@/components/ui/resizable";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import {
-  Select,
-  SelectContent,
-  SelectGroup,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
 import { Separator } from "@/components/ui/separator";
 import { Spinner } from "@/components/ui/spinner";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -100,10 +89,9 @@ import {
   formatCompactTokens,
   formatRelativeTime,
   formatUsd,
-  MeterBars,
   StatusDot,
 } from "@/components/factory/factory-primitives";
-import { FactoryPipelineView } from "@/components/factory/factory-pipeline-view";
+import { EpicRunView } from "@/components/factory/epic-run-view";
 import {
   MarkdownContent,
   parseTicketsJson,
@@ -120,6 +108,8 @@ import {
   toPrototypeViewModel,
   type PrototypeViewModel,
 } from "@/components/factory/prototype-viewer";
+import { DirectionsCompare, PrototypeActivityCard } from "@/components/factory/prototype-activity";
+import { collectPrototypeActivity } from "@/lib/prototype-capture";
 import {
   useFactoryStream,
   useLiveRunStream,
@@ -136,9 +126,9 @@ import {
   extractStepAttachments,
   type StoredAttachmentRef,
 } from "@/lib/attachments";
+import { ticketOfAgent } from "@/lib/epics";
 import type { LiveChunkEvent } from "@/lib/realtime";
-import { effortBarsForModel, formatModelLabel } from "@/lib/models";
-import { isFactoryInitIssue } from "@/lib/init-issue-shared";
+import { formatModelLabel } from "@/lib/models";
 import {
   splitAssistantPrototypeBlocks,
   type SerializedPrototype,
@@ -261,7 +251,7 @@ type TimelineGroup =
 function isNoiseExitText(text: string): boolean {
   const t = text.trim();
   if (!t) return true;
-  return /^(?:agy|claude)\s+exited\s+with\s+code\s+\S+$/i.test(t) ||
+  return /^(?:\w+)\s+exited\s+with\s+code\s+\S+$/i.test(t) ||
     /^Run finished with outcome:\s*\S+$/i.test(t);
 }
 
@@ -302,7 +292,7 @@ function groupTimelineSteps(steps: TimelineStep[]): TimelineGroup[] {
       continue;
     }
 
-    // Skip empty boilerplate `verdict` line ("agy exited with code 0") when run status is already in header.
+    // Skip an empty boilerplate `verdict` line ("exited with code 0") when the run status is already in the header.
     if (stepLower === "verdict" && step.status === "passed" && (!step.summary || isNoiseExitText(step.summary))) {
       continue;
     }
@@ -324,7 +314,7 @@ function findActiveQuestionTurn(
   steps: TimelineStep[],
   selectedAgentId: string | null,
 ): { stepId: string; questionSet: ParsedQuestionSet } | null {
-  if (mode === "factory" || mode === "mission" || selectedAgentId !== null) return null;
+  if (mode === "epic" || selectedAgentId !== null) return null;
   if (status === "running" || status === "queued") return null;
 
   const groups = groupTimelineSteps(steps);
@@ -464,7 +454,7 @@ function TraceActivityItem({
         {isRunning ? <Spinner /> : <Icon />}
       </TraceIcon>
       {agentTag && (
-        <span className="shrink-0 rounded-[4px] border bg-muted/60 px-1.5 py-0.5 font-mono text-[10px] leading-none text-muted-foreground">
+        <span className="shrink-0 rounded-[4px] border bg-muted/60 px-1.5 py-0.5 font-mono text-2xs leading-none text-muted-foreground">
           {agentTag}
         </span>
       )}
@@ -484,10 +474,10 @@ function TraceActivityItem({
         <div className="flex flex-col gap-2 text-xs">
           {inputPayload !== null && (
             <div className="flex flex-col gap-1">
-              <span className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground/80">
+              <span className="font-mono text-2xs uppercase tracking-wider text-muted-foreground/80">
                 Input
               </span>
-              <pre className="max-h-48 overflow-auto rounded-[4px] border bg-muted/40 p-2.5 font-mono text-[11px] leading-relaxed text-foreground/90">
+              <pre className="max-h-48 overflow-auto rounded-[4px] border bg-muted/40 p-2.5 font-mono text-xs leading-relaxed text-foreground/90">
                 {typeof inputPayload === "string"
                   ? inputPayload
                   : JSON.stringify(inputPayload, null, 2)}
@@ -497,10 +487,10 @@ function TraceActivityItem({
 
           {outputText && (
             <div className="flex flex-col gap-1">
-              <span className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground/80">
+              <span className="font-mono text-2xs uppercase tracking-wider text-muted-foreground/80">
                 Output
               </span>
-              <pre className="max-h-56 overflow-auto rounded-[4px] border bg-muted/40 p-2.5 font-mono text-[11px] leading-relaxed text-foreground/90">
+              <pre className="max-h-56 overflow-auto rounded-[4px] border bg-muted/40 p-2.5 font-mono text-xs leading-relaxed text-foreground/90">
                 {outputText}
               </pre>
             </div>
@@ -508,17 +498,17 @@ function TraceActivityItem({
 
           {summaryBody &&
             (isError ? (
-              <pre className="max-h-48 overflow-auto whitespace-pre-wrap rounded-[4px] border border-destructive/40 bg-destructive/5 p-2.5 font-mono text-[11px] text-destructive">
+              <pre className="max-h-48 overflow-auto whitespace-pre-wrap rounded-[4px] border border-destructive/40 bg-destructive/5 p-2.5 font-mono text-xs text-destructive">
                 {summaryBody}
               </pre>
             ) : (
-              <p className="whitespace-pre-wrap font-mono text-[11px] leading-relaxed text-muted-foreground">
+              <p className="whitespace-pre-wrap font-mono text-xs leading-relaxed text-muted-foreground">
                 {summaryBody}
               </p>
             ))}
 
           {extraDetails && !inputPayload && !outputText && (
-            <pre className="max-h-40 overflow-auto rounded-[4px] border bg-muted/40 p-2.5 font-mono text-[11px] leading-relaxed text-muted-foreground">
+            <pre className="max-h-40 overflow-auto rounded-[4px] border bg-muted/40 p-2.5 font-mono text-xs leading-relaxed text-muted-foreground">
               {JSON.stringify(extraDetails, null, 2)}
             </pre>
           )}
@@ -600,7 +590,7 @@ function UserChatBubble({
   return (
     <div className="flex w-full justify-end">
       <div className="flex max-w-[82%] flex-col items-end gap-1">
-        <div className="flex items-center gap-1.5 px-0.5 font-mono text-[10px] text-muted-foreground">
+        <div className="flex items-center gap-1.5 px-0.5 font-mono text-2xs text-muted-foreground">
           <span>{label}</span>
           <span>·</span>
           <span suppressHydrationWarning>{formatRelativeTime(timestamp)}</span>
@@ -612,7 +602,7 @@ function UserChatBubble({
             <button
               type="button"
               onClick={() => setExpanded((prev) => !prev)}
-              className="mt-1.5 font-mono text-[11px] text-muted-foreground underline-offset-2 hover:text-foreground hover:underline"
+              className="mt-1.5 font-mono text-xs text-muted-foreground underline-offset-2 hover:text-foreground hover:underline"
             >
               {expanded ? "Collapse prompt" : "Show full prompt"}
             </button>
@@ -764,7 +754,7 @@ function AssistantMessageCard({
                 <span className="text-muted-foreground">{formatModelLabel(step.model)}</span>
               )}
               {step.spec && (
-                <span className="rounded bg-muted px-1.5 py-0.5 font-mono text-[11px] text-muted-foreground">
+                <span className="rounded bg-muted px-1.5 py-0.5 font-mono text-xs text-muted-foreground">
                   {step.spec}
                 </span>
               )}
@@ -776,7 +766,7 @@ function AssistantMessageCard({
               )}
             </div>
 
-            <div className="flex items-center gap-2 font-mono text-[11px] text-muted-foreground/80 tabular-nums">
+            <div className="flex items-center gap-2 font-mono text-xs text-muted-foreground/80 tabular-nums">
               {step.durationMs ? <span>{(step.durationMs / 1000).toFixed(1)}s</span> : null}
               {step.costUsd ? <span>{formatUsd(step.costUsd)}</span> : null}
               {text && (
@@ -914,10 +904,6 @@ function AssistantMessageCard({
       </div>
     </div>
   );
-}
-
-function effortForModel(model: string | null | undefined): number {
-  return effortBarsForModel(model);
 }
 
 type TraceItemEntry = {
@@ -1128,7 +1114,7 @@ function CollapsibleTraceCluster({
           </span>
         </div>
 
-        <div className="flex shrink-0 items-center gap-2.5 font-mono text-[11px] text-muted-foreground/80 tabular-nums">
+        <div className="flex shrink-0 items-center gap-2.5 font-mono text-xs text-muted-foreground/80 tabular-nums">
           {cluster.totalDurationMs > 0 && (
             <span>{(cluster.totalDurationMs / 1000).toFixed(1)}s</span>
           )}
@@ -1182,9 +1168,9 @@ export function MissionControl({
   const [nowTick, setNowTick] = React.useState<number>(
     () => new Date(initialRun.updatedAt).getTime(),
   );
-  // Factory mode defaults to Live view unless opened directly to a specific subagent (?agent=...)
+  // An epic run defaults to its Live view unless opened directly to a specific agent (?agent=...)
   const [viewMode, setViewMode] = React.useState<"chat" | "pipeline">(() =>
-    initialAgentId ? "chat" : initialRun.mode === "factory" ? "pipeline" : "chat",
+    initialAgentId ? "chat" : initialRun.mode === "epic" ? "pipeline" : "chat",
   );
   const [expandAllGroups, setExpandAllGroups] = React.useState<boolean | null>(null);
   const [inspectorOpen, setInspectorOpen] = React.useState(false);
@@ -1204,6 +1190,8 @@ export function MissionControl({
   const [selectedIssueId, setSelectedIssueId] = React.useState<string | null>(null);
   // Interactive Prototype preview -> reveals right-side Prototype Studio
   const [selectedPrototype, setSelectedPrototype] = React.useState<PrototypeViewModel | null>(null);
+  // Slugs of the design directions shown side by side in the right pane.
+  const [compareSlugs, setCompareSlugs] = React.useState<string[] | null>(null);
 
   const runPrototypes = React.useMemo(() => run.prototypes ?? [], [run.prototypes]);
   const activePrototype = React.useMemo<PrototypeViewModel | null>(() => {
@@ -1464,9 +1452,9 @@ export function MissionControl({
   const elapsedMs = isWaitingForDaemon
     ? (run.durationMs ?? 0)
     : (run.durationMs ?? Math.max(0, nowTick - new Date(run.startedAt).getTime()));
-  // Active tokens = uncached input + output (matching Antigravity `total_tokens`).
+  // Active tokens = input (incl. cache writes) + output, as summed server-side from the steps.
   // Prompt-cache reads are tracked and shown separately so multi-turn prefix re-reads
-  // don't visually inflate headline token counts by 5x–15x.
+  // don't visually inflate headline token counts.
   const activeTokens = run.inputTokens + run.outputTokens;
   const cacheRate =
     run.inputTokens + run.cacheReadTokens > 0
@@ -1648,6 +1636,7 @@ export function MissionControl({
         tier: inspectedDbIssue.tier,
         autonomy: inspectedDbIssue.autonomy,
         status: inspectedDbIssue.status,
+        githubIssueUrl: inspectedDbIssue.githubIssueUrl,
       }
     : selectedTicket
       ? {
@@ -1663,6 +1652,7 @@ export function MissionControl({
           tier: null as string | null,
           autonomy: null as string | null,
           status: "backlog",
+          githubIssueUrl: null as string | null,
         }
       : null;
 
@@ -1671,6 +1661,7 @@ export function MissionControl({
       (i) => i.issueKey.toUpperCase() === ticket.issueKey.toUpperCase(),
     );
     setSelectedPrototype(null);
+    setCompareSlugs(null);
     setSelectedIssueId(dbMatch?.id ?? null);
     setSelectedTicket(ticket);
   }
@@ -1678,6 +1669,7 @@ export function MissionControl({
   function handleSelectDbIssue(issueId: string) {
     const dbMatch = (run.projectDraftIssues || []).find((i) => i.id === issueId);
     setSelectedPrototype(null);
+    setCompareSlugs(null);
     setSelectedIssueId(issueId);
     setSelectedTicket(
       dbMatch
@@ -1698,77 +1690,29 @@ export function MissionControl({
   function handleSelectPrototype(vm: PrototypeViewModel) {
     setSelectedIssueId(null);
     setSelectedTicket(null);
+    setCompareSlugs(null);
     setSelectedPrototype(vm);
   }
 
-  async function handleUpdateInspectedStatus(issueId: string, status: string) {
-    setBusy(true);
-    try {
-      const res = await fetch(`/api/projects/${run.project.id}/issues/${issueId}`, {
-        method: "PATCH",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ status }),
-      });
-      if (!res.ok) {
-        toast.error("Could not update ticket status");
-        return;
-      }
-      toast.success(`Moved ticket to ${status.replace("_", " ")}`);
-      await refreshRun();
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function handleRunSingleIssue(issueId: string) {
-    setBusy(true);
-    try {
-      const res = await fetch(`/api/projects/${run.project.id}/dispatch`, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ action: "run_issue", issueId }),
-      });
-      const data = (await res.json().catch(() => null)) as {
-        run?: { id: string };
-        issueKey?: string;
-        error?: string;
-      } | null;
-      if (!res.ok || !data?.run) {
-        toast.error(data?.error || "Could not start Factory run");
-        return;
-      }
-      toast.success(`Launched Factory run for ${data.issueKey || "ticket"}`);
-      router.push(`/sessions/${data.run.id}`);
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function handleDeleteInspectedIssue(issueId: string, key: string) {
-    setBusy(true);
-    try {
-      const res = await fetch(`/api/projects/${run.project.id}/issues/${issueId}`, {
-        method: "DELETE",
-      });
-      if (!res.ok) {
-        toast.error("Could not delete ticket");
-        return;
-      }
-      setSelectedIssueId(null);
-      setSelectedTicket(null);
-      toast.success(`Deleted ${key}`);
-      await refreshRun();
-    } finally {
-      setBusy(false);
-    }
+  function handleCompareDirections(slugs: string[]) {
+    setSelectedIssueId(null);
+    setSelectedTicket(null);
+    setSelectedPrototype(null);
+    setCompareSlugs(slugs);
   }
 
   const isBaMode = run.mode === "ba";
-  const isClarifyMode = run.mode === "clarify";
-  const isUnattendedBuild = run.mode === "factory" || run.mode === "mission";
-  const isInitMode = run.mode === "init" || (run.issue ? isFactoryInitIssue(run.issue) : false);
-  const showLeftRail = !isBaMode && !isInitMode && !isClarifyMode && run.agents.length > 1;
-  const showRightPane = Boolean(activePrototype) || (isBaMode ? Boolean(inspectedIssue) : inspectorOpen);
+  const isEpicRun = run.mode === "epic";
+  const showLeftRail = !isBaMode && run.agents.length > 1;
+  const compareDirections = compareSlugs
+    ? compareSlugs
+        .map((slug) => runPrototypes.find((p) => p.slug === slug))
+        .filter((p): p is SerializedPrototype => Boolean(p))
+    : null;
+  const showRightPane =
+    Boolean(compareDirections) ||
+    Boolean(activePrototype) ||
+    (isBaMode ? Boolean(inspectedIssue) : inspectorOpen);
 
   const timelineGroups = groupTimelineSteps(filteredSteps);
 
@@ -1990,168 +1934,47 @@ export function MissionControl({
     }
   }
 
-  async function handleConfirmBaTickets(autoRun: boolean) {
-    setBusy(true);
-    try {
-      const res = await fetch(`/api/projects/${run.project.id}/dispatch`, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ action: autoRun ? "confirm_and_run" : "confirm_all" }),
-      });
-      const data = (await res.json().catch(() => null)) as {
-        confirmedCount?: number;
-        needsInit?: boolean;
-        skippedReason?: string | null;
-        dispatched?: Array<{ issueKey: string }>;
-        error?: string;
-      } | null;
-      if (!res.ok) {
-        toast.error(data?.error || "Could not confirm tickets");
-        return;
-      }
-      const needsInit = Boolean(
-        data?.needsInit || data?.skippedReason === "project_not_initialized",
-      );
-      if (autoRun) {
-        toast.success(
-          needsInit
-            ? `Confirmed ${data?.confirmedCount ?? 0} ticket(s) — run /factory init once before Auto-Run starts`
-            : `Confirmed ${data?.confirmedCount ?? 0} ticket(s) — Auto-Run started on Kanban Board`,
-        );
-        router.push(`/projects/${run.project.id}?tab=issues`);
-        return;
-      }
-      toast.success(
-        needsInit
-          ? `Confirmed ${data?.confirmedCount ?? 0} ticket(s) → Ready (run /factory init once before building)`
-          : `Confirmed ${data?.confirmedCount ?? 0} ticket(s) → Ready`,
-      );
-      await refreshRun();
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function handleCompleteInitIssue() {
-    setBusy(true);
-    try {
-      const res = run.issue
-        ? await fetch(`/api/projects/${run.project.id}/issues/${run.issue.id}`, {
-            method: "PATCH",
-            headers: { "content-type": "application/json" },
-            body: JSON.stringify({ status: "passed" }),
-          })
-        : await fetch(`/api/projects/${run.project.id}`, {
-            method: "PATCH",
-            headers: { "content-type": "application/json" },
-            body: JSON.stringify({ initStatus: "complete" }),
-          });
-      if (!res.ok) {
-        toast.error("Could not mark Factory Init as complete");
-        return;
-      }
-      toast.success("Factory Init completed — unattended Factory builds unlocked!");
-      await refreshRun();
-      router.refresh();
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function handleOpenClarifyForIssue(issueId: string) {
-    setBusy(true);
-    try {
-      const res = await fetch(`/api/projects/${run.project.id}/dispatch`, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ action: "clarify_issue", issueId }),
-      });
-      const data = (await res.json().catch(() => null)) as {
-        run?: { id: string };
-        error?: string;
-      } | null;
-      if (!res.ok || !data?.run) {
-        toast.error(data?.error || "Could not start /factory clarify");
-        return;
-      }
-      toast.success("Opened interactive /factory clarify session");
-      router.push(`/sessions/${data.run.id}`);
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function handleApproveClarifiedTicket(startBuild: boolean) {
-    if (!run.issue) return;
-    setBusy(true);
-    try {
-      const patchRes = await fetch(`/api/projects/${run.project.id}/issues/${run.issue.id}`, {
-        method: "PATCH",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ status: "ready" }),
-      });
-      if (!patchRes.ok) {
-        toast.error("Could not approve ticket to Ready");
-        return;
-      }
-      if (startBuild) {
-        const dispatchRes = await fetch(`/api/projects/${run.project.id}/dispatch`, {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({ action: "run_issue", issueId: run.issue.id }),
-        });
-        const data = (await dispatchRes.json().catch(() => null)) as {
-          run?: { id: string };
-          error?: string;
-        } | null;
-        if (dispatchRes.ok && data?.run) {
-          toast.success(`Approved ${run.issue.issueKey} & started unattended Factory build`);
-          router.push(`/sessions/${data.run.id}`);
-          return;
-        }
-        toast.warning(data?.error || `Approved ${run.issue.issueKey} → Ready`);
-      } else {
-        toast.success(`Approved ${run.issue.issueKey} → Ready`);
-      }
-      await refreshRun();
-      router.refresh();
-    } finally {
-      setBusy(false);
-    }
-  }
-
   async function handleRetrySession() {
     setBusy(true);
     try {
-      const res = await fetch(`/api/sessions/${run.id}/retry`, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          phase: run.currentPhase,
-          specId: selectedAgent?.specId,
-        }),
-      });
+      // An epic run goes on from its state.json when run again; a BA session resumes with a nudge.
+      const res =
+        run.mode === "epic" && run.epicNumber
+          ? await fetch(`/api/projects/${run.project.id}/epics/${run.epicNumber}/run`, {
+              method: "POST",
+              headers: { "content-type": "application/json" },
+              body: JSON.stringify({}),
+            })
+          : await fetch(`/api/sessions/${run.id}/steer`, {
+              method: "POST",
+              headers: { "content-type": "application/json" },
+              body: JSON.stringify({ message: "Continue from where you stopped." }),
+            });
+      const data = (await res.json().catch(() => null)) as {
+        error?: string;
+        code?: string;
+        run?: { id: string };
+        activeRunId?: string;
+      } | null;
       if (res.ok) {
-        toast.success(
-          sessionSkillSlash
-            ? `Retrying session with ${sessionSkillSlash}`
-            : "Retrying session...",
-        );
+        toast.success(run.mode === "epic" ? `Epic #${run.epicNumber} queued again` : "Resuming session…");
+        if (run.mode === "epic" && data?.run?.id) {
+          router.push(`/sessions/${data.run.id}`);
+          return;
+        }
         await refreshRun();
         router.refresh();
       } else {
-        const errData = (await res.json().catch(() => null)) as {
-          error?: string;
-          code?: string;
-        } | null;
-        toast.error(errData?.error || "Retry failed", {
+        toast.error(data?.error || "Retry failed", {
           action:
-            errData?.code === "NO_RUNNER_ONLINE" || res.status === 503
+            data?.code === "NO_RUNNER_ONLINE" || res.status === 503
               ? {
                   label: "Connect",
                   onClick: () => router.push("/settings?tab=runners"),
                 }
-              : undefined,
+              : data?.activeRunId
+                ? { label: "Open", onClick: () => router.push(`/sessions/${data.activeRunId}`) }
+                : undefined,
         });
       }
     } finally {
@@ -2163,7 +1986,6 @@ export function MissionControl({
     const fromPrompt = run.prompt ? detectSkillFromPrompt(run.prompt)?.skill : null;
     return fromPrompt ?? findSkillByIdOrMode(run.mode);
   }, [run.prompt, run.mode]);
-  const sessionSkillSlash = sessionSkill?.slash || "";
   const isRetryable =
     run.status === "failed" ||
     run.status === "blocked" ||
@@ -2176,7 +1998,7 @@ export function MissionControl({
 
   const steerComposer = (
     <form onSubmit={handleSteerSubmit} className="border-t bg-background px-5 py-3">
-      <div className="mx-auto w-full max-w-3xl">
+      <div className="mx-auto w-full max-w-5xl">
         <InputGroup
           onDragOver={(e) => {
             e.preventDefault();
@@ -2260,7 +2082,7 @@ export function MissionControl({
             className="min-h-12 px-3 pt-2.5 text-sm"
           />
           <InputGroupAddon align="block-end" className="justify-between gap-2 px-2.5 pb-2">
-            <div className="flex min-w-0 items-center gap-2 font-mono text-xs text-muted-foreground">
+            <div className="flex min-w-0 items-center gap-2 text-xs text-muted-foreground">
               <Button
                 type="button"
                 variant="ghost"
@@ -2273,16 +2095,17 @@ export function MissionControl({
                 <PaperclipIcon />
               </Button>
               <span
-                className="inline-flex shrink-0 items-center gap-1 rounded bg-muted px-1.5 py-0.5 text-[11px] font-medium text-foreground"
+                className="inline-flex h-7 shrink-0 items-center gap-1.5 rounded-md border bg-muted/50 px-2 text-xs font-medium text-foreground"
                 title={sessionSkill?.description || `Active skill: ${activeSkillDisplay}`}
               >
+                <SparklesIcon className="size-3.5 text-primary" />
                 {sessionSkill?.slash || `/${run.mode}`}
               </span>
               <span className="truncate">{formatModelLabel(run.model)}</span>
               {runnerOnlineCount === 0 && (
                 <Link
                   href="/settings?tab=runners"
-                  className="inline-flex shrink-0 items-center gap-1 rounded border border-warning/35 bg-warning/10 px-1.5 py-0.5 text-[10px] font-medium text-warning transition-colors hover:bg-warning/15"
+                  className="inline-flex shrink-0 items-center gap-1 rounded border border-warning/35 bg-warning/10 px-1.5 py-0.5 text-2xs font-medium text-warning transition-colors hover:bg-warning/15"
                   title="No local sf daemon connected"
                 >
                   <AlertTriangleIcon className="size-3" />
@@ -2363,28 +2186,23 @@ export function MissionControl({
     </form>
   );
 
-  // Group agents by level for Left Mission Tree
+  // Group agents by ticket for the left agent tree
   const groupedByLevel = React.useMemo(() => {
+    // An epic run groups its agents by ticket ("#12"); QC and anything else go under "Epic".
     const groups = new Map<string, RunDetailData["agents"]>();
     for (const a of run.agents) {
-      const label =
-        a.role === "orchestrator" || a.role === "planner"
-          ? "Orchestration & Spec"
-          : a.role === "checker"
-            ? "Verification Checks"
-            : a.role === "reviewer" || a.role === "spec-reviewer" || a.role === "qc"
-              ? "Review & QC"
-              : a.role === "subagent" ||
-                  a.role === "research" ||
-                  a.role === "browser" ||
-                  a.role === "worker"
-                ? "Subagents"
-                : `Build Wave ${a.level ?? 1}`;
+      const ticket = ticketOfAgent(a.agentKey, a.name);
+      const label = ticket ? `#${ticket}` : a.role === "orchestrator" ? "Session" : "Epic";
       const list = groups.get(label) ?? [];
       list.push(a);
       groups.set(label, list);
     }
-    return Array.from(groups.entries());
+    return Array.from(groups.entries()).sort(([a], [b]) => {
+      const na = /^#(\d+)$/.exec(a)?.[1];
+      const nb = /^#(\d+)$/.exec(b)?.[1];
+      if (na && nb) return Number(na) - Number(nb);
+      return na ? -1 : nb ? 1 : a.localeCompare(b);
+    });
   }, [run.agents]);
 
   return (
@@ -2409,7 +2227,7 @@ export function MissionControl({
                   </span>
                 </>
               )}
-              {!(run.mode === "factory" && viewMode === "pipeline") && (
+              {!(isEpicRun && viewMode === "pipeline") && (
                 <>
                   <span>·</span>
                   <span className="inline-flex items-center gap-1.5 text-foreground/85">
@@ -2420,13 +2238,8 @@ export function MissionControl({
                   </span>
                 </>
               )}
-              {run.risk === "high" && (
-                <Badge variant="destructive" className="ml-1 h-4 px-1.5 text-[10px]">
-                  high risk
-                </Badge>
-              )}
             </div>
-            <h1 className="truncate text-base font-semibold tracking-tight text-foreground">
+            <h1 className="truncate text-lg font-semibold tracking-tight text-foreground">
               {run.title}
             </h1>
           </div>
@@ -2435,17 +2248,17 @@ export function MissionControl({
           <div className="flex flex-wrap items-center gap-3">
             {isActive && (liveTransport === "ably" || liveTransport === "supabase") && (
               <span
-                className="inline-flex items-center gap-1.5 rounded-full border border-primary/30 bg-primary/10 px-2 py-0.5 font-mono text-[10px] font-medium text-primary"
+                className="inline-flex items-center gap-1.5 rounded-full border border-primary/30 bg-primary/10 px-2 py-0.5 font-mono text-2xs font-medium text-primary"
                 title={`Real-time token & log streaming via ${liveTransport === "ably" ? "Ably Realtime" : "Supabase Broadcast"}`}
               >
                 <span className="size-1.5 animate-pulse rounded-full bg-primary" />
                 Live
               </span>
             )}
-            {!(run.mode === "factory" && viewMode === "pipeline") && (
+            {!(isEpicRun && viewMode === "pipeline") && (
               <div
                 className="hidden items-center gap-2 font-mono text-xs text-muted-foreground tabular-nums md:flex"
-                title={`Active: ${activeTokens.toLocaleString()} (Input: ${run.inputTokens.toLocaleString()} · Output: ${run.outputTokens.toLocaleString()}) · Cached reads: ${run.cacheReadTokens.toLocaleString()} (${cacheRate}% cache hit)${run.engine === "antigravity" ? " · Cost is API-equivalent estimate" : ""}`}
+                title={`Active: ${activeTokens.toLocaleString()} (Input: ${run.inputTokens.toLocaleString()} · Output: ${run.outputTokens.toLocaleString()}) · Cached reads: ${run.cacheReadTokens.toLocaleString()} (${cacheRate}% cache hit)`}
               >
                 <span className="text-foreground">{formatClockDuration(elapsedMs)}</span>
                 <span>·</span>
@@ -2455,43 +2268,26 @@ export function MissionControl({
                 </span>
                 <span>·</span>
                 <span className="text-foreground">
-                  {run.engine === "antigravity" && run.costUsd > 0 ? "~" : ""}
                   {formatUsd(run.costUsd)}
                 </span>
               </div>
             )}
 
             <div className="flex items-center gap-1.5">
-              {/* Compact run controls directly in header when in Factory Live view (unattended: no Pause/Resume mid-loop) */}
-              {isUnattendedBuild && viewMode === "pipeline" && (
-                <>
-                  {isRetryable && run.issue && (
-                    <Button
-                      type="button"
-                      variant="secondary"
-                      size="sm"
-                      disabled={busy}
-                      onClick={() => void handleOpenClarifyForIssue(run.issue!.id)}
-                    >
-                      <MessageSquareIcon data-icon="inline-start" />
-                      Clarify Ticket
-                    </Button>
-                  )}
-                  {isRetryable && (
-                    <Button
-                      type="button"
-                      variant="outline"
-                      size="sm"
-                      disabled={busy}
-                      onClick={() => void handleRetrySession()}
-                    >
-                      <RotateCcwIcon data-icon="inline-start" />
-                      Retry
-                    </Button>
-                  )}
-                </>
+              {/* An epic run is unattended: no pause/resume; once it ends it can run again (it resumes from state.json) */}
+              {isEpicRun && isRetryable && (
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  disabled={busy}
+                  onClick={() => void handleRetrySession()}
+                >
+                  <RotateCcwIcon data-icon="inline-start" />
+                  Run epic again
+                </Button>
               )}
-              {run.mode === "factory" && (
+              {isEpicRun && (
                 <div className="flex items-center rounded-md border bg-muted/40 p-0.5">
                   <Button
                     type="button"
@@ -2516,11 +2312,12 @@ export function MissionControl({
               {runPrototypes.length > 0 && viewMode === "chat" && (
                 <Button
                   type="button"
-                  variant={activePrototype ? "secondary" : "outline"}
+                  variant={activePrototype || compareDirections ? "secondary" : "outline"}
                   size="sm"
                   onClick={() => {
-                    if (activePrototype) {
+                    if (activePrototype || compareDirections) {
                       setSelectedPrototype(null);
+                      setCompareSlugs(null);
                     } else {
                       handleSelectPrototype(toPrototypeViewModel(runPrototypes[0]));
                     }
@@ -2538,9 +2335,10 @@ export function MissionControl({
                   size="sm"
                   onClick={() => {
                     setSelectedPrototype(null);
+                    setCompareSlugs(null);
                     setInspectorOpen((prev) => !prev);
                   }}
-                  title="Toggle Specs, PRs, Files, and Models inspector"
+                  title="Toggle Files, Log, and Agents inspector"
                 >
                   <PanelRightIcon data-icon="inline-start" />
                   Inspector
@@ -2563,25 +2361,26 @@ export function MissionControl({
         </div>
 
         {/* Slim live progress strip — only while actively running in Chat mode */}
-        {!(run.mode === "factory" && viewMode === "pipeline") &&
+        {!(isEpicRun && viewMode === "pipeline") &&
           !isWaitingForDaemon &&
           (run.status === "running" || run.status === "queued") && (
             <div className="mt-2 flex items-center gap-3">
               <span className="text-xs text-muted-foreground">{run.currentPhase}</span>
               <Progress value={progressPct} className="h-1 flex-1" />
-              <span className="font-mono text-[11px] text-muted-foreground tabular-nums">
-                {run.specLine || `${run.steps.length} steps`}
+              <span className="font-mono text-xs text-muted-foreground tabular-nums">
+                {`${run.steps.length} steps`}
               </span>
             </div>
           )}
       </header>
 
       {/* Main Body: Live Pipeline (Factory, full height without chat bar) or 1/2/3-Pane Chat */}
-      {run.mode === "factory" && viewMode === "pipeline" ? (
+      {isEpicRun && viewMode === "pipeline" ? (
         <div className="min-h-0 flex-1 overflow-hidden">
-          <FactoryPipelineView
+          <EpicRunView
             run={run}
             elapsedMs={elapsedMs}
+            onRefresh={refreshRun}
             onInspectAgent={(agentId) => {
               setSelectedAgentId(agentId);
               setViewMode("chat");
@@ -2621,7 +2420,7 @@ export function MissionControl({
                             <StatusDot status={run.status} />
                             <span className="truncate">Full Timeline</span>
                           </span>
-                          <span className="font-mono text-[11px] text-muted-foreground tabular-nums">
+                          <span className="font-mono text-xs text-muted-foreground tabular-nums">
                             {run.steps.length}
                           </span>
                         </Button>
@@ -2638,10 +2437,10 @@ export function MissionControl({
                               render={
                                 <button
                                   type="button"
-                                  className="group/grp flex w-full items-center justify-between rounded-md px-2 py-1 text-left text-[11px] font-medium text-muted-foreground transition-colors hover:bg-muted/50 hover:text-foreground"
+                                  className="group/grp flex w-full items-center justify-between rounded-md px-2 py-1 text-left text-xs font-medium text-muted-foreground transition-colors hover:bg-muted/50 hover:text-foreground"
                                 >
                                   <span className="truncate">{groupLabel}</span>
-                                  <span className="flex shrink-0 items-center gap-1 font-mono text-[10px] tabular-nums">
+                                  <span className="flex shrink-0 items-center gap-1 font-mono text-2xs tabular-nums">
                                     <span>{agents.length}</span>
                                     <ChevronRightIcon className="size-3 transition-transform group-aria-expanded/grp:rotate-90" />
                                   </span>
@@ -2695,7 +2494,7 @@ export function MissionControl({
                   <ScrollArea className="h-full">
                     <div
                       data-slot="chat-scroll-content"
-                      className="mx-auto flex w-full max-w-3xl flex-col gap-5 px-6 py-5"
+                      className="mx-auto flex w-full max-w-5xl flex-col gap-5 px-6 py-5"
                     >
                       {/* Original Prompt Bubble (Right-aligned — User side) */}
                       {(run.prompt || initialPromptAttachments.length > 0) && (
@@ -2834,6 +2633,9 @@ export function MissionControl({
                                     group.items,
                                     agentNameById,
                                   );
+                                  const prototypeActivity = collectPrototypeActivity(
+                                    group.items.map((item) => item.step),
+                                  );
 
                                   return (
                                     <div key={group.key} className="flex flex-col gap-2">
@@ -2858,6 +2660,27 @@ export function MissionControl({
                                           />
                                         );
                                       })}
+                                      {prototypeActivity.map((activity) => (
+                                        <PrototypeActivityCard
+                                          key={activity.key}
+                                          activity={activity}
+                                          prototypes={runPrototypes}
+                                          drawing={isLastTimelineGroup && runActive}
+                                          isOpen={
+                                            activity.type === "prototype"
+                                              ? activePrototype?.slug === activity.slug
+                                              : Boolean(compareSlugs?.some((s) => activity.slugs.includes(s)))
+                                          }
+                                          onOpen={() => {
+                                            if (activity.type === "directions") {
+                                              handleCompareDirections(activity.slugs);
+                                              return;
+                                            }
+                                            const row = runPrototypes.find((p) => p.slug === activity.slug);
+                                            if (row) handleSelectPrototype(toPrototypeViewModel(row));
+                                          }}
+                                        />
+                                      ))}
                                     </div>
                                   );
                                 })}
@@ -2874,7 +2697,7 @@ export function MissionControl({
                             <div className="flex flex-col gap-3">
                               {visibleLiveEntries.thinking && (
                                 <div className="rounded-lg border border-border/70 bg-muted/35 px-3.5 py-2.5 text-xs">
-                                  <div className="mb-1 flex items-center gap-2 font-mono text-[11px] text-muted-foreground">
+                                  <div className="mb-1 flex items-center gap-2 font-mono text-xs text-muted-foreground">
                                     <Spinner className="size-3" />
                                     <span className="shimmer font-medium">
                                       {visibleLiveEntries.thinking.agentName
@@ -2882,7 +2705,7 @@ export function MissionControl({
                                         : "Thinking"}
                                     </span>
                                   </div>
-                                  <p className="max-h-36 overflow-y-auto whitespace-pre-wrap font-mono text-[11px] leading-relaxed text-muted-foreground/90">
+                                  <p className="max-h-36 overflow-y-auto whitespace-pre-wrap font-mono text-xs leading-relaxed text-muted-foreground/90">
                                     {visibleLiveEntries.thinking.text}
                                   </p>
                                 </div>
@@ -2901,13 +2724,13 @@ export function MissionControl({
                                       </span>
                                     </div>
                                     {t.agentName && t.agentKey !== "orchestrator" && (
-                                      <Badge variant="outline" className="shrink-0 font-mono text-[10px]">
+                                      <Badge variant="outline" className="shrink-0 font-mono text-2xs">
                                         {t.agentName}
                                       </Badge>
                                     )}
                                   </div>
                                   {t.output && (
-                                    <pre className="mt-2 max-h-48 overflow-auto rounded-md bg-muted/60 p-2.5 font-mono text-[11px] leading-relaxed text-foreground/90">
+                                    <pre className="mt-2 max-h-48 overflow-auto rounded-md bg-muted/60 p-2.5 font-mono text-xs leading-relaxed text-foreground/90">
                                       {t.output}
                                     </pre>
                                   )}
@@ -2922,7 +2745,7 @@ export function MissionControl({
                                       {entry.agentName || "Assistant"}
                                     </span>
                                     {entry.model && (
-                                      <span className="font-mono text-[11px]">
+                                      <span className="font-mono text-xs">
                                         {formatModelLabel(entry.model)}
                                       </span>
                                     )}
@@ -2949,7 +2772,7 @@ export function MissionControl({
                                   </div>
                                   <p className="text-xs leading-relaxed text-muted-foreground">
                                     This session is queued but cannot execute until{" "}
-                                    <code className="rounded bg-muted px-1 py-0.5 font-mono text-[11px] text-foreground">
+                                    <code className="rounded bg-muted px-1 py-0.5 font-mono text-xs text-foreground">
                                       sf daemon
                                     </code>{" "}
                                     is running on your machine. Start the daemon to resume
@@ -3061,18 +2884,6 @@ export function MissionControl({
                                     {showStatusDetails ? "Hide" : "Details"}
                                   </Button>
                                 )}
-                                {isUnattendedBuild && isRetryable && run.issue && (
-                                  <Button
-                                    type="button"
-                                    variant="secondary"
-                                    size="xs"
-                                    disabled={busy}
-                                    onClick={() => void handleOpenClarifyForIssue(run.issue!.id)}
-                                  >
-                                    <MessageSquareIcon data-icon="inline-start" />
-                                    Clarify Ticket
-                                  </Button>
-                                )}
                                 {isRetryable && (
                                   <Button
                                     type="button"
@@ -3117,143 +2928,9 @@ export function MissionControl({
                   )}
                 </div>
 
-                {/* Slim 1-row Factory Init completion bar (Stage 1: once per project, interactive) */}
-                {isInitMode &&
-                  run.status !== "passed" &&
-                  (run.issue ? run.issue.status !== "passed" : run.project.initStatus !== "complete") && (
-                    <div className="border-t bg-muted/30 px-5 py-2.5">
-                      <div className="mx-auto flex w-full max-w-3xl flex-wrap items-center justify-between gap-2">
-                        <div className="flex items-center gap-2 text-xs">
-                          <UserIcon className="size-3.5 text-primary" />
-                          <span className="font-medium text-foreground">
-                            Stage 1 · Factory Init{run.issue ? ` (${run.issue.issueKey})` : ""}
-                          </span>
-                          <span className="hidden text-muted-foreground sm:inline">
-                            · Discuss stack, checks &amp; design with AI, then mark complete to unlock unattended builds
-                          </span>
-                        </div>
-                        <div className="flex items-center gap-1.5">
-                          <Button
-                            size="xs"
-                            variant="outline"
-                            nativeButton={false}
-                            render={<Link href={`/projects/${run.project.id}?tab=issues`} />}
-                          >
-                            <Columns3Icon data-icon="inline-start" />
-                            Board
-                          </Button>
-                          <Button
-                            size="xs"
-                            disabled={busy}
-                            onClick={() => void handleCompleteInitIssue()}
-                          >
-                            {busy ? (
-                              <Spinner data-icon="inline-start" />
-                            ) : (
-                              <CheckIcon data-icon="inline-start" />
-                            )}
-                            Mark Init Complete
-                          </Button>
-                        </div>
-                      </div>
-                    </div>
-                  )}
-
-                {/* Slim 1-row Factory Clarify approval bar (Stage 2: per feature, interactive) */}
-                {isClarifyMode &&
-                  run.issue &&
-                  (run.issue.status === "backlog" || run.issue.status === "needs_human") && (
-                    <div className="border-t bg-muted/30 px-5 py-2.5">
-                      <div className="mx-auto flex w-full max-w-3xl flex-wrap items-center justify-between gap-2">
-                        <div className="flex items-center gap-2 text-xs">
-                          <MessageSquareIcon className="size-3.5 text-primary" />
-                          <span className="font-medium text-foreground">
-                            Stage 2 · Clarify ({run.issue.issueKey})
-                          </span>
-                          <span className="hidden text-muted-foreground sm:inline">
-                            · Answer questions &amp; review mockups/plan, then approve for unattended build
-                          </span>
-                        </div>
-                        <div className="flex items-center gap-1.5">
-                          <Button
-                            size="xs"
-                            variant="outline"
-                            disabled={busy}
-                            onClick={() => void handleApproveClarifiedTicket(false)}
-                          >
-                            <CheckIcon data-icon="inline-start" />
-                            Approve → Ready
-                          </Button>
-                          <Button
-                            size="xs"
-                            disabled={busy || run.project.initStatus !== "complete"}
-                            title={
-                              run.project.initStatus !== "complete"
-                                ? "Complete /factory init once before starting builds"
-                                : undefined
-                            }
-                            onClick={() => void handleApproveClarifiedTicket(true)}
-                          >
-                            {busy ? (
-                              <Spinner data-icon="inline-start" />
-                            ) : (
-                              <ZapIcon data-icon="inline-start" />
-                            )}
-                            Approve &amp; Build
-                          </Button>
-                        </div>
-                      </div>
-                    </div>
-                  )}
-
-                {/* Slim 1-row BA confirmation bar — only shown while draft tickets await confirmation */}
-                {run.mode === "ba" &&
-                  (() => {
-                    const pendingCount = (run.projectDraftIssues || []).filter(
-                      (i) => i.status === "backlog" || i.status === "needs_human",
-                    ).length;
-                    if (pendingCount === 0) return null;
-                    return (
-                      <div className="border-t bg-muted/30 px-5 py-2.5">
-                        <div className="mx-auto flex w-full max-w-3xl flex-wrap items-center justify-between gap-2">
-                          <div className="flex items-center gap-2 text-xs">
-                            <SparklesIcon className="size-3.5 text-primary" />
-                            <span className="font-medium text-foreground">
-                              {pendingCount} drafted {pendingCount === 1 ? "ticket" : "tickets"} waiting for confirmation
-                            </span>
-                          </div>
-                          <div className="flex items-center gap-1.5">
-                            <Button
-                              size="xs"
-                              variant="outline"
-                              disabled={busy}
-                              onClick={() => void handleConfirmBaTickets(false)}
-                            >
-                              <CheckIcon data-icon="inline-start" />
-                              Confirm All
-                            </Button>
-                            <Button
-                              size="xs"
-                              disabled={busy}
-                              onClick={() => void handleConfirmBaTickets(true)}
-                            >
-                              {busy ? (
-                                <Spinner data-icon="inline-start" />
-                              ) : (
-                                <ZapIcon data-icon="inline-start" />
-                              )}
-                              Confirm &amp; Auto-Run
-                            </Button>
-                          </div>
-                        </div>
-                      </div>
-                    );
-                  })()}
-
                 {/* Inline Pending Interaction Action Card (interactive sessions only; never on unattended Factory builds) */}
-                {!isUnattendedBuild &&
+                {!isEpicRun &&
                   pendingInteractions.length > 0 &&
-                  !(run.mode === "ba" && run.projectDraftIssues?.length > 0) &&
                   (() => {
                     const inter = pendingInteractions[0];
                     const interactionQuestions = extractQuestionsFromInteractionPayload(
@@ -3277,7 +2954,7 @@ export function MissionControl({
                     }
                     return (
                       <div className="border-t bg-muted/40 px-4 py-3">
-                        <div className="mx-auto flex w-full max-w-3xl flex-col gap-2.5 rounded-lg border bg-card p-3">
+                        <div className="mx-auto flex w-full max-w-5xl flex-col gap-2.5 rounded-lg border bg-card p-3">
                           <div className="flex items-start justify-between gap-2">
                             <div className="flex items-start gap-2">
                               <AlertCircleIcon className="mt-0.5 size-4 shrink-0 text-primary" />
@@ -3326,7 +3003,7 @@ export function MissionControl({
                   })()}
 
                 {/* Docked Interactive Question Selector (above composer for unanswered AI question waves) */}
-                {!isUnattendedBuild &&
+                {!isEpicRun &&
                   activeQuestionTurn &&
                   !(
                     pendingInteractions.length > 0 &&
@@ -3344,32 +3021,18 @@ export function MissionControl({
                   )}
 
                 {/* Bottom Steer Composer (interactive sessions only; unattended Factory builds are read-only) */}
-                {isUnattendedBuild ? (
+                {isEpicRun ? (
                   <div className="border-t bg-muted/30 px-5 py-2.5">
-                    <div className="mx-auto flex w-full max-w-3xl flex-wrap items-center justify-between gap-2 text-xs text-muted-foreground">
+                    <div className="mx-auto flex w-full max-w-5xl flex-wrap items-center justify-between gap-2 text-xs text-muted-foreground">
                       <div className="flex items-center gap-2">
                         <LockIcon className="size-3.5 shrink-0" />
                         <span>
-                          Unattended Factory build loop — read-only live trace. Questions belong in{" "}
-                          <code className="font-mono">/factory init</code>,{" "}
-                          <code className="font-mono">/ba-ticket</code>, or{" "}
-                          <code className="font-mono">/factory clarify</code>.
+                          Epic run — read-only live trace. A ticket that needs a decision is
+                          answered in the Live view or the Inbox.
                         </span>
                       </div>
                       {isRetryable && (
                         <div className="flex items-center gap-1.5">
-                          {run.issue && (
-                            <Button
-                              type="button"
-                              variant="secondary"
-                              size="xs"
-                              disabled={busy}
-                              onClick={() => void handleOpenClarifyForIssue(run.issue!.id)}
-                            >
-                              <MessageSquareIcon data-icon="inline-start" />
-                              Clarify Ticket
-                            </Button>
-                          )}
                           <Button
                             type="button"
                             variant="outline"
@@ -3397,10 +3060,16 @@ export function MissionControl({
                 {/* RIGHT PANE: Interactive Prototype Studio, Issue Detail Inspector (BA), or Tabbed Inspector */}
                 <ResizablePanel
                   id="inspector"
-                  defaultSize={activePrototype ? "46%" : "30%"}
+                  defaultSize={activePrototype || compareDirections ? "46%" : "30%"}
                   minSize="24%"
                 >
-                  {activePrototype ? (
+                  {compareDirections ? (
+                    <DirectionsCompare
+                      directions={compareDirections}
+                      onOpen={(p) => handleSelectPrototype(toPrototypeViewModel(p))}
+                      onClose={() => setCompareSlugs(null)}
+                    />
+                  ) : activePrototype ? (
                     <div className="flex h-full flex-col border-l bg-sidebar/20">
                       <div className="flex items-center justify-between gap-2 border-b bg-card px-3 py-2">
                         <div className="flex min-w-0 items-center gap-1.5 overflow-x-auto">
@@ -3443,11 +3112,11 @@ export function MissionControl({
                           key={`${activePrototype.id ?? activePrototype.slug}-v${activePrototype.version ?? 1}`}
                           prototype={activePrototype}
                           projectId={run.project.id}
-                          canWrite={!isUnattendedBuild}
+                          canWrite={!isEpicRun}
                           compact
                           onUpdated={() => void refreshRun()}
                           onSteer={
-                            !isUnattendedBuild ? handleSubmitQuestionAnswers : undefined
+                            !isEpicRun ? handleSubmitQuestionAnswers : undefined
                           }
                         />
                       </div>
@@ -3486,77 +3155,16 @@ export function MissionControl({
 
                       <ScrollArea className="min-h-0 flex-1">
                         <div className="flex flex-col gap-4 p-3.5">
-                          {/* Status & Actions */}
-                          {inspectedIssue.id && (
-                            <div className="flex flex-wrap items-center gap-2">
-                              <Select
-                                value={inspectedIssue.status}
-                                onValueChange={(v) => {
-                                  if (v && inspectedIssue.id) {
-                                    void handleUpdateInspectedStatus(inspectedIssue.id, v);
-                                  }
-                                }}
-                                disabled={busy}
-                              >
-                                <SelectTrigger className="h-8 w-36 text-xs">
-                                  <SelectValue placeholder="Status">
-                                    {inspectedIssue.status.replace("_", " ")}
-                                  </SelectValue>
-                                </SelectTrigger>
-                                <SelectContent>
-                                  <SelectGroup>
-                                    <SelectItem value="backlog">Draft / Backlog</SelectItem>
-                                    <SelectItem value="ready">Ready (Confirmed)</SelectItem>
-                                    <SelectItem value="in_progress">Running</SelectItem>
-                                    <SelectItem value="in_review">In Review</SelectItem>
-                                    <SelectItem value="done">Done</SelectItem>
-                                    <SelectItem value="blocked">Blocked</SelectItem>
-                                  </SelectGroup>
-                                </SelectContent>
-                              </Select>
-
-                              {(inspectedIssue.status === "backlog" ||
-                                inspectedIssue.status === "needs_human") && (
-                                <Button
-                                  type="button"
-                                  size="xs"
-                                  variant="secondary"
-                                  disabled={busy}
-                                  onClick={() =>
-                                    void handleUpdateInspectedStatus(inspectedIssue.id!, "ready")
-                                  }
-                                >
-                                  <CheckIcon data-icon="inline-start" />
-                                  Confirm
-                                </Button>
-                              )}
-
-                              <Button
-                                type="button"
-                                size="xs"
-                                disabled={busy}
-                                onClick={() => void handleRunSingleIssue(inspectedIssue.id!)}
-                              >
-                                <PlayIcon data-icon="inline-start" />
-                                Run Factory
-                              </Button>
-
-                              <Button
-                                type="button"
-                                size="xs"
-                                variant="ghost"
-                                disabled={busy}
-                                onClick={() =>
-                                  void handleDeleteInspectedIssue(
-                                    inspectedIssue.id!,
-                                    inspectedIssue.issueKey,
-                                  )
-                                }
-                              >
-                                <Trash2Icon data-icon="inline-start" />
-                                Delete
-                              </Button>
-                            </div>
+                          {inspectedIssue.githubIssueUrl && (
+                            <a
+                              href={inspectedIssue.githubIssueUrl}
+                              target="_blank"
+                              rel="noreferrer"
+                              className="inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
+                            >
+                              <ExternalLinkIcon className="size-3" />
+                              Open on GitHub
+                            </a>
                           )}
 
                           {/* Linked Interactive Prototype (when BA built one for this ticket) */}
@@ -3573,7 +3181,7 @@ export function MissionControl({
                                   <span className="truncate font-medium text-foreground">
                                     {linkedProto.title}
                                   </span>
-                                  <span className="font-mono text-[10px] text-muted-foreground">
+                                  <span className="font-mono text-2xs text-muted-foreground">
                                     {linkedProto.manifest.screens.length || 1} states · binding:{" "}
                                     {linkedProto.binding}
                                   </span>
@@ -3595,7 +3203,7 @@ export function MissionControl({
                           {/* Goal */}
                           {inspectedIssue.goal && (
                             <div className="flex flex-col gap-1">
-                              <span className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
+                              <span className="font-mono text-2xs uppercase tracking-wider text-muted-foreground">
                                 Goal
                               </span>
                               <p className="text-xs leading-relaxed text-foreground">
@@ -3607,7 +3215,7 @@ export function MissionControl({
                           {/* Dependencies */}
                           {inspectedIssue.dependsOn.length > 0 && (
                             <div className="flex flex-col gap-1.5">
-                              <span className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
+                              <span className="font-mono text-2xs uppercase tracking-wider text-muted-foreground">
                                 Depends On
                               </span>
                               <div className="flex flex-wrap gap-1.5">
@@ -3634,7 +3242,7 @@ export function MissionControl({
 
                           {/* Acceptance Criteria */}
                           <div className="flex flex-col gap-1.5">
-                            <span className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
+                            <span className="font-mono text-2xs uppercase tracking-wider text-muted-foreground">
                               Acceptance Criteria ({inspectedIssue.criteria.length})
                             </span>
                             {inspectedIssue.criteria.length === 0 ? (
@@ -3648,7 +3256,7 @@ export function MissionControl({
                                     key={c.id}
                                     className="flex items-start gap-2 rounded-[4px] border bg-card p-2 text-xs"
                                   >
-                                    <span className="shrink-0 font-mono text-[11px] font-semibold text-primary">
+                                    <span className="shrink-0 font-mono text-xs font-semibold text-primary">
                                       {c.id}
                                     </span>
                                     <span className="leading-relaxed text-foreground/90">
@@ -3664,7 +3272,7 @@ export function MissionControl({
                           {inspectedIssue.body && (
                             <div className="flex flex-col gap-1.5">
                               <Separator />
-                              <span className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
+                              <span className="font-mono text-2xs uppercase tracking-wider text-muted-foreground">
                                 Specification &amp; Out of Scope
                               </span>
                               <MarkdownContent
@@ -3677,7 +3285,7 @@ export function MissionControl({
                       </ScrollArea>
 
                       <div className="flex items-center justify-between border-t bg-card px-3.5 py-2.5">
-                        <span className="font-mono text-[10px] text-muted-foreground">
+                        <span className="font-mono text-2xs text-muted-foreground">
                           {inspectedIssue.id ? "Synced to Kanban" : "Draft preview"}
                         </span>
                         <Button
@@ -3692,19 +3300,13 @@ export function MissionControl({
                       </div>
                     </div>
                   ) : (
-                    <Tabs defaultValue="specs" className="flex h-full flex-col gap-0 border-l">
+                    <Tabs defaultValue="agents" className="flex h-full flex-col gap-0 border-l">
               <div className="flex items-center justify-between gap-1 border-b px-2 pt-2">
                 <TabsList variant="line" className="min-w-0 flex-1 justify-start">
-                  <TabsTrigger value="specs">
-                    Specs {(run.specs?.length || 0) + run.criteria.length}
-                  </TabsTrigger>
-                  <TabsTrigger value="prs">
-                    PRs {run.pullRequests.length}
-                  </TabsTrigger>
                   <TabsTrigger value="artifacts">
                     Files {run.artifacts.length}
                   </TabsTrigger>
-                  <TabsTrigger value="models">Models</TabsTrigger>
+                  <TabsTrigger value="models">Log</TabsTrigger>
                   <TabsTrigger value="agents">
                     Agents {run.agents.length}
                   </TabsTrigger>
@@ -3750,7 +3352,7 @@ export function MissionControl({
                             >
                               <ChevronDownIcon className="size-3.5" />
                               <span>{group.label}</span>
-                              <span className="font-mono text-[11px]">{group.items.length}</span>
+                              <span className="font-mono text-xs">{group.items.length}</span>
                             </button>
                           }
                         />
@@ -3780,7 +3382,7 @@ export function MissionControl({
                                     </span>
                                   </div>
                                 </div>
-                                <span className="shrink-0 font-mono text-[11px] text-muted-foreground">
+                                <span className="shrink-0 font-mono text-xs text-muted-foreground">
                                   {formatRelativeTime(agent.updatedAt)}
                                 </span>
                               </button>
@@ -3793,196 +3395,13 @@ export function MissionControl({
                 </ScrollArea>
               </TabsContent>
 
-              {/* TAB 2: AI SPECS, CRITERIA & FAILURE LOG */}
-              <TabsContent value="specs" className="min-h-0 flex-1">
-                <ScrollArea className="h-full">
-                  <div className="flex flex-col gap-3 p-3">
-                    {run.specs && run.specs.length > 0 && (
-                      <>
-                        <div className="font-mono text-[11px] uppercase tracking-wider text-muted-foreground">
-                          AI Generated Specs ({run.specs.length})
-                        </div>
-                        {run.specs.map((sp) => (
-                          <div
-                            key={sp.id}
-                            className="flex flex-col gap-1.5 rounded-md border p-2.5 text-xs"
-                          >
-                            <div className="flex flex-wrap items-center justify-between gap-1.5">
-                              <div className="flex min-w-0 items-center gap-1.5">
-                                <span className="font-mono font-semibold text-foreground">
-                                  {sp.id}
-                                </span>
-                                <span className="truncate font-medium">
-                                  {sp.title || "Spec"}
-                                </span>
-                                {sp.kind && <Badge variant="outline">{sp.kind}</Badge>}
-                              </div>
-                              <div className="flex shrink-0 items-center gap-1 font-mono text-[10px]">
-                                {sp.impl && (
-                                  <Badge
-                                    variant={
-                                      sp.impl === "fail"
-                                        ? "destructive"
-                                        : sp.impl === "ok"
-                                          ? "secondary"
-                                          : "outline"
-                                    }
-                                  >
-                                    impl:{sp.impl}
-                                  </Badge>
-                                )}
-                                {sp.test && sp.test !== "none" && (
-                                  <Badge
-                                    variant={
-                                      sp.test === "fail"
-                                        ? "destructive"
-                                        : sp.test === "ok"
-                                          ? "secondary"
-                                          : "outline"
-                                    }
-                                  >
-                                    qa:{sp.test}
-                                  </Badge>
-                                )}
-                              </div>
-                            </div>
-                            {sp.goal && (
-                              <p className="leading-relaxed text-muted-foreground">{sp.goal}</p>
-                            )}
-                            {sp.filesOwned && sp.filesOwned.length > 0 && (
-                              <div className="flex flex-wrap gap-1 font-mono text-[10px] text-muted-foreground">
-                                {sp.filesOwned.map((f) => (
-                                  <span
-                                    key={f}
-                                    className="rounded-[2px] border bg-muted/40 px-1.5 py-0.5"
-                                  >
-                                    {f}
-                                  </span>
-                                ))}
-                              </div>
-                            )}
-                            {(sp.implNote || sp.testNote || sp.waitFor) && (
-                              <div className="flex flex-col gap-0.5 font-mono text-[10px] text-muted-foreground">
-                                {sp.waitFor && <span>waits for: {sp.waitFor}</span>}
-                                {sp.implNote && <span>{sp.implNote}</span>}
-                                {sp.testNote && <span>{sp.testNote}</span>}
-                              </div>
-                            )}
-                          </div>
-                        ))}
-                        <Separator />
-                      </>
-                    )}
-
-                    <div className="font-mono text-[11px] uppercase tracking-wider text-muted-foreground">
-                      Acceptance Criteria ({run.criteria.length})
-                    </div>
-                    {run.criteria.length === 0 ? (
-                      <div className="rounded-md border border-dashed p-4 text-center text-xs text-muted-foreground">
-                        No acceptance criteria attached yet.
-                      </div>
-                    ) : (
-                      run.criteria.map((c) => (
-                        <div key={c.id} className="flex items-start gap-2 rounded-md border p-2.5 text-xs">
-                          {c.status === "met" ? (
-                            <CheckCircle2Icon className="mt-0.5 size-3.5 shrink-0 text-success" />
-                          ) : c.status === "not_met" ? (
-                            <XCircleIcon className="mt-0.5 size-3.5 shrink-0 text-destructive" />
-                          ) : (
-                            <span className="mt-1 size-2 shrink-0 rounded-full bg-muted-foreground/40" />
-                          )}
-                          <div className="flex flex-col gap-0.5">
-                            <span className="font-mono font-medium">{c.id}</span>
-                            <span className="leading-relaxed text-muted-foreground">{c.text}</span>
-                          </div>
-                        </div>
-                      ))
-                    )}
-
-                    {run.failureLog.length > 0 && (
-                      <>
-                        <Separator />
-                        <div className="font-mono text-[11px] uppercase tracking-wider text-muted-foreground">
-                          Failure Log ({run.failureLog.length})
-                        </div>
-                        {run.failureLog.map((f, idx) => (
-                          <div key={idx} className="rounded-md border p-2.5 text-xs">
-                            <div className="flex items-center gap-1.5 font-mono text-[11px]">
-                              <Badge variant="destructive">{f.kind || "failure"}</Badge>
-                              {f.stage && <span>{f.stage}</span>}
-                              {f.file && <span className="truncate text-muted-foreground">{f.file}</span>}
-                            </div>
-                            <p className="mt-1 text-muted-foreground">{f.problem}</p>
-                          </div>
-                        ))}
-                      </>
-                    )}
-                  </div>
-                </ScrollArea>
-              </TabsContent>
-
-              {/* TAB 3: LINKED PULL REQUESTS */}
-              <TabsContent value="prs" className="min-h-0 flex-1">
-                <ScrollArea className="h-full">
-                  <div className="flex flex-col gap-2.5 p-3">
-                    {run.pullRequests.length === 0 && !run.prUrl ? (
-                      <div className="rounded-md border border-dashed p-4 text-center text-xs text-muted-foreground">
-                        No pull requests opened for this session yet.
-                      </div>
-                    ) : (
-                      <>
-                        {run.pullRequests.map((pr) => (
-                          <div key={pr.id} className="flex flex-col gap-2 rounded-lg border p-3 text-xs">
-                            <div className="flex items-start justify-between gap-2">
-                              <span className="flex items-center gap-1.5 font-medium">
-                                <GitPullRequestIcon className="size-3.5" />
-                                #{pr.number} {pr.title}
-                              </span>
-                              <Badge variant="outline">{pr.state}</Badge>
-                            </div>
-                            <div className="flex items-center gap-2 font-mono text-[11px] text-muted-foreground">
-                              <span>
-                                {pr.baseBranch} ← {pr.headBranch}
-                              </span>
-                              <span>+{pr.additions} -{pr.deletions}</span>
-                            </div>
-                            <div className="flex items-center gap-2">
-                              <Button
-                                size="xs"
-                                variant="outline"
-                                nativeButton={false}
-                                render={<Link href="/reviews" />}
-                              >
-                                Open in Code Review
-                              </Button>
-                              {pr.url && (
-                                <Button
-                                  size="xs"
-                                  variant="ghost"
-                                  nativeButton={false}
-                                  render={<a href={pr.url} target="_blank" rel="noreferrer" />}
-                                >
-                                  <ExternalLinkIcon data-icon="inline-start" />
-                                  GitHub
-                                </Button>
-                              )}
-                            </div>
-                          </div>
-                        ))}
-                      </>
-                    )}
-                  </div>
-                </ScrollArea>
-              </TabsContent>
-
-              {/* TAB 4: ARTIFACTS (Mockups, QC Screenshots, Reports) */}
+              {/* TAB 2: FILES (attachments, prototypes, reports) */}
               <TabsContent value="artifacts" className="min-h-0 flex-1">
                 <ScrollArea className="h-full">
                   <div className="flex flex-col gap-2.5 p-3">
                     {run.artifacts.length === 0 ? (
                       <div className="rounded-md border border-dashed p-4 text-center text-xs text-muted-foreground">
-                        Mockups, QC screenshots, and <code className="font-mono">pr-judge</code>{" "}
-                        reports registered via{" "}
+                        Attachments, prototypes, and files registered via{" "}
                         <code className="font-mono">sf artifact</code> appear here.
                       </div>
                     ) : (
@@ -4038,7 +3457,7 @@ export function MissionControl({
                               href={fileHref}
                               target="_blank"
                               rel="noreferrer"
-                              className="truncate font-mono text-[11px] text-muted-foreground hover:text-foreground hover:underline"
+                              className="truncate font-mono text-xs text-muted-foreground hover:text-foreground hover:underline"
                             >
                               {art.pathOrUrl}
                             </a>
@@ -4050,65 +3469,12 @@ export function MissionControl({
                 </ScrollArea>
               </TabsContent>
 
-              {/* TAB 5: MODELS & PROGRESS LOG */}
+              {/* TAB 5: PROGRESS LOG */}
               <TabsContent value="models" className="min-h-0 flex-1">
                 <ScrollArea className="h-full">
                   <div className="flex flex-col gap-4 p-3">
-                    <div className="flex flex-col gap-2">
-                      <div className="font-mono text-[11px] uppercase tracking-wider text-muted-foreground">
-                        Model Allocation by Role
-                      </div>
-                      {[
-                        {
-                          role: "Orchestrator (CLI)",
-                          model: formatModelLabel(run.model),
-                          raw: run.model,
-                        },
-                        {
-                          role: "Planner",
-                          model: run.engine === "claude" ? "Fable (High)" : "Gemini 4 Neon (XHigh)",
-                          raw: run.engine === "claude" ? "fable" : "gemini-4-neon-xhigh",
-                        },
-                        {
-                          role: "Implementer / QA",
-                          model: run.engine === "claude" ? "Sonnet (Med)" : "Gemini 4 Carbon (Med)",
-                          raw: run.engine === "claude" ? "sonnet" : "gemini-4-carbon-medium",
-                        },
-                        {
-                          role: "Checker",
-                          model: run.engine === "claude" ? "Sonnet (Low)" : "Gemini 4 Hydrogen (Low)",
-                          raw: run.engine === "claude" ? "haiku" : "gemini-4-hydrogen-low",
-                        },
-                        {
-                          role: "Reviewer / QC",
-                          model:
-                            run.risk === "high"
-                              ? run.engine === "claude"
-                                ? "Opus (XHigh)"
-                                : "Gemini 4 Neon (XHigh / High)"
-                              : run.engine === "claude"
-                                ? "Opus / Sonnet"
-                                : "Neon (High) / Hydrogen (Med)",
-                          raw: run.engine === "claude" ? "opus" : "gemini-4-neon-high",
-                        },
-                      ].map((row) => (
-                        <div
-                          key={row.role}
-                          className="flex items-center justify-between rounded-md border px-2.5 py-2 text-xs"
-                        >
-                          <span className="text-muted-foreground">{row.role}</span>
-                          <span className="flex items-center gap-2 font-mono">
-                            <span>{row.model}</span>
-                            <MeterBars level={effortForModel(row.raw)} />
-                          </span>
-                        </div>
-                      ))}
-                    </div>
-
-                    <Separator />
-
                     <div className="flex flex-col gap-1.5">
-                      <div className="font-mono text-[11px] uppercase tracking-wider text-muted-foreground">
+                      <div className="font-mono text-xs uppercase tracking-wider text-muted-foreground">
                         Progress Log
                       </div>
                       {[...run.steps].reverse().slice(0, 25).map((s) => (
@@ -4122,7 +3488,7 @@ export function MissionControl({
                               {s.label || s.step}
                             </span>
                           </span>
-                          <span className="shrink-0 font-mono text-[10px] text-muted-foreground">
+                          <span className="shrink-0 font-mono text-2xs text-muted-foreground">
                             {formatRelativeTime(s.createdAt)}
                           </span>
                         </div>

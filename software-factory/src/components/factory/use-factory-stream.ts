@@ -61,9 +61,7 @@ export function useFactoryStream(
       "context:updated",
       "issue:updated",
       "project:updated",
-      "pr:updated",
       "runner:updated",
-      "lesson:updated",
       "command:created",
     ];
 

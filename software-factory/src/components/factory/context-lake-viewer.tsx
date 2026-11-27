@@ -163,14 +163,14 @@ function CodeLinesView({
   const gutterChars = Math.max(2, String(lines.length).length);
 
   return (
-    <div className="w-full py-4 font-mono text-[12.5px] leading-6">
+    <div className="w-full py-4 font-mono text-sm leading-6">
       <table className="w-full border-collapse">
         <tbody>
           {lines.map((line, idx) => (
             <tr key={idx} className="hover:bg-muted/35">
               <td
                 style={{ width: `${gutterChars + 3}ch` }}
-                className="select-none border-r border-border/40 pr-3 pl-4 text-right align-top text-[11px] text-muted-foreground/45 tabular-nums"
+                className="select-none border-r border-border/40 pr-3 pl-4 text-right align-top text-xs text-muted-foreground/45 tabular-nums"
               >
                 {idx + 1}
               </td>
@@ -344,7 +344,7 @@ function FileTreeBranch({
                 />
                 <span className="min-w-0 flex-1 truncate">{node.name}</span>
               </span>
-              <span className="shrink-0 font-mono text-[10px] text-muted-foreground/70 tabular-nums">
+              <span className="shrink-0 font-mono text-2xs text-muted-foreground/70 tabular-nums">
                 {formatBytes(node.file.bytes)}
               </span>
             </button>
@@ -457,8 +457,7 @@ export function ContextLakeViewer({
             ) : (
               <>
                 Keep <code className="font-mono">sf daemon</code> running on your machine (or run{" "}
-                <code className="font-mono">sf sync-context</code>) after{" "}
-                <code className="font-mono">/factory init</code> to sync{" "}
+                <code className="font-mono">sf sync-context</code>) to sync{" "}
                 <code className="font-mono">.factory/</code> files to the cloud database.
               </>
             )}
@@ -489,7 +488,7 @@ export function ContextLakeViewer({
       <aside className="flex w-full shrink-0 flex-col border-b bg-sidebar text-sidebar-foreground md:w-64 md:border-r md:border-b-0 lg:w-72">
         <div className="flex items-center justify-between gap-2 border-b border-sidebar-border px-2.5 py-2">
           <div
-            className="flex min-w-0 items-center gap-1.5 text-[11px] text-muted-foreground"
+            className="flex min-w-0 items-center gap-1.5 text-xs text-muted-foreground"
             title={syncedAt ? `Last synced: ${new Date(syncedAt).toLocaleString()}` : undefined}
           >
             {srcMeta.icon === "github" ? (
@@ -554,7 +553,7 @@ export function ContextLakeViewer({
           </div>
         </ScrollArea>
 
-        <div className="flex items-center justify-between border-t border-sidebar-border px-3 py-2 font-mono text-[10px] text-muted-foreground tabular-nums">
+        <div className="flex items-center justify-between border-t border-sidebar-border px-3 py-2 font-mono text-2xs text-muted-foreground tabular-nums">
           <span>{files.length} files</span>
           <span>{formatBytes(totalBytes)}</span>
         </div>
@@ -581,7 +580,7 @@ export function ContextLakeViewer({
               <Badge variant="outline">
                 {activeKind === "markdown" ? "Markdown" : activeKind === "json" ? "JSON" : "Text"}
               </Badge>
-              <span className="hidden font-mono text-[11px] text-muted-foreground tabular-nums lg:inline">
+              <span className="hidden font-mono text-xs text-muted-foreground tabular-nums lg:inline">
                 {activeLineCount} lines · {formatBytes(activeFile.bytes)}
               </span>
             </div>
@@ -640,7 +639,7 @@ export function ContextLakeViewer({
           </header>
 
           {isTruncated && (
-            <div className="border-b bg-muted/40 px-4 py-1.5 font-mono text-[11px] text-muted-foreground">
+            <div className="border-b bg-muted/40 px-4 py-1.5 font-mono text-xs text-muted-foreground">
               Showing first 32 KB of {formatBytes(activeFile.bytes)} for fast preview.
             </div>
           )}

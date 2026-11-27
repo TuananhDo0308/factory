@@ -44,12 +44,11 @@ export async function POST(request: NextRequest) {
     );
   }
 
-  const title = str(body.title) || runKey;
-  const engine = str(body.engine) === "claude" ? "claude" : project.engine || "antigravity";
+  const title = str(body.title);
   const baseCommit = str(body.base || body.baseCommit) || null;
   const targetBranch = str(body.target || body.targetBranch) || project.defaultBranch || null;
   const model = str(body.model) || null;
-  const mode = str(body.mode) || "factory";
+  const modeRaw = str(body.mode);
   const now = new Date();
 
   const existing = await prisma.factoryRun.findUnique({
@@ -65,11 +64,12 @@ export async function POST(request: NextRequest) {
     );
   }
 
+  const mode = modeRaw === "ba" || modeRaw === "epic" ? modeRaw : existing.mode;
   const run = await prisma.factoryRun.update({
     where: { id: existing.id },
     data: {
-      title: title.slice(0, 240),
-      engine,
+      ...(title ? { title: title.slice(0, 240) } : {}),
+      engine: "claude",
       mode,
       status: "running",
       baseCommit: baseCommit ?? undefined,
@@ -80,7 +80,8 @@ export async function POST(request: NextRequest) {
     },
   });
 
-  await prisma.runAgent.upsert({
+  // An epic run's agents are the orchestrator's agent records; only a BA session has one Claude agent.
+  if (mode !== "epic") await prisma.runAgent.upsert({
     where: { runId_agentKey: { runId: run.id, agentKey: "orchestrator" } },
     update: { status: "working", activity: "Run active", model: model ?? undefined },
     create: {
@@ -102,11 +103,11 @@ export async function POST(request: NextRequest) {
         runId: run.id,
         seq: 1,
         step: "start",
-        phase: "Init",
+        phase: mode === "epic" ? "Plan" : "BA",
         status: "started",
         label: "run started",
         model,
-        summary: title.slice(0, 500),
+        summary: (title || run.title).slice(0, 500),
       },
     });
   }

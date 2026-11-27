@@ -14,7 +14,6 @@ export type ContextLakeFileRecord = {
 
 export const CONTEXT_TOP_LEVEL_FILES = new Set([
   "CODING_STANDARDS.md",
-  "GEMINI.md",
   "CLAUDE.md",
   "AGENTS.md",
   "README.md",
@@ -69,42 +68,6 @@ export function isContextLakePath(relPath: string): boolean {
 
 function sha256Short(content: string): string {
   return createHash("sha256").update(content, "utf8").digest("hex").slice(0, 16);
-}
-
-/**
- * Checks whether synced `.factory/init.json` + `.factory/project.json` files
- * confirm that `/factory init` is complete — works purely from file contents
- * (no local disk required, so it works on Vercel too!).
- */
-export function isFactoryInitCompleteFromFiles(
-  files: Array<{ path: string; content: string }>,
-): boolean {
-  const initFile = files.find((f) => f.path === ".factory/init.json");
-  const profileFile = files.find((f) => f.path === ".factory/project.json");
-  if (!initFile || !profileFile) return false;
-
-  try {
-    const profile = JSON.parse(profileFile.content) as Record<string, unknown>;
-    const stack = profile.stack as Record<string, unknown> | undefined;
-    const commands = profile.commands as Record<string, unknown> | undefined;
-    const hasLanguages = Array.isArray(stack?.languages) && stack.languages.length > 0;
-    const hasCommands =
-      Boolean(commands) &&
-      typeof commands === "object" &&
-      Object.values(commands as Record<string, unknown>).some(
-        (v) => typeof v === "string" && v.trim().length > 0,
-      );
-    if (!hasLanguages && !hasCommands) return false;
-
-    const initMeta = JSON.parse(initFile.content) as Record<string, unknown>;
-    const steps = initMeta.steps as Record<string, unknown> | undefined;
-    if (steps && typeof steps === "object" && steps.check) {
-      return true;
-    }
-    return hasLanguages && hasCommands;
-  } catch {
-    return false;
-  }
 }
 
 /**
@@ -300,15 +263,14 @@ export async function fetchGitHubContextFiles(params: {
 }
 
 /**
- * Persists a project's Context Lake snapshot to PostgreSQL and automatically
- * promotes `Project.initStatus = "complete"` when `.factory/init.json` + `.factory/project.json` verify.
+ * Persists a project's Context Lake snapshot to PostgreSQL.
  */
 export async function upsertProjectContextFiles(params: {
   projectId: string;
   files: Array<{ path: string; content: string; bytes?: number; sha?: string | null }>;
   source: "daemon" | "github" | "local";
   replaceAll?: boolean;
-}): Promise<{ savedCount: number; initComplete: boolean }> {
+}): Promise<{ savedCount: number }> {
   const validFiles = params.files
     .filter((f) => typeof f.path === "string" && isContextLakePath(f.path) && typeof f.content === "string")
     .slice(0, MAX_FILES_PER_PROJECT)
@@ -365,17 +327,7 @@ export async function upsertProjectContextFiles(params: {
     });
   }
 
-  const initComplete = isFactoryInitCompleteFromFiles(validFiles);
-  if (initComplete) {
-    await prisma.project
-      .updateMany({
-        where: { id: params.projectId, initStatus: { not: "complete" } },
-        data: { initStatus: "complete" },
-      })
-      .catch(() => {});
-  }
-
-  return { savedCount: validFiles.length, initComplete };
+  return { savedCount: validFiles.length };
 }
 
 /**

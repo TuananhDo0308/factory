@@ -97,7 +97,6 @@ export async function POST(
         ok: true,
         source: "local",
         savedCount: saved.savedCount,
-        initComplete: saved.initComplete,
         files: localFiles,
         syncedAt: new Date().toISOString(),
       });
@@ -205,7 +204,6 @@ export async function POST(
         ok: true,
         source: "github",
         savedCount: saved.savedCount,
-        initComplete: saved.initComplete,
         files: gh.files,
         syncedAt: new Date().toISOString(),
       });

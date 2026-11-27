@@ -12,9 +12,7 @@ export type FactoryStreamEvent = {
     | "context:updated"
     | "issue:updated"
     | "project:updated"
-    | "pr:updated"
     | "runner:updated"
-    | "lesson:updated"
     | "command:created";
   userId: string;
   projectId?: string | null;

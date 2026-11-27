@@ -5,15 +5,10 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
   AlertCircleIcon,
-  BookOpenIcon,
   CheckCheckIcon,
   CheckIcon,
   ExternalLinkIcon,
-  GitPullRequestIcon,
   InboxIcon,
-  MessageSquareIcon,
-  PlayIcon,
-  RotateCcwIcon,
   XIcon,
 } from "lucide-react";
 import { toast } from "sonner";
@@ -29,13 +24,14 @@ import {
 import { Input } from "@/components/ui/input";
 import { Spinner } from "@/components/ui/spinner";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { DecisionAnswer } from "@/components/factory/decision-answer";
 import { formatRelativeTime, StatusDot } from "@/components/factory/factory-primitives";
 import { useFactoryStream } from "@/components/factory/use-factory-stream";
 import type { getInboxData } from "@/lib/workspace-data";
 
 type InboxPayload = Awaited<ReturnType<typeof getInboxData>>;
-type DismissKind = "interaction" | "run" | "issue" | "pr" | "lesson";
-type InboxScope = "all" | "questions" | "runs" | "issues" | "prs" | "lessons";
+type DismissKind = "interaction" | "run" | "issue";
+type InboxScope = "all" | "questions" | "runs" | "issues";
 
 export function InboxView({ initialData }: { initialData: InboxPayload }) {
   const router = useRouter();
@@ -54,12 +50,16 @@ export function InboxView({ initialData }: { initialData: InboxPayload }) {
 
   useFactoryStream(() => void reload());
 
-  const totalCount =
-    data.interactions.length +
-    data.attentionRuns.length +
-    data.needsHumanIssues.length +
-    data.reviewPrs.length +
-    data.proposedLessons.length;
+  // A ticket with a pending decision is listed once, as its decision.
+  const decidedIssues = new Set(
+    data.interactions
+      .filter((i) => i.type === "decision")
+      .map((i) => `${i.projectId}:#${Number((i.payload as { issue?: unknown }).issue)}`),
+  );
+  const looseIssues = data.needsHumanIssues.filter(
+    (iss) => !decidedIssues.has(`${iss.projectId}:${iss.issueKey}`),
+  );
+  const totalCount = data.interactions.length + data.attentionRuns.length + looseIssues.length;
 
   async function dismissOne(kind: DismissKind, id: string, label: string) {
     setBusyId(`close:${id}`);
@@ -128,83 +128,6 @@ export function InboxView({ initialData }: { initialData: InboxPayload }) {
     }
   }
 
-  async function retryRun(runId: string, phase: string) {
-    setBusyId(runId);
-    try {
-      const res = await fetch(`/api/sessions/${runId}/retry`, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ phase }),
-      });
-      if (res.ok) {
-        toast.success(`Retrying from ${phase}`);
-        await reload();
-        router.refresh();
-      }
-    } finally {
-      setBusyId(null);
-    }
-  }
-
-  async function approveIssueReady(projectId: string, issueId: string) {
-    setBusyId(issueId);
-    try {
-      const res = await fetch(`/api/projects/${projectId}/issues/${issueId}`, {
-        method: "PATCH",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ status: "ready" }),
-      });
-      if (res.ok) {
-        toast.success("Issue moved to Ready");
-        await reload();
-        router.refresh();
-      }
-    } finally {
-      setBusyId(null);
-    }
-  }
-
-  async function clarifyIssue(projectId: string, issueId: string) {
-    setBusyId(`clarify:${issueId}`);
-    try {
-      const res = await fetch(`/api/projects/${projectId}/dispatch`, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ action: "clarify_issue", issueId }),
-      });
-      const json = (await res.json().catch(() => null)) as {
-        run?: { id: string };
-        error?: string;
-      } | null;
-      if (!res.ok || !json?.run) {
-        toast.error(json?.error || "Could not start /factory clarify");
-        return;
-      }
-      toast.success("Opened interactive /factory clarify session");
-      router.push(`/sessions/${json.run.id}`);
-    } finally {
-      setBusyId(null);
-    }
-  }
-
-  async function decideLesson(lessonId: string, status: "accepted" | "rejected") {
-    setBusyId(lessonId);
-    try {
-      const res = await fetch(`/api/lessons/${lessonId}`, {
-        method: "PATCH",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ status }),
-      });
-      if (res.ok) {
-        toast.success(`Lesson ${status}`);
-        await reload();
-        router.refresh();
-      }
-    } finally {
-      setBusyId(null);
-    }
-  }
-
   function renderEmptySection(title: string, description: string) {
     return (
       <Empty className="border py-14">
@@ -219,7 +142,25 @@ export function InboxView({ initialData }: { initialData: InboxPayload }) {
     );
   }
 
-  const interactionRows = data.interactions.map((inter) => (
+  const interactionRows = data.interactions.map((inter) =>
+    inter.type === "decision" ? (
+      <div key={`inter-${inter.id}`} className="flex flex-col gap-2 px-4 py-3.5">
+        <span className="font-mono text-xs text-muted-foreground" suppressHydrationWarning>
+          {inter.projectName} · {inter.runTitle} · {formatRelativeTime(inter.createdAt)}
+        </span>
+        <DecisionAnswer
+          runId={inter.runId}
+          interactionId={inter.id}
+          issue={Number((inter.payload as { issue?: unknown }).issue) || null}
+          question={String((inter.payload as { question?: unknown }).question ?? inter.prompt ?? "")}
+          reason={String((inter.payload as { reason?: unknown }).reason ?? "")}
+          onAnswered={(retryRunId) => {
+            void reload();
+            if (retryRunId) router.push(`/sessions/${retryRunId}`);
+          }}
+        />
+      </div>
+    ) : (
     <div
       key={`inter-${inter.id}`}
       className="flex flex-col gap-3 px-4 py-3.5 transition-colors hover:bg-muted/25"
@@ -237,7 +178,7 @@ export function InboxView({ initialData }: { initialData: InboxPayload }) {
               </Link>
               <Badge variant="outline">{inter.type}</Badge>
             </div>
-            <span className="font-mono text-[11px] text-muted-foreground" suppressHydrationWarning>
+            <span className="font-mono text-xs text-muted-foreground" suppressHydrationWarning>
               {inter.projectName} · {inter.phase} · {formatRelativeTime(inter.createdAt)}
             </span>
             {inter.prompt && (
@@ -275,7 +216,7 @@ export function InboxView({ initialData }: { initialData: InboxPayload }) {
           onClick={() => void resolveInteraction(inter.runId, inter.id, "approved")}
         >
           <CheckIcon data-icon="inline-start" />
-          Approve &amp; Resume
+          Answer &amp; resume
         </Button>
         <Button
           size="xs"
@@ -288,7 +229,8 @@ export function InboxView({ initialData }: { initialData: InboxPayload }) {
         </Button>
       </div>
     </div>
-  ));
+    ),
+  );
 
   const runRows = data.attentionRuns.map((run) => {
     const isWarning = run.status === "awaiting_input";
@@ -310,7 +252,7 @@ export function InboxView({ initialData }: { initialData: InboxPayload }) {
                 {run.title}
               </Link>
               <span
-                className={`inline-flex items-center rounded-[2px] border px-1.5 py-px font-mono text-[10px] font-medium ${
+                className={`inline-flex items-center rounded-[2px] border px-1.5 py-px font-mono text-2xs font-medium ${
                   isWarning
                     ? "border-amber-500/35 bg-amber-500/10 text-amber-700 dark:text-amber-300"
                     : "border-rose-500/35 bg-rose-500/10 text-rose-700 dark:text-rose-300"
@@ -319,7 +261,7 @@ export function InboxView({ initialData }: { initialData: InboxPayload }) {
                 {run.status.replace("_", " ")}
               </span>
             </div>
-            <span className="font-mono text-[11px] text-muted-foreground" suppressHydrationWarning>
+            <span className="font-mono text-xs text-muted-foreground" suppressHydrationWarning>
               {run.projectName} · {run.currentPhase} · {formatRelativeTime(run.updatedAt)}
             </span>
             {run.summary && (
@@ -331,34 +273,6 @@ export function InboxView({ initialData }: { initialData: InboxPayload }) {
         </div>
 
         <div className="flex shrink-0 items-center gap-1.5 pl-5 sm:pl-0">
-          {(run.mode === "factory" || run.mode === "mission") && run.issueId && (
-            <Button
-              size="xs"
-              variant="default"
-              disabled={busyId !== null}
-              onClick={() => void clarifyIssue(run.projectId, run.issueId!)}
-            >
-              {busyId === `clarify:${run.issueId}` ? (
-                <Spinner data-icon="inline-start" />
-              ) : (
-                <MessageSquareIcon data-icon="inline-start" />
-              )}
-              Clarify
-            </Button>
-          )}
-          <Button
-            size="xs"
-            variant="secondary"
-            disabled={busyId !== null}
-            onClick={() => void retryRun(run.id, run.currentPhase)}
-          >
-            {busyId === run.id ? (
-              <Spinner data-icon="inline-start" />
-            ) : (
-              <RotateCcwIcon data-icon="inline-start" />
-            )}
-            Retry
-          </Button>
           <Button
             size="xs"
             variant="outline"
@@ -382,7 +296,7 @@ export function InboxView({ initialData }: { initialData: InboxPayload }) {
     );
   });
 
-  const issueRows = data.needsHumanIssues.map((iss) => (
+  const issueRows = looseIssues.map((iss) => (
     <div
       key={`iss-${iss.id}`}
       className="flex flex-col gap-2.5 px-4 py-3.5 transition-colors hover:bg-muted/25 sm:flex-row sm:items-center sm:justify-between"
@@ -399,11 +313,10 @@ export function InboxView({ initialData }: { initialData: InboxPayload }) {
             >
               {iss.title}
             </Link>
-            <Badge variant="outline">{iss.priority}</Badge>
-            <Badge variant="secondary">Risk: {iss.tier}</Badge>
+            {iss.epicNumber !== null && <Badge variant="outline">Epic #{iss.epicNumber}</Badge>}
           </div>
-          <span className="font-mono text-[11px] text-muted-foreground">
-            {iss.projectName} · Needs clarification before unattended build
+          <span className="font-mono text-xs text-muted-foreground">
+            {iss.projectName} · Needs a decision
           </span>
           {(iss.summary || iss.goal) && (
             <p className="mt-0.5 line-clamp-2 whitespace-pre-wrap text-xs text-muted-foreground">
@@ -414,27 +327,6 @@ export function InboxView({ initialData }: { initialData: InboxPayload }) {
       </div>
 
       <div className="flex shrink-0 items-center gap-1.5">
-        <Button
-          size="xs"
-          disabled={busyId !== null}
-          onClick={() => void clarifyIssue(iss.projectId, iss.id)}
-        >
-          {busyId === `clarify:${iss.id}` ? (
-            <Spinner data-icon="inline-start" />
-          ) : (
-            <MessageSquareIcon data-icon="inline-start" />
-          )}
-          Clarify
-        </Button>
-        <Button
-          size="xs"
-          variant="secondary"
-          disabled={busyId !== null}
-          onClick={() => void approveIssueReady(iss.projectId, iss.id)}
-        >
-          <PlayIcon data-icon="inline-start" />
-          Approve Ready
-        </Button>
         <Button
           size="xs"
           variant="outline"
@@ -457,91 +349,7 @@ export function InboxView({ initialData }: { initialData: InboxPayload }) {
     </div>
   ));
 
-  const prRows = data.reviewPrs.map((pr) => (
-    <div
-      key={`pr-${pr.id}`}
-      className="flex flex-col gap-2.5 px-4 py-3.5 transition-colors hover:bg-muted/25 sm:flex-row sm:items-center sm:justify-between"
-    >
-      <div className="flex min-w-0 items-start gap-2.5">
-        <GitPullRequestIcon className="mt-0.5 size-4 shrink-0 text-muted-foreground" />
-        <div className="flex min-w-0 flex-col gap-0.5">
-          <span className="truncate text-sm font-medium text-foreground">
-            #{pr.number} {pr.title}
-          </span>
-          <span className="font-mono text-[11px] text-muted-foreground">
-            {pr.projectName} · {pr.baseBranch} ← {pr.headBranch} · +{pr.additions} -{pr.deletions} · CI:{" "}
-            {pr.ciStatus}
-          </span>
-        </div>
-      </div>
-
-      <div className="flex shrink-0 items-center gap-1.5">
-        {pr.url && (
-          <Button
-            size="xs"
-            variant="outline"
-            nativeButton={false}
-            render={<a href={pr.url} target="_blank" rel="noreferrer" />}
-          >
-            <ExternalLinkIcon data-icon="inline-start" />
-            GitHub
-          </Button>
-        )}
-        <Button
-          type="button"
-          variant="ghost"
-          size="icon-xs"
-          title="Close notification"
-          disabled={busyId !== null}
-          onClick={() => void dismissOne("pr", pr.id, `PR #${pr.number}`)}
-        >
-          <XIcon />
-        </Button>
-      </div>
-    </div>
-  ));
-
-  const lessonRows = data.proposedLessons.map((lesson) => (
-    <div
-      key={`lesson-${lesson.id}`}
-      className="flex flex-col gap-2.5 px-4 py-3.5 transition-colors hover:bg-muted/25 sm:flex-row sm:items-center sm:justify-between"
-    >
-      <div className="flex min-w-0 items-start gap-2.5">
-        <BookOpenIcon className="mt-0.5 size-4 shrink-0 text-muted-foreground" />
-        <div className="flex min-w-0 flex-col gap-0.5">
-          <div className="flex flex-wrap items-center gap-2">
-            <span className="text-sm font-medium text-foreground">{lesson.title}</span>
-            <Badge variant="secondary">{lesson.occurrences}x</Badge>
-          </div>
-          <p className="line-clamp-2 text-xs text-muted-foreground">{lesson.proposal}</p>
-        </div>
-      </div>
-
-      <div className="flex shrink-0 items-center gap-1.5">
-        <Button
-          size="xs"
-          variant="secondary"
-          disabled={busyId !== null}
-          onClick={() => void decideLesson(lesson.id, "accepted")}
-        >
-          <CheckIcon data-icon="inline-start" />
-          Accept
-        </Button>
-        <Button
-          type="button"
-          variant="ghost"
-          size="icon-xs"
-          title="Close notification"
-          disabled={busyId !== null}
-          onClick={() => void dismissOne("lesson", lesson.id, lesson.title)}
-        >
-          <XIcon />
-        </Button>
-      </div>
-    </div>
-  ));
-
-  const allRows = [...interactionRows, ...runRows, ...issueRows, ...prRows, ...lessonRows];
+  const allRows = [...interactionRows, ...runRows, ...issueRows];
 
   function renderFeed(rows: React.ReactNode[], emptyTitle: string, emptyDesc: string) {
     if (rows.length === 0) {
@@ -619,18 +427,8 @@ export function InboxView({ initialData }: { initialData: InboxPayload }) {
                 Runs ({data.attentionRuns.length})
               </TabsTrigger>
             )}
-            {data.needsHumanIssues.length > 0 && (
-              <TabsTrigger value="issues">
-                Issues ({data.needsHumanIssues.length})
-              </TabsTrigger>
-            )}
-            {data.reviewPrs.length > 0 && (
-              <TabsTrigger value="prs">PRs ({data.reviewPrs.length})</TabsTrigger>
-            )}
-            {data.proposedLessons.length > 0 && (
-              <TabsTrigger value="lessons">
-                Lessons ({data.proposedLessons.length})
-              </TabsTrigger>
+            {looseIssues.length > 0 && (
+              <TabsTrigger value="issues">Tickets ({looseIssues.length})</TabsTrigger>
             )}
           </TabsList>
 
@@ -644,13 +442,7 @@ export function InboxView({ initialData }: { initialData: InboxPayload }) {
             {renderFeed(runRows, "No blocked or stalled runs", "All runs are healthy.")}
           </TabsContent>
           <TabsContent value="issues">
-            {renderFeed(issueRows, "No issues needing review", "All issues are triaged.")}
-          </TabsContent>
-          <TabsContent value="prs">
-            {renderFeed(prRows, "No PRs waiting", "No pull requests need manual approval.")}
-          </TabsContent>
-          <TabsContent value="lessons">
-            {renderFeed(lessonRows, "No proposed lessons", "Self-improvement proposals appear here.")}
+            {renderFeed(issueRows, "No tickets waiting", "No ticket needs a decision.")}
           </TabsContent>
         </Tabs>
       )}

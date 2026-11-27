@@ -10,19 +10,31 @@
   --font-mono: var(--font-geist-mono), ui-monospace, SFMono-Regular, Menlo, monospace;
   --font-brand: var(--font-space-grotesk), var(--font-geist-sans), ui-sans-serif, system-ui, sans-serif;
 
-  /* Typography scale — lifted ~1.5-2px for comfortable reading (mirrors XFB legibility) */
-  --text-xs: 0.84375rem;
-  --text-xs--line-height: 1.35;
+  /*
+   * Type scale — four UI steps plus three heading steps. Use only these names;
+   * never text-[Npx].
+   *   2xs  12px  caption: mono metadata, timestamps, tags, badges
+   *   xs   13px  small: labels, sidebar sub-items, helper text
+   *   sm   15px  body: chat, content, buttons, inputs (base is the same step)
+   *   lg   17px  large: card / section titles
+   *   xl 20 · 2xl 24 · 3xl 30  headings
+   */
+  --text-2xs: 0.75rem;
+  --text-2xs--line-height: 1.35;
+  --text-xs: 0.8125rem;
+  --text-xs--line-height: 1.45;
   --text-sm: 0.9375rem;
-  --text-sm--line-height: 1.45;
-  --text-base: 1.03125rem;
+  --text-sm--line-height: 1.55;
+  --text-base: 0.9375rem;
   --text-base--line-height: 1.55;
-  --text-lg: 1.1875rem;
+  --text-lg: 1.0625rem;
   --text-lg--line-height: 1.45;
-  --text-xl: 1.375rem;
-  --text-xl--line-height: 1.3;
-  --text-2xl: 1.625rem;
-  --text-2xl--line-height: 1.2;
+  --text-xl: 1.25rem;
+  --text-xl--line-height: 1.35;
+  --text-2xl: 1.5rem;
+  --text-2xl--line-height: 1.25;
+  --text-3xl: 1.875rem;
+  --text-3xl--line-height: 1.2;
 
   --color-background: var(--background);
   --color-foreground: var(--foreground);
@@ -62,12 +74,6 @@
   --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
   --color-sidebar-border: var(--sidebar-border);
   --color-sidebar-ring: var(--sidebar-ring);
-
-  --color-phase-spec: var(--phase-spec);
-  --color-phase-build: var(--phase-build);
-  --color-phase-check: var(--phase-check);
-  --color-phase-review: var(--phase-review);
-  --color-phase-repair: var(--phase-repair);
 
   --radius-sm: 4px;
   --radius-md: 6px;
@@ -112,11 +118,6 @@
   --chart-4: #0b6f66;
   --chart-5: #a84e0b;
 
-  --phase-spec: #52525b;
-  --phase-build: #1a62a8;
-  --phase-check: #0b6f66;
-  --phase-review: #a84e0b;
-  --phase-repair: #b02a5e;
   --signal-go: #1f9a55;
   --signal-caution: #b87d00;
   --signal-stop: #d23a2e;
@@ -166,11 +167,6 @@
   --chart-4: #35c9b4;
   --chart-5: #f2924a;
 
-  --phase-spec: #d4d4d8;
-  --phase-build: #5aaef0;
-  --phase-check: #35c9b4;
-  --phase-review: #f2924a;
-  --phase-repair: #ee6fa0;
   --signal-go: #2fbf6c;
   --signal-caution: #e5a31b;
   --signal-stop: #e5483b;
@@ -230,48 +226,12 @@
 }
 
 /*
- * Lift hardcoded arbitrary text sizes across components so all labels, buttons,
- * timestamps, prose, and trace metadata stay crisp and comfortable to read.
+ * shadcn's sm Button/Toggle size hardcodes text-[0.8rem]; pin it to the small step
+ * so src/components/ui/* stays untouched.
  */
-.text-\[9\.5px\] {
-  font-size: 0.71875rem;
-  line-height: 1.3;
-}
-
-.text-\[10px\],
-.text-\[10\.5px\] {
-  font-size: 0.75rem;
-  line-height: 1.35;
-}
-
-.text-\[11px\],
-.text-\[11\.5px\] {
-  font-size: 0.8125rem;
-  line-height: 1.4;
-}
-
-.text-\[12px\] {
-  font-size: 0.84375rem;
-  line-height: 1.45;
-}
-
 .text-\[0\.8rem\] {
-  font-size: 0.875rem;
-}
-
-.text-\[13px\] {
-  font-size: 0.90625rem;
-  line-height: 1.5;
-}
-
-.text-\[13\.5px\] {
-  font-size: 0.9375rem;
-  line-height: 1.6;
-}
-
-.text-\[14\.5px\] {
-  font-size: 1.03125rem;
-  line-height: 1.45;
+  font-size: var(--text-xs);
+  line-height: var(--text-xs--line-height);
 }
 
 /*
@@ -285,7 +245,7 @@
 [data-slot="badge"] {
   border-radius: 4px;
   padding-inline: 0.5rem;
-  font-size: 0.78125rem;
+  font-size: var(--text-2xs);
   font-weight: 500;
   letter-spacing: 0.02em;
 }
@@ -503,8 +463,8 @@
   animation: xfb-lamp-breathe 1.8s ease-in-out infinite;
 }
 
-/* Antigravity 2x2 four-dot sidebar loading animation */
-@keyframes agy-loader-dot {
+/* 2x2 four-dot sidebar loading animation */
+@keyframes sf-loader-dot {
   0%,
   100% {
     opacity: 0.24;
@@ -517,40 +477,40 @@
   }
 }
 
-.agy-loader-dot {
-  animation: agy-loader-dot 1.04s ease-in-out infinite;
+.sf-loader-dot {
+  animation: sf-loader-dot 1.04s ease-in-out infinite;
 }
 
-.agy-loader-dot-1 {
+.sf-loader-dot-1 {
   animation-delay: 0ms;
 }
 
-.agy-loader-dot-2 {
+.sf-loader-dot-2 {
   animation-delay: 180ms;
 }
 
-.agy-loader-dot-3 {
+.sf-loader-dot-3 {
   animation-delay: 360ms;
 }
 
-.agy-loader-dot-4 {
+.sf-loader-dot-4 {
   animation-delay: 540ms;
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .agy-loader-dot {
+  .sf-loader-dot {
     animation: none;
   }
-  .agy-loader-dot-1 {
+  .sf-loader-dot-1 {
     opacity: 0.65;
   }
-  .agy-loader-dot-2 {
+  .sf-loader-dot-2 {
     opacity: 0.95;
   }
-  .agy-loader-dot-3 {
+  .sf-loader-dot-3 {
     opacity: 0.45;
   }
-  .agy-loader-dot-4 {
+  .sf-loader-dot-4 {
     opacity: 0.25;
   }
 }

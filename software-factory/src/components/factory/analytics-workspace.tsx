@@ -97,7 +97,6 @@ function formatShortDate(isoDay: string): string {
 export function AnalyticsWorkspace({ data }: { data: AnalyticsPayload }) {
   const { summary, dailySeries, projectBreakdown, scorecard } = data;
   const [chartMetric, setChartMetric] = React.useState<ChartMetric>("throughput");
-  const [engineFilter, setEngineFilter] = React.useState<string>("all");
   const [roleSearch, setRoleSearch] = React.useState("");
   const [sortField, setSortField] = React.useState<SortField>("runs");
   const [sortDir, setSortDir] = React.useState<"asc" | "desc">("desc");
@@ -128,21 +127,10 @@ export function AnalyticsWorkspace({ data }: { data: AnalyticsPayload }) {
     [projectBreakdown],
   );
 
-  const availableEngines = React.useMemo(
-    () => Array.from(new Set(scorecard.map((s) => s.engine))).sort(),
-    [scorecard],
-  );
-
   const filteredScorecard = React.useMemo(() => {
     const q = roleSearch.trim().toLowerCase();
     const list = scorecard.filter((s) => {
-      if (engineFilter !== "all" && s.engine !== engineFilter) return false;
-      if (
-        q &&
-        !s.role.toLowerCase().includes(q) &&
-        !s.model.toLowerCase().includes(q) &&
-        !s.engine.toLowerCase().includes(q)
-      ) {
+      if (q && !s.role.toLowerCase().includes(q) && !s.model.toLowerCase().includes(q)) {
         return false;
       }
       return true;
@@ -152,7 +140,7 @@ export function AnalyticsWorkspace({ data }: { data: AnalyticsPayload }) {
       if (sortField === "role") return a.role.localeCompare(b.role) * mul;
       return (a[sortField] - b[sortField]) * mul;
     });
-  }, [scorecard, engineFilter, roleSearch, sortField, sortDir]);
+  }, [scorecard, roleSearch, sortField, sortDir]);
 
   function toggleSort(field: SortField) {
     if (sortField === field) {
@@ -183,7 +171,7 @@ export function AnalyticsWorkspace({ data }: { data: AnalyticsPayload }) {
             <h1 className="text-xl font-semibold tracking-tight text-foreground">
               Analytics &amp; Agent Effectiveness
             </h1>
-            <Badge variant="outline" className="font-mono text-[11px]">
+            <Badge variant="outline" className="font-mono text-xs">
               Last 30 active days
             </Badge>
           </div>
@@ -325,7 +313,7 @@ export function AnalyticsWorkspace({ data }: { data: AnalyticsPayload }) {
               </span>
               <span className="text-sm text-muted-foreground">/ run</span>
             </div>
-            <Badge variant="outline" className="font-mono text-[11px]">
+            <Badge variant="outline" className="font-mono text-xs">
               {autonomyLabel}
             </Badge>
           </div>
@@ -577,13 +565,13 @@ export function AnalyticsWorkspace({ data }: { data: AnalyticsPayload }) {
                       <div className="flex items-center justify-between gap-2 text-xs">
                         <div className="flex min-w-0 items-center gap-2">
                           <span className="truncate font-medium text-foreground">{p.project}</span>
-                          <span className="shrink-0 rounded bg-muted px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground tabular-nums">
+                          <span className="shrink-0 rounded bg-muted px-1.5 py-0.5 font-mono text-2xs text-muted-foreground tabular-nums">
                             {p.passed}/{p.runs} ({passPct}%)
                           </span>
                         </div>
                         <div className="flex shrink-0 items-center gap-2 font-mono tabular-nums">
                           {sharePct > 0 && (
-                            <span className="text-[11px] text-muted-foreground">{sharePct}%</span>
+                            <span className="text-xs text-muted-foreground">{sharePct}%</span>
                           )}
                           <span className="font-semibold text-foreground">{formatUsd(p.cost)}</span>
                         </div>
@@ -632,39 +620,6 @@ export function AnalyticsWorkspace({ data }: { data: AnalyticsPayload }) {
                 />
               </div>
 
-              {availableEngines.length > 1 && (
-                <div
-                  role="group"
-                  aria-label="Filter by engine"
-                  className="inline-flex items-center rounded-md border border-border bg-muted/40 p-0.5"
-                >
-                  <button
-                    type="button"
-                    onClick={() => setEngineFilter("all")}
-                    className={`cursor-pointer rounded px-2.5 py-1 text-xs font-medium transition-colors ${
-                      engineFilter === "all"
-                        ? "bg-background text-foreground shadow-xs"
-                        : "text-muted-foreground hover:text-foreground"
-                    }`}
-                  >
-                    All
-                  </button>
-                  {availableEngines.map((eng) => (
-                    <button
-                      key={eng}
-                      type="button"
-                      onClick={() => setEngineFilter(eng)}
-                      className={`cursor-pointer rounded px-2.5 py-1 text-xs font-medium capitalize transition-colors ${
-                        engineFilter === eng
-                          ? "bg-background text-foreground shadow-xs"
-                          : "text-muted-foreground hover:text-foreground"
-                      }`}
-                    >
-                      {eng}
-                    </button>
-                  ))}
-                </div>
-              )}
             </div>
           )}
         </CardHeader>
@@ -685,7 +640,7 @@ export function AnalyticsWorkspace({ data }: { data: AnalyticsPayload }) {
                   <EmptyDescription>
                     {scorecard.length === 0
                       ? "Agent role metrics populate automatically as orchestrators and subagents complete runs."
-                      : "Try clearing the search query or selecting All engines."}
+                      : "Try clearing the search query."}
                   </EmptyDescription>
                 </EmptyHeader>
                 {scorecard.length > 0 && (
@@ -696,7 +651,6 @@ export function AnalyticsWorkspace({ data }: { data: AnalyticsPayload }) {
                       size="sm"
                       onClick={() => {
                         setRoleSearch("");
-                        setEngineFilter("all");
                       }}
                       className="cursor-pointer"
                     >
@@ -731,7 +685,6 @@ export function AnalyticsWorkspace({ data }: { data: AnalyticsPayload }) {
                       </button>
                     </TableHead>
                     <TableHead>Model</TableHead>
-                    <TableHead>Engine</TableHead>
                     <TableHead
                       className="text-right"
                       aria-sort={
@@ -811,17 +764,12 @@ export function AnalyticsWorkspace({ data }: { data: AnalyticsPayload }) {
                 </TableHeader>
                 <TableBody>
                   {filteredScorecard.map((s) => (
-                    <TableRow key={`${s.role}-${s.model}-${s.engine}`}>
+                    <TableRow key={`${s.role}-${s.model}`}>
                       <TableCell className="pl-5 font-medium capitalize text-foreground">
                         {s.role.replace(/-/g, " ")}
                       </TableCell>
                       <TableCell className="font-mono text-xs text-muted-foreground">
                         {s.model}
-                      </TableCell>
-                      <TableCell>
-                        <Badge variant="outline" className="font-mono text-[11px]">
-                          {s.engine}
-                        </Badge>
                       </TableCell>
                       <TableCell className="text-right font-mono text-xs tabular-nums">
                         {s.runs}

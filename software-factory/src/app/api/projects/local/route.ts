@@ -19,7 +19,7 @@ export async function POST(request: NextRequest) {
 
   const localPathRaw = typeof body.localPath === "string" ? body.localPath.trim() : "";
   const explicitName = typeof body.name === "string" ? body.name.trim() : "";
-  const engine = body.engine === "claude" ? "claude" : "antigravity";
+  const engine = "claude";
 
   if (!localPathRaw && !explicitName) {
     return NextResponse.json(
@@ -29,11 +29,6 @@ export async function POST(request: NextRequest) {
   }
 
   const absPath = localPathRaw ? path.resolve(/* turbopackIgnore: true */ localPathRaw) : null;
-  let initStatus =
-    typeof body.initStatus === "string" &&
-    ["none", "partial", "stale", "complete"].includes(body.initStatus)
-      ? body.initStatus
-      : "none";
   let stackJson: string | null = null;
   let description = typeof body.description === "string" ? body.description.trim() : "";
   const githubFullName =
@@ -47,9 +42,7 @@ export async function POST(request: NextRequest) {
 
   if (absPath && existsSync(/* turbopackIgnore: true */ absPath)) {
     const profilePath = path.join(/* turbopackIgnore: true */ absPath, ".factory", "project.json");
-    const initPath = path.join(/* turbopackIgnore: true */ absPath, ".factory", "init.json");
     if (existsSync(/* turbopackIgnore: true */ profilePath)) {
-      initStatus = existsSync(/* turbopackIgnore: true */ initPath) ? "complete" : "partial";
       try {
         const parsed = JSON.parse(readFileSync(/* turbopackIgnore: true */ profilePath, "utf8")) as {
           name?: string;
@@ -79,7 +72,7 @@ export async function POST(request: NextRequest) {
           description: description ? description.slice(0, 500) : existingByPath.description,
           engine,
           defaultBranch,
-          initStatus,
+          ...(githubFullName ? { githubFullName } : {}),
           stackJson: stackJson ?? existingByPath.stackJson,
         },
       });
@@ -110,7 +103,6 @@ export async function POST(request: NextRequest) {
       localPath: absPath,
       githubFullName,
       defaultBranch,
-      initStatus,
       stackJson,
     },
   });

@@ -1,6 +1,6 @@
 import { type NextRequest, NextResponse } from "next/server";
 import { authenticateRequest, resolveUserProject } from "@/lib/api-auth";
-import { getProjectAutoApprove, isUnattendedFactoryMode } from "@/lib/auto-dispatch";
+import { ticketIssueKey } from "@/lib/epics";
 import { emitFactoryEvent } from "@/lib/events";
 import { prisma } from "@/lib/prisma";
 
@@ -61,18 +61,6 @@ export async function POST(request: NextRequest) {
   });
   if (!run) return NextResponse.json({ error: "Run not found" }, { status: 404 });
 
-  // Upstream sangtruong-rgb/factory invariant:
-  // Questions belong in `/factory init` or `/factory clarify`, NEVER inside the Factory build loop.
-  if (isUnattendedFactoryMode(run.mode)) {
-    return NextResponse.json(
-      {
-        error:
-          "Factory build runs are strictly unattended and cannot pause for human input. Terminate with outcome 'blocked' so the ticket returns to Clarify instead.",
-      },
-      { status: 409 },
-    );
-  }
-
   const agentKey = str(body.agentKey);
   const agent = agentKey
     ? await prisma.runAgent.findUnique({
@@ -81,12 +69,35 @@ export async function POST(request: NextRequest) {
     : null;
 
   const interactionType = str(body.type) || "question";
-  const autoApprove = await getProjectAutoApprove(project.id);
-  const shouldAutoApprove =
-    autoApprove &&
-    (interactionType === "merge_approval" ||
-      interactionType === "mockup_approval" ||
-      (interactionType === "plan_approval" && project.autoDispatch));
+  if (run.mode === "epic" && interactionType !== "decision") {
+    return NextResponse.json(
+      { error: "An epic run only takes `decision` interactions (a ticket that needs a decision)." },
+      { status: 409 },
+    );
+  }
+  const payload =
+    body.payload && typeof body.payload === "object" && !Array.isArray(body.payload)
+      ? (body.payload as Record<string, unknown>)
+      : body.payload;
+
+  // One pending decision per ticket: the daemon may report the same needs-decision ticket again,
+  // and /api/v1/epics/sync can create it too.
+  if (interactionType === "decision") {
+    const issue = Number((payload as Record<string, unknown> | undefined)?.issue);
+    const pending = await prisma.runInteraction.findMany({
+      where: { runId: run.id, type: "decision", status: "pending" },
+    });
+    const existing = pending.find((p) => {
+      try {
+        return Number((JSON.parse(p.payloadJson || "{}") as { issue?: unknown }).issue) === issue;
+      } catch {
+        return false;
+      }
+    });
+    if (existing) {
+      return NextResponse.json({ ok: true, interaction: existing, deduped: true });
+    }
+  }
 
   const interaction = await prisma.runInteraction.create({
     data: {
@@ -95,21 +106,42 @@ export async function POST(request: NextRequest) {
       type: interactionType,
       title: title.slice(0, 240),
       prompt: str(body.prompt) || null,
-      payloadJson: body.payload !== undefined ? JSON.stringify(body.payload) : null,
-      status: shouldAutoApprove ? "resolved" : "pending",
-      responseJson: shouldAutoApprove
-        ? JSON.stringify({ decision: "approved", autoApproved: true })
-        : null,
-      resolvedAt: shouldAutoApprove ? new Date() : null,
+      payloadJson: payload !== undefined ? JSON.stringify(payload) : null,
+      status: "pending",
     },
   });
 
-  if (!shouldAutoApprove) {
+  if (interactionType === "decision") {
+    const rec = (payload ?? {}) as Record<string, unknown>;
+    const issue = Number(rec.issue);
+    if (Number.isInteger(issue) && issue > 0) {
+      const question = typeof rec.question === "string" ? rec.question : "";
+      const reason = typeof rec.reason === "string" ? rec.reason : "";
+      await prisma.projectIssue
+        .update({
+          where: { projectId_issueKey: { projectId: project.id, issueKey: ticketIssueKey(issue) } },
+          data: {
+            status: "needs_human",
+            summary: [question, reason ? `Reason: ${reason}` : ""].filter(Boolean).join("\n\n").slice(0, 4000) || undefined,
+          },
+        })
+        .catch(() => {});
+      emitFactoryEvent({
+        type: "issue:updated",
+        userId: auth.user.id,
+        projectId: project.id,
+        runId: run.id,
+        payload: { issue, status: "needs_human" },
+      });
+    }
+  }
+
+  // A BA question pauses the session; a decision does not stop the epic run (other tickets go on).
+  if (interactionType !== "decision") {
     await prisma.factoryRun.update({
       where: { id: run.id },
       data: { status: "awaiting_input", lastHeartbeatAt: new Date() },
     });
-
     if (agent) {
       await prisma.runAgent.update({
         where: { id: agent.id },
@@ -123,15 +155,8 @@ export async function POST(request: NextRequest) {
     userId: auth.user.id,
     projectId: project.id,
     runId: run.id,
-    payload: {
-      interactionId: interaction.id,
-      status: shouldAutoApprove ? "resolved" : "pending",
-      autoApproved: shouldAutoApprove,
-    },
+    payload: { interactionId: interaction.id, status: "pending", type: interactionType },
   });
 
-  return NextResponse.json(
-    { ok: true, interaction, autoApproved: shouldAutoApprove },
-    { status: 201 },
-  );
+  return NextResponse.json({ ok: true, interaction }, { status: 201 });
 }

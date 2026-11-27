@@ -6,14 +6,13 @@ import { useRouter } from "next/navigation";
 import {
   CheckIcon,
   FolderIcon,
+  GitBranchIcon,
   LaptopIcon,
-  MessageSquareIcon,
   MessageSquarePlusIcon,
   MoreHorizontalIcon,
   SettingsIcon,
   Trash2Icon,
   UsersIcon,
-  WrenchIcon,
 } from "lucide-react";
 import { toast } from "sonner";
 import {
@@ -27,7 +26,6 @@ import {
   AlertDialogMedia,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -46,6 +44,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { Input } from "@/components/ui/input";
 import { Spinner } from "@/components/ui/spinner";
 import { Tabs as AceternityTabs, type Tab as AceternityTab } from "@/components/ui/aceternity-tabs";
 import { ContextLakeViewer, type ContextLakeFile } from "@/components/factory/context-lake-viewer";
@@ -74,15 +73,12 @@ type ProjectWorkspaceProps = {
     name: string;
     slug: string;
     description: string | null;
-    engine: string;
     source: string;
     localPath: string | null;
     githubFullName: string | null;
     githubUrl: string | null;
     defaultBranch: string;
     defaultRunnerId: string | null;
-    initStatus: string;
-    readinessScore: number | null;
   };
   runners: ProjectRunnerOption[];
   myRole: "owner" | "member" | "viewer";
@@ -90,17 +86,6 @@ type ProjectWorkspaceProps = {
   ownerLogin: string;
   memberCount: number;
   initialBoard: ProjectBoardSnapshot;
-  missions: Array<{
-    id: string;
-    title: string;
-    goal: string;
-    status: string;
-    autonomy: string;
-    validationContractMd: string;
-    issueCount: number;
-    passedCount: number;
-    updatedAt: string;
-  }>;
   contextLake: {
     files: ContextLakeFile[];
     source: "local" | "daemon" | "github" | "none";
@@ -134,7 +119,7 @@ export function ProjectWorkspace({
   const [deleteOpen, setDeleteOpen] = React.useState(false);
   const [deletingProject, setDeletingProject] = React.useState(false);
   const [activeTab, setActiveTab] = React.useState<string>(() =>
-    defaultTab === "team" || defaultTab === "missions" || defaultTab === "runs"
+    defaultTab === "team" || defaultTab === "runs"
       ? "dashboard"
       : defaultTab,
   );
@@ -153,7 +138,10 @@ export function ProjectWorkspace({
   const [board, setBoard] = React.useState<ProjectBoardSnapshot>(initialBoard);
   const [contextLake, setContextLake] = React.useState(initialContextLake);
   const [contextSyncing, setContextSyncing] = React.useState(false);
-  const [dispatchBusy, setDispatchBusy] = React.useState<string | null>(null);
+  const [repoOpen, setRepoOpen] = React.useState(false);
+  const [repoDraft, setRepoDraft] = React.useState(project.githubFullName ?? "");
+  const [githubFullName, setGithubFullName] = React.useState(project.githubFullName);
+  const [savingRepo, setSavingRepo] = React.useState(false);
   const isMountedRef = React.useRef(true);
   React.useEffect(() => {
     isMountedRef.current = true;
@@ -353,70 +341,28 @@ export function ProjectWorkspace({
     }
   });
 
-  async function handleDispatchPolicy(
-    action: "start_auto" | "stop_auto" | "set_auto_approve",
-    extra?: { autoApprove?: boolean },
-  ) {
-    setDispatchBusy(action);
+  async function handleSaveRepo() {
+    setSavingRepo(true);
     try {
-      const res = await fetch(`/api/projects/${project.id}/dispatch`, {
-        method: "POST",
+      const res = await fetch(`/api/projects/${project.id}`, {
+        method: "PATCH",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ action, ...extra }),
+        body: JSON.stringify({ githubFullName: repoDraft.trim() }),
       });
       const data = (await res.json().catch(() => null)) as {
-        ok?: boolean;
-        autoDispatch?: boolean;
-        autoApprove?: boolean;
-        approvedCount?: number;
-        dispatched?: Array<{ issueKey: string; runId: string }>;
-        skippedReason?: string | null;
+        project?: { githubFullName?: string | null };
         error?: string;
       } | null;
-
       if (!res.ok) {
-        toast.error(data?.error || "Could not update Auto-Run settings");
+        toast.error(data?.error || "Could not save the repository");
         return;
       }
-
-      if (action === "stop_auto") {
-        toast.success("Auto-Run paused (running tasks will finish normally)");
-      } else if (action === "set_auto_approve") {
-        if (data?.autoApprove) {
-          const parts: string[] = ["No-approval mode enabled"];
-          if ((data.approvedCount ?? 0) > 0) {
-            parts.push(`auto-approved ${data.approvedCount} review ticket(s)`);
-          }
-          if ((data.dispatched?.length ?? 0) > 0) {
-            parts.push(`started ${data.dispatched!.map((d) => d.issueKey).join(", ")}`);
-          }
-          toast.success(parts.join(" · "));
-        } else {
-          toast.success("Manual approval restored before marking tickets done");
-        }
-      } else {
-        const modeLabel = data?.autoApprove ? "Full Auto (No Approval)" : "Auto-Run";
-        const count = data?.dispatched?.length ?? 0;
-        const approved = data?.approvedCount ?? 0;
-        if (count > 0) {
-          toast.success(
-            `${modeLabel} active — started ${data!.dispatched!.map((d) => d.issueKey).join(", ")}`,
-          );
-        } else if (data?.skippedReason === "project_not_initialized") {
-          toast.warning(
-            `${modeLabel} enabled, but Factory Init must be completed first before unattended builds start`,
-          );
-        } else if (data?.skippedReason === "no_online_runner") {
-          toast.warning(`${modeLabel} enabled, waiting for an online \`sf daemon\` runner`);
-        } else if (approved > 0) {
-          toast.success(`${modeLabel} active — auto-approved ${approved} ticket(s)`);
-        } else {
-          toast.success(`${modeLabel} enabled for this project`);
-        }
-      }
+      setGithubFullName(data?.project?.githubFullName ?? null);
+      setRepoOpen(false);
+      toast.success("GitHub repository saved");
       await refreshBoard();
     } finally {
-      setDispatchBusy(null);
+      setSavingRepo(false);
     }
   }
 
@@ -441,29 +387,6 @@ export function ProjectWorkspace({
       router.refresh();
     } finally {
       setDeletingProject(false);
-    }
-  }
-
-  async function handleRunProjectInit() {
-    setDispatchBusy("run_init");
-    try {
-      const res = await fetch(`/api/projects/${project.id}/dispatch`, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ action: "run_init" }),
-      });
-      const data = (await res.json().catch(() => null)) as {
-        run?: { id: string };
-        error?: string;
-      } | null;
-      if (!res.ok || !data?.run) {
-        toast.error(data?.error || "Could not start /factory init session");
-        return;
-      }
-      toast.success("Opened interactive /factory init chat");
-      router.push(`/sessions/${data.run.id}`);
-    } finally {
-      setDispatchBusy(null);
     }
   }
 
@@ -522,7 +445,7 @@ export function ProjectWorkspace({
                       <div className="flex min-w-0 flex-col">
                         <span className="text-xs font-medium">Auto (best online)</span>
                         {autoFallbackRunner && (
-                          <span className="truncate font-mono text-[10px] text-muted-foreground">
+                          <span className="truncate font-mono text-2xs text-muted-foreground">
                             Currently {autoFallbackRunner.name}
                           </span>
                         )}
@@ -540,7 +463,7 @@ export function ProjectWorkspace({
                         <StatusDot status={r.status} />
                         <div className="flex min-w-0 flex-col">
                           <span className="truncate font-mono text-xs">{r.name}</span>
-                          <span className="truncate text-[10px] text-muted-foreground">
+                          <span className="truncate text-2xs text-muted-foreground">
                             {r.status}
                             {!r.isOwn ? ` · @${r.ownerLogin}` : ""}
                           </span>
@@ -552,6 +475,16 @@ export function ProjectWorkspace({
                 </DropdownMenuGroup>
 
                 <DropdownMenuSeparator />
+                <DropdownMenuItem
+                  onClick={() => {
+                    setRepoDraft(githubFullName ?? "");
+                    setRepoOpen(true);
+                  }}
+                  className="gap-2 text-xs"
+                >
+                  <GitBranchIcon className="size-3.5" />
+                  <span className="truncate">GitHub repository: {githubFullName || "not set"}</span>
+                </DropdownMenuItem>
                 <DropdownMenuItem
                   onClick={() => router.push("/settings?tab=runners")}
                   className="gap-2 text-xs text-muted-foreground"
@@ -578,62 +511,6 @@ export function ProjectWorkspace({
         </div>
       </div>
 
-      {/* Stage 1: Project-level /factory init gate banner (once per project, before unattended builds) */}
-      {board.initStatus !== "complete" && (
-        <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-primary/35 bg-primary/5 px-4 py-3 text-xs">
-          <div className="flex min-w-0 items-center gap-2.5">
-            {board.activeInitRun ? (
-              <StatusDot
-                status={
-                  board.activeInitRun.status === "awaiting_input" ? "waiting_on_you" : "working"
-                }
-              />
-            ) : (
-              <WrenchIcon className="size-4 shrink-0 text-primary" />
-            )}
-            <div className="flex min-w-0 flex-col gap-0.5">
-              <div className="flex flex-wrap items-center gap-2">
-                <span className="font-medium text-foreground">
-                  {board.activeInitRun
-                    ? "Stage 1 · Factory Init session in progress"
-                    : "Stage 1 · Run /factory init once before building tickets"}
-                </span>
-                <Badge variant="outline">Init required</Badge>
-              </div>
-              <span className="text-muted-foreground">
-                Set up <code className="font-mono">.factory/project.json</code>, checks, design tokens, and stack skills interactively so every <code className="font-mono">/factory</code> build runs 100% unattended.
-              </span>
-            </div>
-          </div>
-
-          <div className="flex shrink-0 items-center gap-2">
-            {board.activeInitRun ? (
-              <Button
-                size="sm"
-                nativeButton={false}
-                render={<Link href={`/sessions/${board.activeInitRun.id}`} />}
-              >
-                <MessageSquareIcon data-icon="inline-start" />
-                Open Init Chat
-              </Button>
-            ) : canWrite ? (
-              <Button
-                size="sm"
-                disabled={dispatchBusy !== null}
-                onClick={() => void handleRunProjectInit()}
-              >
-                {dispatchBusy === "run_init" ? (
-                  <Spinner data-icon="inline-start" />
-                ) : (
-                  <MessageSquareIcon data-icon="inline-start" />
-                )}
-                Run Factory Init
-              </Button>
-            ) : null}
-          </div>
-        </div>
-      )}
-
       {/* Main Stacked-Card Tabs (Aceternity UI) */}
       <div className="relative flex min-h-0 min-w-0 flex-1 flex-col [perspective:1000px]">
         <AceternityTabs
@@ -651,7 +528,6 @@ export function ProjectWorkspace({
                 content: (
                   <ProjectTabCard>
                     <ProjectDashboard
-                      engine={project.engine}
                       board={board}
                       onOpenKanban={() => setActiveTab("issues")}
                     />
@@ -667,15 +543,10 @@ export function ProjectWorkspace({
                       project={{
                         id: project.id,
                         name: project.name,
-                        slug: project.slug,
-                        engine: project.engine,
-                        defaultBranch: project.defaultBranch,
-                        localPath: project.localPath,
+                        githubFullName,
                       }}
                       canWrite={canWrite}
                       board={board}
-                      dispatchBusy={dispatchBusy}
-                      onDispatchPolicy={handleDispatchPolicy}
                       onRefresh={refreshBoard}
                     />
                   </ProjectTabCard>
@@ -717,6 +588,33 @@ export function ProjectWorkspace({
         />
       </div>
 
+      <Dialog open={repoOpen} onOpenChange={setRepoOpen}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>GitHub repository</DialogTitle>
+            <DialogDescription>
+              The repository new-ba publishes epics to and new-factory builds them in, as{" "}
+              <code className="font-mono">owner/name</code>.
+            </DialogDescription>
+          </DialogHeader>
+          <Input
+            value={repoDraft}
+            onChange={(e) => setRepoDraft(e.target.value)}
+            placeholder="owner/name"
+            className="font-mono text-xs"
+          />
+          <DialogFooter>
+            <Button variant="outline" size="sm" onClick={() => setRepoOpen(false)} disabled={savingRepo}>
+              Cancel
+            </Button>
+            <Button size="sm" onClick={() => void handleSaveRepo()} disabled={savingRepo}>
+              {savingRepo && <Spinner data-icon="inline-start" />}
+              Save
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
       {/* Delete Project Confirmation */}
       <AlertDialog open={deleteOpen} onOpenChange={setDeleteOpen}>
         <AlertDialogContent>
@@ -757,7 +655,7 @@ export function ProjectWorkspace({
                 <UsersIcon className="size-4.5" />
               </span>
               <div className="flex min-w-0 flex-col gap-1">
-                <DialogTitle className="text-base font-semibold tracking-tight">
+                <DialogTitle className="text-lg font-semibold tracking-tight">
                   Team · {project.name}
                 </DialogTitle>
                 <DialogDescription className="text-xs leading-relaxed">
@@ -774,7 +672,6 @@ export function ProjectWorkspace({
                 {
                   id: project.id,
                   name: project.name,
-                  engine: project.engine,
                   isOwner: myRole === "owner",
                   ownerLogin,
                   memberCount,

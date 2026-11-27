@@ -69,15 +69,13 @@ function scaffoldFactoryContext(
     name: string;
     slug: string;
     description: string | null;
-    engine: "antigravity" | "claude";
+    engine: "claude";
     defaultBranch: string;
     botGithubUsername: string | null;
     isNewRepo: boolean;
   },
 ): string[] {
-  // Do NOT pre-create placeholder `.factory/project.json` or `.factory/init.json` stubs:
-  // `/factory init` (Stage 1) owns `.factory/`, `CODING_STANDARDS.md`, and stack skills so
-  // `init-status.mjs` accurately reports `none` until interactive setup completes.
+  // Do NOT pre-create placeholder `.factory/` files: new-ba and new-factory own `.factory/`.
   const written: string[] = [];
   if (input.isNewRepo) {
     writeIfMissing(
@@ -134,7 +132,7 @@ export type ProvisionInput = {
   mode: "new" | "github";
   name?: string;
   description?: string | null;
-  engine: "antigravity" | "claude";
+  engine: "claude";
   localPath?: string | null;
   githubRepoId?: number;
   createGitHubRepo?: boolean;

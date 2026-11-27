@@ -1,21 +1,16 @@
 import { type NextRequest, NextResponse } from "next/server";
-import { dispatchReadyIssuesForProject } from "@/lib/auto-dispatch";
+import {
+  normalizeCriteria,
+  normalizeDependsOn,
+  normalizeIssueStatus,
+  normalizePriority,
+  normalizeSize,
+} from "@/lib/epics";
 import { emitFactoryEvent } from "@/lib/events";
-import { isFactoryInitIssue } from "@/lib/init-issue";
 import { prisma } from "@/lib/prisma";
 import { serializeProjectIssue } from "@/lib/project-stats";
 import { getCurrentSession } from "@/lib/session";
 import { getProjectAccess } from "@/lib/team-access";
-import {
-  defaultModelPlanForTier,
-  normalizeAutonomy,
-  normalizeComplexity,
-  normalizeCriteria,
-  normalizeDependsOn,
-  normalizePriority,
-  normalizeStatus,
-  normalizeTier,
-} from "@/lib/triage";
 
 function str(v: unknown): string {
   return typeof v === "string" ? v.trim() : "";
@@ -78,22 +73,12 @@ export async function PATCH(
   if (body.priority !== undefined) {
     data.priority = normalizePriority(body.priority);
   }
-  if (body.complexity !== undefined) {
-    data.complexity = normalizeComplexity(body.complexity, 3);
-  }
-  if (body.tier !== undefined) {
-    const t = normalizeTier(body.tier);
-    if (t) {
-      data.tier = t;
-      data.modelPlanJson = JSON.stringify(defaultModelPlanForTier(t, project.engine || "antigravity"));
-    }
-  }
-  if (body.autonomy !== undefined) {
-    const a = normalizeAutonomy(body.autonomy);
-    if (a) data.autonomy = a;
+  if (body.complexity !== undefined || body.size !== undefined) {
+    const size = normalizeSize(body.complexity ?? body.size);
+    if (size) data.complexity = size;
   }
   if (body.status !== undefined) {
-    const s = normalizeStatus(body.status);
+    const s = normalizeIssueStatus(body.status);
     if (!s) {
       return NextResponse.json({ error: "Invalid issue status" }, { status: 400 });
     }
@@ -108,84 +93,12 @@ export async function PATCH(
   if (body.thinking !== undefined) {
     data.thinking = str(body.thinking) || null;
   }
-  if (body.missionId !== undefined) {
-    const mid = str(body.missionId);
-    if (!mid || mid === "none") {
-      data.missionId = null;
-    } else {
-      const m = await prisma.mission.findFirst({
-        where: { id: mid, projectId: project.id },
-        select: { id: true },
-      });
-      if (m) data.missionId = m.id;
-    }
-  }
-
   const updated = await prisma.projectIssue.update({
     where: { id: existing.id },
     data,
   });
 
-  // Legacy `I0` support + closing active Clarify sessions once a ticket is approved to Ready.
-  if (isFactoryInitIssue(existing) && updated.status === "passed") {
-    await Promise.all([
-      prisma.project
-        .update({
-          where: { id: project.id },
-          data: { initStatus: "complete" },
-        })
-        .catch(() => {}),
-      prisma.factoryRun
-        .updateMany({
-          where: {
-            projectId: project.id,
-            issueId: existing.id,
-            mode: "init",
-            status: { in: ["running", "queued", "awaiting_input"] },
-          },
-          data: {
-            status: "passed",
-            finishedAt: new Date(),
-          },
-        })
-        .catch(() => {}),
-    ]);
-    emitFactoryEvent({
-      type: "project:updated",
-      userId: session.user.id,
-      projectId: project.id,
-      payload: { initStatus: "complete" },
-    });
-  } else if (updated.status === "ready") {
-    // Moving a ticket to `ready` finalizes any interactive `/factory clarify` chat for it.
-    await prisma.factoryRun
-      .updateMany({
-        where: {
-          projectId: project.id,
-          issueId: existing.id,
-          mode: "clarify",
-          status: { in: ["running", "queued", "awaiting_input"] },
-        },
-        data: {
-          status: "passed",
-          finishedAt: new Date(),
-        },
-      })
-      .catch(() => {});
-  }
-
   emitFactoryEvent({ type: "issue:updated", userId: session.user.id, projectId: project.id });
-
-  if (
-    project.autoDispatch &&
-    (updated.status === "ready" || updated.status === "passed")
-  ) {
-    await dispatchReadyIssuesForProject({
-      projectId: project.id,
-      actorUserId: session.user.id,
-      actorGithubLogin: session.user.githubLogin,
-    }).catch(() => {});
-  }
 
   return NextResponse.json({ issue: serializeProjectIssue(updated) });
 }

@@ -53,7 +53,7 @@ export default function LoginPage() {
             <FactoryWordmark className="text-[24px]" />
           </div>
           <CardDescription>
-            Agent-native control plane for Antigravity &amp; Claude Code pipelines.
+            Control plane for factory v2 on Claude Code: write epics with the BA, build them into staging.
           </CardDescription>
         </CardHeader>
         <CardContent className="flex flex-col gap-3">

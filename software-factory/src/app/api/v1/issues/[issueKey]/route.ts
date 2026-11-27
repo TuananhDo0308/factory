@@ -1,15 +1,9 @@
 import { type NextRequest, NextResponse } from "next/server";
 import { authenticateBearer, resolveUserProject } from "@/lib/api-auth";
+import { normalizeIssueStatus, normalizePriority } from "@/lib/epics";
 import { emitFactoryEvent } from "@/lib/events";
 import { prisma } from "@/lib/prisma";
 import { serializeProjectIssue } from "@/lib/project-stats";
-import {
-  defaultModelPlanForTier,
-  normalizeAutonomy,
-  normalizePriority,
-  normalizeStatus,
-  normalizeTier,
-} from "@/lib/triage";
 
 function str(v: unknown): string {
   return typeof v === "string" ? v.trim() : "";
@@ -55,7 +49,7 @@ export async function PATCH(
 
   const data: Record<string, unknown> = {};
   if (body.status !== undefined) {
-    const s = normalizeStatus(body.status);
+    const s = normalizeIssueStatus(body.status);
     if (!s) return NextResponse.json({ error: "Invalid status" }, { status: 400 });
     data.status = s;
   }
@@ -71,18 +65,6 @@ export async function PATCH(
   if (body.priority !== undefined) {
     data.priority = normalizePriority(body.priority);
   }
-  if (body.tier !== undefined) {
-    const t = normalizeTier(body.tier);
-    if (t) {
-      data.tier = t;
-      data.modelPlanJson = JSON.stringify(defaultModelPlanForTier(t, project.engine || "antigravity"));
-    }
-  }
-  if (body.autonomy !== undefined) {
-    const a = normalizeAutonomy(body.autonomy);
-    if (a) data.autonomy = a;
-  }
-
   const updated = await prisma.projectIssue.update({
     where: { id: existing.id },
     data,

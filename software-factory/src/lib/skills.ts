@@ -1,112 +1,37 @@
+// The only skill a person starts from a session is factory v2's `/new-ba`.
+// Epic runs (new-factory) start from the Kanban board, not from a prompt.
+
 export type SessionSkillOption = {
   id: string;
   slash: string;
   aliases: string[];
-  mode: "ba" | "factory" | "clarify" | "init" | "ui-refine" | "pr-judge" | "normal";
+  mode: "ba";
   label: string;
   description: string;
-  defaultWorktree: boolean;
 };
 
-export const SESSION_SKILLS: SessionSkillOption[] = [
-  {
-    id: "ba-ticket",
-    slash: "/ba-ticket",
-    aliases: ["/ba-ticket", "/ba"],
-    mode: "ba",
-    label: "BA & Prototype",
-    description: "Clarify scope, generate clickable HTML prototype & 1-PR tickets (C1..Cn)",
-    defaultWorktree: false,
-  },
-  {
-    id: "factory",
-    slash: "/factory",
-    aliases: ["/factory"],
-    mode: "factory",
-    label: "Factory Build",
-    description: "Run Spec → Build (TDD + QA) → Check → Review & QC",
-    defaultWorktree: true,
-  },
-  {
-    id: "factory-clarify",
-    slash: "/factory clarify",
-    aliases: ["/factory clarify", "/factory-clarify", "/clarify"],
-    mode: "clarify",
-    label: "Clarify Spec",
-    description: "Grill requirements, generate mockups & ready plan",
-    defaultWorktree: false,
-  },
-  {
-    id: "factory-init",
-    slash: "/factory init",
-    aliases: ["/factory init", "/factory-init", "/init"],
-    mode: "init",
-    label: "Factory Init",
-    description: "Set up .factory/ profile, stack skills & standards",
-    defaultWorktree: false,
-  },
-  {
-    id: "dev-subissues",
-    slash: "/dev-subissues",
-    aliases: ["/dev-subissues", "/subissues"],
-    mode: "normal",
-    label: "Dev Sub-issues",
-    description: "Technical breakdown into sub-issues before build",
-    defaultWorktree: false,
-  },
-  {
-    id: "ui-refine-loop",
-    slash: "/ui-refine-loop",
-    aliases: ["/ui-refine-loop", "/ui-refine", "/refine"],
-    mode: "ui-refine",
-    label: "UI Refine Loop",
-    description: "Bounded visual polish check → fix loop",
-    defaultWorktree: true,
-  },
-  {
-    id: "pr-judge",
-    slash: "/pr-judge",
-    aliases: ["/pr-judge", "/judge"],
-    mode: "pr-judge",
-    label: "PR Judge",
-    description: "Independent multi-judge pull request scorecard",
-    defaultWorktree: false,
-  },
-  {
-    id: "normal",
-    slash: "",
-    aliases: [],
-    mode: "normal",
-    label: "Normal Session",
-    description: "Freeform chat without a skill slash command",
-    defaultWorktree: false,
-  },
-];
+export const BA_SKILL: SessionSkillOption = {
+  id: "new-ba",
+  slash: "/new-ba",
+  aliases: ["/new-ba", "/ba"],
+  mode: "ba",
+  label: "BA & Prototype",
+  description: "Turn a request into an epic of ready tickets (C1..Cn) and a prototype",
+};
 
-// Longest aliases first so `/factory clarify` and `/factory init` always match before `/factory`.
-const SORTED_ALIAS_ENTRIES: Array<{ alias: string; skill: SessionSkillOption }> = SESSION_SKILLS.flatMap(
-  (skill) => skill.aliases.map((alias) => ({ alias: alias.toLowerCase(), skill })),
-).sort((a, b) => b.alias.length - a.alias.length);
+export const SESSION_SKILLS: SessionSkillOption[] = [BA_SKILL];
 
 export function findSkillByIdOrMode(raw?: string | null): SessionSkillOption | null {
-  const key = (raw || "").trim().toLowerCase();
-  if (!key) return null;
-  const cleaned = key.replace(/^\/+/, "");
+  const cleaned = (raw || "").trim().toLowerCase().replace(/^\/+/, "");
+  if (!cleaned) return null;
   return (
     SESSION_SKILLS.find(
-      (s) =>
-        s.id === cleaned ||
-        s.mode === cleaned ||
-        s.slash.toLowerCase() === `/${cleaned}` ||
-        s.aliases.some((a) => a.toLowerCase() === `/${cleaned}`),
+      (s) => s.id === cleaned || s.mode === cleaned || s.aliases.some((a) => a === `/${cleaned}`),
     ) ?? null
   );
 }
 
-/**
- * Detects a leading `/skill` slash command at the start of a prompt.
- * Matches only on a token boundary (followed by whitespace or end-of-string).
- */
+/** Detects a leading `/new-ba` (or `/ba`) on a token boundary. */
 export function detectSkillFromPrompt(prompt: string): {
   skill: SessionSkillOption;
   matchedPrefix: string;
@@ -115,8 +40,10 @@ export function detectSkillFromPrompt(prompt: string): {
   const trimmedStart = prompt.trimStart();
   if (!trimmedStart.startsWith("/")) return null;
   const lower = trimmedStart.toLowerCase();
-
-  for (const entry of SORTED_ALIAS_ENTRIES) {
+  const aliases = SESSION_SKILLS.flatMap((skill) => skill.aliases.map((alias) => ({ alias, skill }))).sort(
+    (a, b) => b.alias.length - a.alias.length,
+  );
+  for (const entry of aliases) {
     if (!lower.startsWith(entry.alias)) continue;
     const nextChar = trimmedStart[entry.alias.length];
     if (nextChar !== undefined && !/\s/.test(nextChar)) continue;
@@ -127,51 +54,9 @@ export function detectSkillFromPrompt(prompt: string): {
   return null;
 }
 
-/**
- * Replaces or inserts the chosen skill's `/slash` prefix at the start of the prompt,
- * preserving whatever task description the user already typed.
- */
-export function applySkillPrefixToPrompt(prompt: string, target: SessionSkillOption): string {
+/** Makes sure a BA prompt starts with `/new-ba `, keeping what the user typed. */
+export function toBaPrompt(prompt: string): string {
   const detected = detectSkillFromPrompt(prompt);
-  let body = detected ? detected.body : prompt.trimStart();
-  // If user was mid-typing an incomplete slash command (e.g. "/ba"), clear that partial token
-  if (!detected && /^\/[^\s]*$/.test(body)) {
-    body = "";
-  }
-  if (!target.slash) {
-    return body;
-  }
-  return body ? `${target.slash} ${body}` : `${target.slash} `;
-}
-
-/**
- * Returns slash-command autocomplete suggestions while typing `/` at the beginning of the prompt.
- */
-export function getSlashSuggestions(prompt: string): SessionSkillOption[] {
-  const trimmedStart = prompt.trimStart();
-  if (!trimmedStart.startsWith("/") || trimmedStart.includes("\n")) return [];
-
-  // Hide autocomplete once a complete skill command already has prompt text after a space
-  // (except `/factory ` where user might still want `/factory clarify` or `/factory init`).
-  const lower = trimmedStart.toLowerCase();
-  const isFactorySpace = lower === "/factory " || lower.startsWith("/factory c") || lower.startsWith("/factory i");
-  const detected = detectSkillFromPrompt(trimmedStart);
-  if (detected && !isFactorySpace) {
-    const afterAlias = trimmedStart.slice(detected.matchedPrefix.length);
-    if (/\s/.test(afterAlias)) {
-      return [];
-    }
-  }
-
-  const query = lower.trim();
-  const slashSkills = SESSION_SKILLS.filter((s) => Boolean(s.slash));
-  if (query === "/") return slashSkills;
-
-  return slashSkills.filter(
-    (s) =>
-      s.slash.toLowerCase().includes(query) ||
-      s.aliases.some((a) => a.toLowerCase().startsWith(query)) ||
-      s.id.toLowerCase().includes(query.slice(1)) ||
-      s.label.toLowerCase().includes(query.slice(1)),
-  );
+  const body = (detected ? detected.body : prompt.trimStart()).trim();
+  return body ? `${BA_SKILL.slash} ${body}` : BA_SKILL.slash;
 }

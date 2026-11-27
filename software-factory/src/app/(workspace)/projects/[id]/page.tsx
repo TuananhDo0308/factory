@@ -29,10 +29,6 @@ export default async function ProjectDetailPage({
       include: {
         user: { select: { githubLogin: true } },
         _count: { select: { members: true } },
-        missions: {
-          orderBy: { updatedAt: "desc" },
-          include: { issues: { select: { status: true } } },
-        },
       },
     }),
     getProjectBoardSnapshot({
@@ -60,15 +56,12 @@ export default async function ProjectDetailPage({
         name: project.name,
         slug: project.slug,
         description: project.description,
-        engine: project.engine,
         source: project.source,
         localPath: project.localPath,
         githubFullName: project.githubFullName,
         githubUrl: project.githubUrl,
         defaultBranch: project.defaultBranch || "main",
         defaultRunnerId: project.defaultRunnerId ?? null,
-        initStatus: board.initStatus,
-        readinessScore: project.readinessScore,
       }}
       runners={accessibleRunners.map((r) => ({
         id: r.id,
@@ -85,17 +78,6 @@ export default async function ProjectDetailPage({
       ownerLogin={project.user?.githubLogin ?? "local"}
       memberCount={project._count.members + 1}
       initialBoard={board}
-      missions={project.missions.map((m) => ({
-        id: m.id,
-        title: m.title,
-        goal: m.goal,
-        status: m.status,
-        autonomy: m.autonomy,
-        validationContractMd: m.validationContractMd,
-        issueCount: m.issues.length,
-        passedCount: m.issues.filter((i) => i.status === "passed").length,
-        updatedAt: m.updatedAt.toISOString(),
-      }))}
       contextLake={contextLake}
       defaultTab={sp.tab || "dashboard"}
     />

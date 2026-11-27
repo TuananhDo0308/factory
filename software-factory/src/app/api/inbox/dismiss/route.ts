@@ -4,8 +4,8 @@ import { emitFactoryEvent } from "@/lib/events";
 import { prisma } from "@/lib/prisma";
 import { accessibleProjectsWhere } from "@/lib/team-access";
 
-type DismissKind = "interaction" | "run" | "issue" | "pr" | "lesson";
-type DismissScope = "all" | "questions" | "runs" | "issues" | "prs" | "lessons";
+type DismissKind = "interaction" | "run" | "issue";
+type DismissScope = "all" | "questions" | "runs" | "issues";
 
 export async function POST(request: NextRequest) {
   const auth = await authenticateRequest(request);
@@ -56,27 +56,8 @@ export async function POST(request: NextRequest) {
 
     if (scope === "all" || scope === "issues") {
       const r = await prisma.projectIssue.updateMany({
-        where: { status: "needs_human", project: projectFilter },
-        data: { status: "backlog" },
-      });
-      dismissedCount += r.count;
-    }
-
-    if (scope === "all" || scope === "prs") {
-      const r = await prisma.pullRequest.updateMany({
-        where: { state: "open", mergeDecision: "person", project: projectFilter },
-        data: { mergeDecision: "dismissed" },
-      });
-      dismissedCount += r.count;
-    }
-
-    if (scope === "all" || scope === "lessons") {
-      const r = await prisma.lesson.updateMany({
-        where: {
-          OR: [{ userId: auth.user.id }, { project: projectFilter }],
-          status: "proposed",
-        },
-        data: { status: "rejected" },
+        where: { status: "needs_human", project: projectFilter, tier: { not: "epic" } },
+        data: { status: "blocked" },
       });
       dismissedCount += r.count;
     }
@@ -105,27 +86,7 @@ export async function POST(request: NextRequest) {
       case "issue": {
         const r = await prisma.projectIssue.updateMany({
           where: { id: body.id, status: "needs_human", project: projectFilter },
-          data: { status: "backlog" },
-        });
-        dismissedCount = r.count;
-        break;
-      }
-      case "pr": {
-        const r = await prisma.pullRequest.updateMany({
-          where: { id: body.id, state: "open", mergeDecision: "person", project: projectFilter },
-          data: { mergeDecision: "dismissed" },
-        });
-        dismissedCount = r.count;
-        break;
-      }
-      case "lesson": {
-        const r = await prisma.lesson.updateMany({
-          where: {
-            id: body.id,
-            OR: [{ userId: auth.user.id }, { project: projectFilter }],
-            status: "proposed",
-          },
-          data: { status: "rejected" },
+          data: { status: "blocked" },
         });
         dismissedCount = r.count;
         break;

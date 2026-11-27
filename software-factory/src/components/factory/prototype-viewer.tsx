@@ -366,22 +366,22 @@ export function PrototypeStudio({
           <span className="truncate text-xs font-semibold text-foreground">
             {prototype.title}
           </span>
-          <Badge variant="outline" className="shrink-0 text-[10px]">
+          <Badge variant="outline" className="shrink-0 text-2xs">
             {kindLabel(prototype.kind)}
           </Badge>
           {prototype.version ? (
-            <span className="shrink-0 font-mono text-[10px] text-muted-foreground">
+            <span className="shrink-0 font-mono text-2xs text-muted-foreground">
               v{prototype.version}
             </span>
           ) : null}
           {localStatus === "approved" && (
-            <Badge variant="secondary" className="shrink-0 gap-1 text-[10px] text-emerald-700 dark:text-emerald-400">
+            <Badge variant="secondary" className="shrink-0 gap-1 text-2xs text-emerald-700 dark:text-emerald-400">
               <CheckCircle2Icon className="size-3" />
               Approved
             </Badge>
           )}
           {prototype.issueKeys.map((k) => (
-            <Badge key={k} variant="outline" className="shrink-0 font-mono text-[10px]">
+            <Badge key={k} variant="outline" className="shrink-0 font-mono text-2xs">
               {k}
             </Badge>
           ))}
@@ -407,7 +407,7 @@ export function PrototypeStudio({
                   variant={viewport === vp.id ? "secondary" : "ghost"}
                   title={`Viewport: ${vp.label}`}
                   onClick={() => setViewport(vp.id)}
-                  className="h-6 px-1.5 text-[11px]"
+                  className="h-6 px-1.5 text-xs"
                 >
                   <Icon className="size-3" />
                   {!compact && <span className="ml-1 hidden sm:inline">{vp.label}</span>}
@@ -490,7 +490,7 @@ export function PrototypeStudio({
       {screens.length > 0 && (
         <div className="flex shrink-0 flex-col gap-1.5 border-b bg-muted/25 px-3 py-2">
           <div className="flex flex-wrap items-center gap-1.5">
-            <span className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
+            <span className="font-mono text-2xs uppercase tracking-wider text-muted-foreground">
               States ({screens.length}):
             </span>
             {screens.map((sc) => {
@@ -501,16 +501,16 @@ export function PrototypeStudio({
                   type="button"
                   onClick={() => setActiveScreenId(sc.id)}
                   className={cn(
-                    "inline-flex items-center gap-1 rounded-md border px-2 py-0.5 text-[11px] transition-colors",
+                    "inline-flex items-center gap-1 rounded-md border px-2 py-0.5 text-xs transition-colors",
                     active
                       ? "border-primary/50 bg-primary/10 font-medium text-foreground"
                       : "border-border/70 bg-card text-muted-foreground hover:border-foreground/25 hover:text-foreground",
                   )}
                 >
-                  <span className="font-mono text-[10px] text-primary">#{sc.id}</span>
+                  <span className="font-mono text-2xs text-primary">#{sc.id}</span>
                   <span>{sc.title}</span>
                   {sc.criteria.length > 0 && (
-                    <span className="rounded bg-muted px-1 font-mono text-[9.5px] text-muted-foreground">
+                    <span className="rounded bg-muted px-1 font-mono text-2xs text-muted-foreground">
                       {sc.criteria.join(",")}
                     </span>
                   )}
@@ -519,8 +519,8 @@ export function PrototypeStudio({
             })}
           </div>
           {activeScreen?.shows && (
-            <div className="flex items-center gap-2 text-[11px] text-muted-foreground">
-              <span className="font-mono text-[10px] text-foreground/80">
+            <div className="flex items-center gap-2 text-xs text-muted-foreground">
+              <span className="font-mono text-2xs text-foreground/80">
                 #{activeScreen.id}:
               </span>
               <span className="truncate">{activeScreen.shows}</span>
@@ -536,8 +536,8 @@ export function PrototypeStudio({
 
       {/* Not-shown criteria note */}
       {prototype.notShown.length > 0 && (
-        <div className="flex shrink-0 flex-wrap items-center gap-x-3 gap-y-1 border-t bg-muted/20 px-3 py-1.5 text-[11px] text-muted-foreground">
-          <span className="font-mono text-[10px] uppercase tracking-wider">Not drawn:</span>
+        <div className="flex shrink-0 flex-wrap items-center gap-x-3 gap-y-1 border-t bg-muted/20 px-3 py-1.5 text-xs text-muted-foreground">
+          <span className="font-mono text-2xs uppercase tracking-wider">Not drawn:</span>
           {prototype.notShown.map((ns) => (
             <span key={ns.criterion}>
               <strong className="font-mono text-foreground/85">{ns.criterion}</strong> ({ns.why})
@@ -552,7 +552,7 @@ export function PrototypeStudio({
           <div className="flex flex-wrap items-center justify-between gap-2">
             {/* Binding Switch: Flow vs Look + Flow */}
             <div className="flex items-center gap-1.5">
-              <span className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
+              <span className="font-mono text-2xs uppercase tracking-wider text-muted-foreground">
                 Binding:
               </span>
               <div className="flex items-center rounded-md border bg-muted/40 p-0.5">
@@ -562,7 +562,7 @@ export function PrototypeStudio({
                   variant={localBinding === "flow" ? "secondary" : "ghost"}
                   disabled={!canWrite || !prototype.id || busyAction !== null}
                   onClick={() => void patchPrototype({ binding: "flow" })}
-                  className="h-6 px-2 text-[11px]"
+                  className="h-6 px-2 text-xs"
                   title="Factory builds matching elements, order, copy & states using product styling"
                 >
                   <WorkflowIcon className="mr-1 size-3" />
@@ -574,7 +574,7 @@ export function PrototypeStudio({
                   variant={localBinding === "look" ? "secondary" : "ghost"}
                   disabled={!canWrite || !prototype.id || busyAction !== null}
                   onClick={() => void patchPrototype({ binding: "look" })}
-                  className="h-6 px-2 text-[11px]"
+                  className="h-6 px-2 text-xs"
                   title="Factory must match exact layout, colours, typography, copy & states"
                 >
                   <PaletteIcon className="mr-1 size-3" />
@@ -732,7 +732,7 @@ export function PrototypeStudio({
                         : "border-border bg-card text-muted-foreground hover:text-foreground",
                     )}
                   >
-                    <span className="font-mono text-[11px] text-primary">#{sc.id}</span>
+                    <span className="font-mono text-xs text-primary">#{sc.id}</span>
                     <span>{sc.title}</span>
                   </button>
                 ))}
@@ -791,14 +791,14 @@ export function PrototypeChatCard({
         <div className="flex min-w-0 items-center gap-2">
           <SparklesIcon className="size-3.5 shrink-0 text-primary" />
           <span className="truncate text-xs font-semibold text-foreground">{vm.title}</span>
-          <Badge variant="outline" className="text-[10px]">
+          <Badge variant="outline" className="text-2xs">
             {kindLabel(vm.kind)}
           </Badge>
-          <Badge variant="secondary" className="text-[10px]">
+          <Badge variant="secondary" className="text-2xs">
             {vm.binding === "look" ? "Look + Flow" : "Flow"}
           </Badge>
           {vm.status === "approved" && (
-            <Badge variant="secondary" className="text-[10px] text-emerald-700 dark:text-emerald-400">
+            <Badge variant="secondary" className="text-2xs text-emerald-700 dark:text-emerald-400">
               Approved
             </Badge>
           )}
@@ -821,7 +821,7 @@ export function PrototypeChatCard({
             <>
               <span>Tickets:</span>
               {vm.issueKeys.map((k) => (
-                <Badge key={k} variant="outline" className="font-mono text-[10px]">
+                <Badge key={k} variant="outline" className="font-mono text-2xs">
                   {k}
                 </Badge>
               ))}
@@ -832,7 +832,7 @@ export function PrototypeChatCard({
           {vm.localPath && (
             <>
               <span>·</span>
-              <code className="truncate font-mono text-[11px]">{vm.localPath}</code>
+              <code className="truncate font-mono text-xs">{vm.localPath}</code>
             </>
           )}
         </div>
@@ -845,12 +845,12 @@ export function PrototypeChatCard({
                 type="button"
                 disabled={!hasHtml}
                 onClick={() => hasHtml && onOpen(vm)}
-                className="inline-flex items-center gap-1 rounded-md border bg-muted/35 px-2 py-0.5 text-[11px] text-foreground/90 transition-colors hover:border-primary/40 hover:bg-primary/5 disabled:opacity-50"
+                className="inline-flex items-center gap-1 rounded-md border bg-muted/35 px-2 py-0.5 text-xs text-foreground/90 transition-colors hover:border-primary/40 hover:bg-primary/5 disabled:opacity-50"
               >
-                <span className="font-mono text-[10px] text-primary">#{sc.id}</span>
+                <span className="font-mono text-2xs text-primary">#{sc.id}</span>
                 <span>{sc.title}</span>
                 {sc.criteria.length > 0 && (
-                  <span className="font-mono text-[10px] text-muted-foreground">
+                  <span className="font-mono text-2xs text-muted-foreground">
                     ({sc.criteria.join(",")})
                   </span>
                 )}
@@ -888,7 +888,7 @@ export function ProjectPrototypesWorkspace({
   const [importing, setImporting] = React.useState(false);
 
   const selected = prototypes.find((p) => p.id === selectedId) ?? prototypes[0] ?? null;
-  const baHref = `/sessions?project=${encodeURIComponent(projectId)}&skill=ba-ticket`;
+  const baHref = `/sessions?project=${encodeURIComponent(projectId)}`;
 
   async function handleFileUpload(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
@@ -948,7 +948,7 @@ export function ProjectPrototypesWorkspace({
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div className="flex items-center gap-2 text-xs text-muted-foreground">
           <span>
-            Clickable HTML prototypes produced during <code className="font-mono">/ba-ticket</code>{" "}
+            Clickable HTML prototypes produced during <code className="font-mono">/new-ba</code>{" "}
             or imported by your team. Approved prototypes guide every{" "}
             <code className="font-mono">/factory</code> UI build &amp; QC run.
           </span>
@@ -975,7 +975,7 @@ export function ProjectPrototypesWorkspace({
             </EmptyMedia>
             <EmptyTitle>No interactive prototypes yet</EmptyTitle>
             <EmptyDescription>
-              Start a <code className="font-mono">/ba-ticket</code> session to design clickable
+              Start a <code className="font-mono">/new-ba</code> session to design clickable
               multi-state HTML prototypes (first screen, per-ticket states, and whole-flow demos)
               before Factory writes any code — or import your own HTML prototype.
             </EmptyDescription>
@@ -1018,22 +1018,22 @@ export function ProjectPrototypesWorkspace({
                     >
                       <div className="flex items-center justify-between gap-2">
                         <span className="truncate font-medium">{proto.title}</span>
-                        <span className="shrink-0 font-mono text-[10px] text-muted-foreground">
+                        <span className="shrink-0 font-mono text-2xs text-muted-foreground">
                           v{proto.version}
                         </span>
                       </div>
                       <div className="flex flex-wrap items-center gap-1">
-                        <Badge variant="outline" className="h-4 px-1.5 text-[10px]">
+                        <Badge variant="outline" className="h-4 px-1.5 text-2xs">
                           {kindLabel(proto.kind)}
                         </Badge>
-                        <Badge variant="secondary" className="h-4 px-1.5 text-[10px]">
+                        <Badge variant="secondary" className="h-4 px-1.5 text-2xs">
                           {proto.binding === "look" ? "Look" : "Flow"}
                         </Badge>
                         {proto.status === "approved" && (
                           <CheckCircle2Icon className="size-3 text-emerald-600 dark:text-emerald-400" />
                         )}
                       </div>
-                      <div className="flex items-center justify-between gap-2 font-mono text-[10px] text-muted-foreground">
+                      <div className="flex items-center justify-between gap-2 font-mono text-2xs text-muted-foreground">
                         <span className="truncate">
                           {proto.issueKeys.length > 0 ? proto.issueKeys.join(", ") : proto.slug}
                         </span>

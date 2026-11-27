@@ -7,16 +7,16 @@ import {
   ArrowLeftIcon,
   ArrowRightIcon,
   BarChart3Icon,
-  ChevronDownIcon,
+  ChevronLeftIcon,
   ChevronRightIcon,
   FolderIcon,
   InboxIcon,
   KeyRoundIcon,
+  LayoutDashboardIcon,
   LaptopIcon,
   PaletteIcon,
   PlugIcon,
   PlusIcon,
-  RefreshCwIcon,
   SettingsIcon,
   SunMoonIcon,
   TerminalIcon,
@@ -208,17 +208,13 @@ function reconcileSidebarRunNotifications(
 }
 
 const SKILL_TAG_LABELS: Record<string, string> = {
-  factory: "factory",
   ba: "ba",
-  clarify: "clarify",
-  "ui-refine": "ui",
-  "pr-judge": "judge",
-  init: "init",
+  epic: "epic",
 };
 
 function getSidebarSkillLabel(mode: string | null | undefined): string | null {
   const m = (mode || "").toLowerCase().trim();
-  if (!m || m === "normal") return null;
+  if (!m) return null;
   return SKILL_TAG_LABELS[m] ?? m;
 }
 
@@ -227,15 +223,10 @@ function compactAgentLabel(agent: {
   role: string;
   specId: string | null;
 }): string {
-  if (agent.role === "planner") return "Planner";
-  if (agent.role === "checker") return "Checker";
-  if (agent.role === "reviewer") return "Reviewer";
+  // Epic-run agents are named like "#12 implementer · build"; keep the ticket and the role.
+  const ticket = /#(\d+)/.exec(agent.name)?.[1];
+  if (ticket && agent.role) return `#${ticket} ${agent.role}`;
   if (agent.role === "qc") return "QC";
-  if (agent.specId) {
-    if (agent.role === "qa") return `${agent.specId} QA`;
-    if (agent.role === "implementer") return `${agent.specId} Impl`;
-    if (agent.role === "spec-reviewer") return `${agent.specId} Rev`;
-  }
   return agent.name.length > 22 ? `${agent.name.slice(0, 21)}…` : agent.name;
 }
 
@@ -356,8 +347,64 @@ function SidebarBrandHeader() {
   );
 }
 
-/** Collapsible Settings tree section inside the shared sidebar */
-function SettingsSidebarTree({
+type SidebarView =
+  | { kind: "root" }
+  | { kind: "project"; projectId: string }
+  | { kind: "settings" };
+
+type SidebarProject = SidebarData["projects"][number];
+type SidebarRun = SidebarProject["recentRuns"][number];
+
+/** The sidebar view that matches the current page, Vercel-style drill-in. */
+function deriveSidebarView(
+  pathname: string,
+  projects: SidebarProject[],
+  projectParam: string | null,
+): SidebarView {
+  if (pathname.startsWith("/settings")) return { kind: "settings" };
+  // "New Session" opened from inside a project keeps the sidebar in that project.
+  if (pathname === "/sessions" && projectParam && projects.some((p) => p.id === projectParam)) {
+    return { kind: "project", projectId: projectParam };
+  }
+  const projectMatch = pathname.match(/^\/projects\/([^/]+)/);
+  if (projectMatch && projects.some((p) => p.id === projectMatch[1])) {
+    return { kind: "project", projectId: projectMatch[1] };
+  }
+  const sessionMatch = pathname.match(/^\/sessions\/([^/]+)/);
+  if (sessionMatch) {
+    const owner = projects.find((p) => p.recentRuns.some((r) => r.id === sessionMatch[1]));
+    if (owner) return { kind: "project", projectId: owner.id };
+  }
+  return { kind: "root" };
+}
+
+/** Back arrow + centered title row at the top of a drilled-in sidebar view. */
+function SidebarViewHeader({ title, onBack }: { title: string; onBack: () => void }) {
+  return (
+    <SidebarGroup className="px-2.5 pt-1.5 pb-1 group-data-[collapsible=icon]:px-2">
+      <SidebarGroupContent>
+        <SidebarMenu>
+          <SidebarMenuItem>
+            <SidebarMenuButton
+              tooltip="Back"
+              onClick={onBack}
+              aria-label="Back"
+              className="relative h-9 gap-2.5 rounded-lg px-2.5 text-sm font-medium"
+            >
+              <ChevronLeftIcon className="size-4 shrink-0 text-sidebar-foreground/80" />
+              <span className="pointer-events-none absolute inset-x-9 truncate text-center group-data-[collapsible=icon]:hidden">
+                {title}
+              </span>
+            </SidebarMenuButton>
+          </SidebarMenuItem>
+        </SidebarMenu>
+      </SidebarGroupContent>
+    </SidebarGroup>
+  );
+}
+
+/** Settings tabs shown when the sidebar is drilled into Settings. */
+function SettingsSidebarNav({
   pathname,
   onlineRunnerCount,
   totalRunnerCount,
@@ -366,94 +413,152 @@ function SettingsSidebarTree({
   onlineRunnerCount: number;
   totalRunnerCount: number;
 }) {
-  const router = useRouter();
   const searchParams = useSearchParams();
-  const { state, setOpen } = useSidebar();
   const isOnSettings = pathname.startsWith("/settings");
   const activeSettingsTab = isOnSettings ? searchParams.get("tab") || "general" : null;
-  const [settingsToggle, setSettingsToggle] = React.useState<{
-    onSettings: boolean;
-    open: boolean;
-  } | null>(null);
-
-  const isSettingsOpen =
-    settingsToggle?.onSettings === isOnSettings ? settingsToggle.open : isOnSettings;
-
-  function handleSettingsHeaderClick() {
-    if (state === "collapsed") {
-      setOpen(true);
-      setSettingsToggle({ onSettings: isOnSettings, open: true });
-      if (!isOnSettings) router.push("/settings");
-      return;
-    }
-    setSettingsToggle({ onSettings: isOnSettings, open: !isSettingsOpen });
-  }
 
   return (
-    <SidebarGroup className="px-2.5 py-1 group-data-[collapsible=icon]:px-2">
-      <SidebarGroupContent>
-        <SidebarMenu>
-          <SidebarMenuItem>
+    <SidebarMenu className="gap-0.5">
+      {SETTINGS_SUB_ITEMS.map((item) => {
+        const Icon = item.icon;
+        const isActive = activeSettingsTab === item.id;
+        return (
+          <SidebarMenuItem key={item.id}>
             <SidebarMenuButton
-              tooltip="Settings"
-              onClick={handleSettingsHeaderClick}
-              aria-expanded={isSettingsOpen}
+              isActive={isActive}
+              tooltip={item.label}
+              className="h-9 gap-2.5 rounded-lg px-2.5 text-sm"
+              render={<Link href={`/settings?tab=${item.id}`} />}
+            >
+              <Icon className="size-4" />
+              <span>{item.label}</span>
+            </SidebarMenuButton>
+            {item.id === "runners" && totalRunnerCount > 0 && (
+              <SidebarMenuBadge className="top-2 right-2 font-mono text-2xs tabular-nums">
+                {onlineRunnerCount}/{totalRunnerCount}
+              </SidebarMenuBadge>
+            )}
+          </SidebarMenuItem>
+        );
+      })}
+    </SidebarMenu>
+  );
+}
+
+/** One project's sessions, with expandable subagents. */
+function ProjectRunList({
+  runs,
+  pathname,
+  unreadFinishedRuns,
+  markRunSeen,
+  expandedRunIds,
+  onToggleRun,
+}: {
+  runs: SidebarRun[];
+  pathname: string;
+  unreadFinishedRuns: Record<string, string>;
+  markRunSeen: (runId: string) => void;
+  expandedRunIds: Record<string, boolean>;
+  onToggleRun: (runId: string, open: boolean) => void;
+}) {
+  return (
+    <ul className="flex min-w-0 flex-col gap-0.5">
+      {runs.map((run) => {
+        const skillLabel = getSidebarSkillLabel(run.mode);
+        const subagents = run.agents ?? [];
+        const hasSubagents = subagents.length > 0;
+        const isCurrentRun = pathname === `/sessions/${run.id}`;
+        const isUnreadFinished = Boolean(unreadFinishedRuns[run.id]);
+        const indicatorKind = getSidebarIndicatorKind(run.status, isUnreadFinished);
+        const isExpanded = expandedRunIds[run.id] ?? (isCurrentRun && run.status === "running");
+
+        return (
+          <li key={run.id} className="min-w-0">
+            <Link
+              href={`/sessions/${run.id}`}
+              onClick={() => markRunSeen(run.id)}
+              aria-current={isCurrentRun ? "page" : undefined}
+              title={`${run.title} · ${run.status.replace("_", " ")}`}
               className={cn(
-                "h-9 justify-between gap-2.5 rounded-lg px-2.5 text-[13.5px] font-medium text-sidebar-foreground transition-colors hover:bg-sidebar-accent/70 hover:text-sidebar-accent-foreground",
-                isOnSettings && !isSettingsOpen && "bg-sidebar-accent text-sidebar-accent-foreground",
+                "flex h-8 min-w-0 items-center justify-between gap-2 rounded-lg px-2.5 text-sm transition-colors",
+                isCurrentRun
+                  ? "bg-sidebar-accent font-medium text-sidebar-accent-foreground ring-1 ring-sidebar-border/90"
+                  : "text-sidebar-foreground/85 hover:bg-sidebar-accent/60 hover:text-sidebar-accent-foreground",
               )}
             >
-              <span className="flex min-w-0 items-center gap-2.5">
-                <SettingsIcon className="size-4 shrink-0 text-sidebar-foreground/80" />
-                <span className="truncate group-data-[collapsible=icon]:hidden">Settings</span>
-              </span>
-              <ChevronDownIcon
-                className={cn(
-                  "size-3.5 shrink-0 text-muted-foreground transition-transform duration-200 ease-[cubic-bezier(0.22,1,0.36,1)] group-data-[collapsible=icon]:hidden",
-                  isSettingsOpen && "rotate-180",
+              <span className="flex min-w-0 flex-1 items-center gap-1.5 overflow-hidden">
+                {hasSubagents && (
+                  <span
+                    role="button"
+                    tabIndex={0}
+                    aria-expanded={isExpanded}
+                    aria-label={isExpanded ? "Hide subagents" : "Show subagents"}
+                    title={isExpanded ? "Hide subagents" : "Show subagents"}
+                    onClick={(e) => {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      onToggleRun(run.id, !isExpanded);
+                    }}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" || e.key === " ") {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        onToggleRun(run.id, !isExpanded);
+                      }
+                    }}
+                    className="-ml-1 flex size-4 shrink-0 items-center justify-center rounded-[4px] text-muted-foreground/75 transition-colors hover:bg-sidebar-border/60 hover:text-foreground"
+                  >
+                    <ChevronRightIcon
+                      className={cn(
+                        "size-3 transition-transform duration-200 ease-[cubic-bezier(0.22,1,0.36,1)]",
+                        isExpanded && "rotate-90",
+                      )}
+                    />
+                  </span>
                 )}
-              />
-            </SidebarMenuButton>
+                {skillLabel && (
+                  <span className="shrink-0 rounded-[3px] bg-muted px-1 py-px font-mono text-2xs leading-tight text-muted-foreground">
+                    {skillLabel}
+                  </span>
+                )}
+                <span className="min-w-0 flex-1 truncate">{run.title}</span>
+              </span>
 
-            <SmoothCollapse
-              open={isSettingsOpen}
-              className="group-data-[collapsible=icon]:hidden"
-            >
-              <ul className="mt-1 ml-[17px] flex flex-col gap-0.5 border-l border-sidebar-border/80 pl-3">
-                {SETTINGS_SUB_ITEMS.map((item) => {
-                  const Icon = item.icon;
-                  const isActive = isOnSettings && activeSettingsTab === item.id;
-                  return (
-                    <li key={item.id} className="min-w-0">
-                      <Link
-                        href={`/settings?tab=${item.id}`}
-                        aria-current={isActive ? "page" : undefined}
-                        className={cn(
-                          "flex h-8 w-full min-w-0 items-center justify-between gap-2 rounded-lg px-2.5 text-[13px] transition-colors",
-                          isActive
-                            ? "bg-sidebar-accent font-medium text-sidebar-accent-foreground"
-                            : "text-sidebar-foreground/85 hover:bg-sidebar-accent/60 hover:text-sidebar-accent-foreground",
-                        )}
-                      >
-                        <span className="flex min-w-0 items-center gap-2.5">
-                          <Icon className="size-3.5 shrink-0 opacity-80" aria-hidden="true" />
-                          <span className="truncate">{item.label}</span>
-                        </span>
-                        {item.id === "runners" && totalRunnerCount > 0 && (
-                          <span className="shrink-0 font-mono text-[10px] text-muted-foreground tabular-nums">
-                            {onlineRunnerCount}/{totalRunnerCount}
-                          </span>
-                        )}
-                      </Link>
-                    </li>
-                  );
-                })}
-              </ul>
-            </SmoothCollapse>
-          </SidebarMenuItem>
-        </SidebarMenu>
-      </SidebarGroupContent>
-    </SidebarGroup>
+              <div className="flex shrink-0 items-center justify-end">
+                {indicatorKind ? (
+                  <SidebarStatusIndicator status={run.status} unread={isUnreadFinished} />
+                ) : (
+                  <span
+                    suppressHydrationWarning
+                    className="pl-1 font-mono text-2xs text-muted-foreground/70 tabular-nums"
+                  >
+                    {formatRelativeTime(run.updatedAt)}
+                  </span>
+                )}
+              </div>
+            </Link>
+
+            {hasSubagents && (
+              <SmoothCollapse open={isExpanded}>
+                <div className="mt-0.5 ml-3 flex max-h-56 min-w-0 flex-col gap-0.5 overflow-x-hidden overflow-y-auto border-l border-sidebar-border/80 py-0.5 pl-2.5">
+                  {subagents.map((ag) => (
+                    <Link
+                      key={ag.id}
+                      href={`/sessions/${run.id}?agent=${encodeURIComponent(ag.id)}`}
+                      title={`${ag.name} · ${ag.status.replace("_", " ")}`}
+                      className="flex h-7 w-full min-w-0 items-center justify-between gap-2 rounded-md px-2 text-xs text-muted-foreground transition-colors hover:bg-sidebar-accent/60 hover:text-foreground"
+                    >
+                      <span className="min-w-0 flex-1 truncate">{compactAgentLabel(ag)}</span>
+                      <SidebarStatusIndicator status={ag.status} />
+                    </Link>
+                  ))}
+                </div>
+              </SmoothCollapse>
+            )}
+          </li>
+        );
+      })}
+    </ul>
   );
 }
 
@@ -465,6 +570,8 @@ export function AppShell({
   children: React.ReactNode;
 }) {
   const pathname = usePathname();
+  const searchParams = useSearchParams();
+  const projectParam = searchParams.get("project");
   const router = useRouter();
   const { resolvedTheme, setTheme } = useTheme();
   const [liveOverride, setLiveOverride] = React.useState<{
@@ -474,7 +581,8 @@ export function AppShell({
   const data = liveOverride?.base === initialData ? liveOverride.fresh : initialData;
   const [searchOpen, setSearchOpen] = React.useState(false);
   const [newProjectOpen, setNewProjectOpen] = React.useState(false);
-  const [expandedProjectIds, setExpandedProjectIds] = React.useState<Record<string, boolean>>({});
+  // Last page that showed the root sidebar view; "Back" navigates there.
+  const lastRootPathRef = React.useRef("/sessions");
   const [expandedRunIds, setExpandedRunIds] = React.useState<Record<string, boolean>>({});
   const unreadFinishedRuns = React.useSyncExternalStore(
     subscribeUnreadRuns,
@@ -492,6 +600,12 @@ export function AppShell({
   React.useEffect(() => {
     reconcileSidebarRunNotifications(data.projects, pathname);
   }, [data.projects, pathname]);
+
+  React.useEffect(() => {
+    if (deriveSidebarView(pathname, data.projects, projectParam).kind === "root") {
+      lastRootPathRef.current = pathname;
+    }
+  }, [data.projects, pathname, projectParam]);
 
   const refreshSidebar = React.useCallback(async () => {
     try {
@@ -545,294 +659,210 @@ export function AppShell({
   const onlineRunners = data.runners.filter((r) => r.status === "online");
   const setupCompleted = (data.projects.length > 0 ? 1 : 0) + (onlineRunners.length > 0 ? 1 : 0);
 
+  // The sidebar view always follows the URL (Vercel-style), so "Back" is a real navigation.
+  const view = deriveSidebarView(pathname, data.projects, projectParam);
+  const currentProject =
+    view.kind === "project" ? data.projects.find((p) => p.id === view.projectId) : undefined;
+  const goToRootView = () => router.push(lastRootPathRef.current);
+
   return (
     <SidebarProvider defaultOpen>
       <Sidebar collapsible="icon">
         <SidebarBrandHeader />
 
         <SidebarContent className="overflow-x-hidden">
-          {/* Primary Nav */}
-          <SidebarGroup className="px-2.5 py-1.5 group-data-[collapsible=icon]:px-2">
-            <SidebarGroupContent>
-              <SidebarMenu className="gap-0.5">
-                <SidebarMenuItem>
-                  <SidebarMenuButton
-                    isActive={pathname === "/sessions"}
-                    tooltip="New Session"
-                    className="h-9 gap-2.5 rounded-lg px-2.5 text-[13.5px]"
-                    render={<Link href="/sessions" />}
-                  >
-                    <PlusIcon className="size-4" />
-                    <span>New Session</span>
-                  </SidebarMenuButton>
-                </SidebarMenuItem>
+          <div
+            key={view.kind === "project" ? `project:${view.projectId}` : view.kind}
+            className={cn(
+              "flex min-w-0 flex-col duration-200 ease-[cubic-bezier(0.22,1,0.36,1)] animate-in fade-in motion-reduce:animate-none",
+              view.kind === "root" ? "slide-in-from-left-3" : "slide-in-from-right-3",
+            )}
+          >
+            {view.kind === "root" && (
+              <>
+                {/* Primary Nav */}
+                <SidebarGroup className="px-2.5 py-1.5 group-data-[collapsible=icon]:px-2">
+                  <SidebarGroupContent>
+                    <SidebarMenu className="gap-0.5">
+                      <SidebarMenuItem>
+                        <SidebarMenuButton
+                          isActive={pathname === "/sessions"}
+                          tooltip="New Session"
+                          className="h-9 gap-2.5 rounded-lg px-2.5 text-sm"
+                          render={<Link href="/sessions" />}
+                        >
+                          <PlusIcon className="size-4" />
+                          <span>New Session</span>
+                        </SidebarMenuButton>
+                      </SidebarMenuItem>
 
-                <SidebarMenuItem>
-                  <SidebarMenuButton
-                    isActive={pathname.startsWith("/inbox")}
-                    tooltip="Inbox"
-                    className="h-9 gap-2.5 rounded-lg px-2.5 text-[13.5px]"
-                    render={<Link href="/inbox" />}
-                  >
-                    <InboxIcon className="size-4" />
-                    <span>Inbox</span>
-                  </SidebarMenuButton>
-                  {data.inboxCount > 0 && (
-                    <SidebarMenuBadge className="top-2 right-2">
-                      {data.inboxCount}
-                    </SidebarMenuBadge>
-                  )}
-                </SidebarMenuItem>
-
-                <SidebarMenuItem>
-                  <SidebarMenuButton
-                    isActive={pathname.startsWith("/automations")}
-                    tooltip="Automations"
-                    className="h-9 gap-2.5 rounded-lg px-2.5 text-[13.5px]"
-                    render={<Link href="/automations" />}
-                  >
-                    <RefreshCwIcon className="size-4" />
-                    <span>Automations</span>
-                  </SidebarMenuButton>
-                </SidebarMenuItem>
-
-                <SidebarMenuItem>
-                  <SidebarMenuButton
-                    isActive={pathname.startsWith("/analytics")}
-                    tooltip="Analytics"
-                    className="h-9 gap-2.5 rounded-lg px-2.5 text-[13.5px]"
-                    render={<Link href="/analytics" />}
-                  >
-                    <BarChart3Icon className="size-4" />
-                    <span>Analytics</span>
-                  </SidebarMenuButton>
-                </SidebarMenuItem>
-              </SidebarMenu>
-            </SidebarGroupContent>
-          </SidebarGroup>
-
-          <SidebarSeparator className="mx-3 my-1 bg-sidebar-border/80" />
-
-          {/* Projects + smooth nested sessions */}
-          <SidebarGroup className="px-2.5 py-1 group-data-[collapsible=icon]:px-2">
-            <SidebarGroupLabel className="px-2.5 font-mono text-[10px] uppercase tracking-wider text-muted-foreground/80">
-              Projects
-            </SidebarGroupLabel>
-            <SidebarGroupAction
-              title="Add Project"
-              className="top-2.5 right-3"
-              onClick={() => setNewProjectOpen(true)}
-            >
-              <PlusIcon />
-              <span className="sr-only">Add Project</span>
-            </SidebarGroupAction>
-            <SidebarGroupContent>
-              <SidebarMenu className="gap-1">
-                {data.projects.length === 0 ? (
-                  <SidebarMenuItem>
-                    <SidebarMenuButton
-                      tooltip="Add your first repo"
-                      className="h-9 gap-2.5 rounded-lg px-2.5 text-[13px]"
-                      onClick={() => setNewProjectOpen(true)}
-                    >
-                      <FolderIcon className="size-4" />
-                      <span>Add your first repo</span>
-                    </SidebarMenuButton>
-                  </SidebarMenuItem>
-                ) : (
-                  data.projects.map((project) => {
-                    const isProjectOpen = expandedProjectIds[project.id] ?? true;
-                    const isProjectActive = pathname === `/projects/${project.id}`;
-                    const hasRuns = project.recentRuns.length > 0;
-
-                    return (
-                      <SidebarMenuItem key={project.id} className="min-w-0">
-                        <div className="group/proj relative flex w-full min-w-0 items-center">
-                          <SidebarMenuButton
-                            isActive={isProjectActive}
-                            tooltip={project.name}
-                            className={cn(
-                              "h-9 min-w-0 flex-1 gap-2.5 rounded-lg px-2.5 text-[13.5px] font-medium",
-                              hasRuns && "pr-8 group-data-[collapsible=icon]:pr-2",
-                            )}
-                            render={<Link href={`/projects/${project.id}`} />}
-                          >
-                            <FolderIcon className="size-4 shrink-0 text-sidebar-foreground/80" />
-                            <span className="min-w-0 flex-1 truncate">{project.name}</span>
-                          </SidebarMenuButton>
-
-                          {hasRuns && (
-                            <button
-                              type="button"
-                              aria-expanded={isProjectOpen}
-                              aria-label={
-                                isProjectOpen
-                                  ? `Collapse ${project.name}`
-                                  : `Expand ${project.name}`
-                              }
-                              onClick={() =>
-                                setExpandedProjectIds((prev) => ({
-                                  ...prev,
-                                  [project.id]: !isProjectOpen,
-                                }))
-                              }
-                              className="absolute top-1/2 right-1.5 flex size-6 -translate-y-1/2 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-sidebar-accent hover:text-foreground group-data-[collapsible=icon]:hidden"
-                            >
-                              <ChevronDownIcon
-                                className={cn(
-                                  "size-3.5 transition-transform duration-200 ease-[cubic-bezier(0.22,1,0.36,1)]",
-                                  isProjectOpen && "rotate-180",
-                                )}
-                              />
-                            </button>
-                          )}
-                        </div>
-
-                        {hasRuns && (
-                          <SmoothCollapse
-                            open={isProjectOpen}
-                            className="group-data-[collapsible=icon]:hidden"
-                          >
-                            <ul className="mt-1 ml-[17px] flex min-w-0 flex-col gap-0.5 border-l border-sidebar-border/80 pl-3">
-                              {project.recentRuns.map((run) => {
-                                const skillLabel = getSidebarSkillLabel(run.mode);
-                                const subagents = run.agents ?? [];
-                                const hasSubagents = subagents.length > 0;
-                                const isCurrentRun = pathname === `/sessions/${run.id}`;
-                                const isUnreadFinished = Boolean(unreadFinishedRuns[run.id]);
-                                const indicatorKind = getSidebarIndicatorKind(
-                                  run.status,
-                                  isUnreadFinished,
-                                );
-                                const isExpanded =
-                                  expandedRunIds[run.id] ?? (isCurrentRun && run.status === "running");
-
-                                return (
-                                  <li key={run.id} className="min-w-0">
-                                    <div className="flex w-full min-w-0 items-center gap-0.5">
-                                      <Link
-                                        href={`/sessions/${run.id}`}
-                                        onClick={() => markRunSeen(run.id)}
-                                        aria-current={isCurrentRun ? "page" : undefined}
-                                        title={`${run.title} · ${run.status.replace("_", " ")}`}
-                                        className={cn(
-                                          "flex h-8 min-w-0 flex-1 items-center justify-between gap-2 rounded-lg px-2.5 text-[13px] transition-colors",
-                                          isCurrentRun
-                                            ? "bg-sidebar-accent font-medium text-sidebar-accent-foreground ring-1 ring-sidebar-border/90"
-                                            : "text-sidebar-foreground/85 hover:bg-sidebar-accent/60 hover:text-sidebar-accent-foreground",
-                                        )}
-                                      >
-                                        <span className="flex min-w-0 flex-1 items-center gap-1.5 overflow-hidden">
-                                          {hasSubagents && (
-                                            <span
-                                              role="button"
-                                              tabIndex={0}
-                                              aria-expanded={isExpanded}
-                                              aria-label={
-                                                isExpanded ? "Hide subagents" : "Show subagents"
-                                              }
-                                              title={
-                                                isExpanded ? "Hide subagents" : "Show subagents"
-                                              }
-                                              onClick={(e) => {
-                                                e.preventDefault();
-                                                e.stopPropagation();
-                                                setExpandedRunIds((prev) => ({
-                                                  ...prev,
-                                                  [run.id]: !isExpanded,
-                                                }));
-                                              }}
-                                              onKeyDown={(e) => {
-                                                if (e.key === "Enter" || e.key === " ") {
-                                                  e.preventDefault();
-                                                  e.stopPropagation();
-                                                  setExpandedRunIds((prev) => ({
-                                                    ...prev,
-                                                    [run.id]: !isExpanded,
-                                                  }));
-                                                }
-                                              }}
-                                              className="-ml-1 flex size-4 shrink-0 items-center justify-center rounded-[4px] text-muted-foreground/75 transition-colors hover:bg-sidebar-border/60 hover:text-foreground"
-                                            >
-                                              <ChevronRightIcon
-                                                className={cn(
-                                                  "size-3 transition-transform duration-200 ease-[cubic-bezier(0.22,1,0.36,1)]",
-                                                  isExpanded && "rotate-90",
-                                                )}
-                                              />
-                                            </span>
-                                          )}
-                                          {skillLabel && (
-                                            <span className="shrink-0 rounded-[3px] bg-muted px-1 py-px font-mono text-[9.5px] leading-tight text-muted-foreground">
-                                              {skillLabel}
-                                            </span>
-                                          )}
-                                          <span className="min-w-0 flex-1 truncate">
-                                            {run.title}
-                                          </span>
-                                        </span>
-
-                                        <div className="flex shrink-0 items-center justify-end">
-                                          {indicatorKind ? (
-                                            <SidebarStatusIndicator
-                                              status={run.status}
-                                              unread={isUnreadFinished}
-                                            />
-                                          ) : (
-                                            <span
-                                              suppressHydrationWarning
-                                              className="pl-1 font-mono text-[10px] text-muted-foreground/70 tabular-nums"
-                                            >
-                                              {formatRelativeTime(run.updatedAt)}
-                                            </span>
-                                          )}
-                                        </div>
-                                      </Link>
-                                    </div>
-
-                                    {hasSubagents && (
-                                      <SmoothCollapse open={isExpanded}>
-                                        <div className="mt-0.5 ml-3 flex max-h-56 min-w-0 flex-col gap-0.5 overflow-x-hidden overflow-y-auto border-l border-sidebar-border/80 pl-2.5 py-0.5">
-                                          {subagents.map((ag) => (
-                                            <Link
-                                              key={ag.id}
-                                              href={`/sessions/${run.id}?agent=${encodeURIComponent(ag.id)}`}
-                                              title={`${ag.name} · ${ag.status.replace("_", " ")}`}
-                                              className="flex h-7 w-full min-w-0 items-center justify-between gap-2 rounded-md px-2 text-[12px] text-muted-foreground transition-colors hover:bg-sidebar-accent/60 hover:text-foreground"
-                                            >
-                                              <span className="min-w-0 flex-1 truncate">
-                                                {compactAgentLabel(ag)}
-                                              </span>
-                                              <SidebarStatusIndicator status={ag.status} />
-                                            </Link>
-                                          ))}
-                                        </div>
-                                      </SmoothCollapse>
-                                    )}
-                                  </li>
-                                );
-                              })}
-                            </ul>
-                          </SmoothCollapse>
+                      <SidebarMenuItem>
+                        <SidebarMenuButton
+                          isActive={pathname.startsWith("/inbox")}
+                          tooltip="Inbox"
+                          className="h-9 gap-2.5 rounded-lg px-2.5 text-sm"
+                          render={<Link href="/inbox" />}
+                        >
+                          <InboxIcon className="size-4" />
+                          <span>Inbox</span>
+                        </SidebarMenuButton>
+                        {data.inboxCount > 0 && (
+                          <SidebarMenuBadge className="top-2 right-2">
+                            {data.inboxCount}
+                          </SidebarMenuBadge>
                         )}
                       </SidebarMenuItem>
-                    );
-                  })
+
+                      <SidebarMenuItem>
+                        <SidebarMenuButton
+                          isActive={pathname.startsWith("/analytics")}
+                          tooltip="Analytics"
+                          className="h-9 gap-2.5 rounded-lg px-2.5 text-sm"
+                          render={<Link href="/analytics" />}
+                        >
+                          <BarChart3Icon className="size-4" />
+                          <span>Analytics</span>
+                        </SidebarMenuButton>
+                      </SidebarMenuItem>
+                    </SidebarMenu>
+                  </SidebarGroupContent>
+                </SidebarGroup>
+
+                <SidebarSeparator className="mx-3 my-1 bg-sidebar-border/80" />
+
+                {/* Projects — click drills into the project view */}
+                <SidebarGroup className="px-2.5 py-1 group-data-[collapsible=icon]:px-2">
+                  <SidebarGroupLabel className="px-2.5 font-mono text-2xs uppercase tracking-wider text-muted-foreground/80">
+                    Projects
+                  </SidebarGroupLabel>
+                  <SidebarGroupAction
+                    title="Add Project"
+                    className="top-2.5 right-3"
+                    onClick={() => setNewProjectOpen(true)}
+                  >
+                    <PlusIcon />
+                    <span className="sr-only">Add Project</span>
+                  </SidebarGroupAction>
+                  <SidebarGroupContent>
+                    <SidebarMenu className="gap-0.5">
+                      {data.projects.length === 0 ? (
+                        <SidebarMenuItem>
+                          <SidebarMenuButton
+                            tooltip="Add your first repo"
+                            className="h-9 gap-2.5 rounded-lg px-2.5 text-sm"
+                            onClick={() => setNewProjectOpen(true)}
+                          >
+                            <FolderIcon className="size-4" />
+                            <span>Add your first repo</span>
+                          </SidebarMenuButton>
+                        </SidebarMenuItem>
+                      ) : (
+                        data.projects.map((project) => {
+                          const activeRun = project.recentRuns.find((r) =>
+                            isRunActiveStatus(r.status),
+                          );
+                          const unreadRun = project.recentRuns.find((r) =>
+                            Boolean(unreadFinishedRuns[r.id]),
+                          );
+                          return (
+                            <SidebarMenuItem key={project.id} className="group/proj min-w-0">
+                              <SidebarMenuButton
+                                tooltip={project.name}
+                                className="h-9 min-w-0 gap-2.5 rounded-lg px-2.5 text-sm font-medium"
+                                render={<Link href={`/projects/${project.id}`} />}
+                              >
+                                <FolderIcon className="size-4 shrink-0 text-sidebar-foreground/80" />
+                                <span className="min-w-0 flex-1 truncate">{project.name}</span>
+                                <span className="flex shrink-0 items-center gap-1.5 group-data-[collapsible=icon]:hidden">
+                                  {activeRun ? (
+                                    <SidebarStatusIndicator status={activeRun.status} />
+                                  ) : unreadRun ? (
+                                    <SidebarStatusIndicator status={unreadRun.status} unread />
+                                  ) : null}
+                                  <ChevronRightIcon className="size-3.5 text-muted-foreground opacity-0 transition-opacity group-hover/proj:opacity-100" />
+                                </span>
+                              </SidebarMenuButton>
+                            </SidebarMenuItem>
+                          );
+                        })
+                      )}
+                    </SidebarMenu>
+                  </SidebarGroupContent>
+                </SidebarGroup>
+              </>
+            )}
+
+            {view.kind === "project" && currentProject && (
+              <>
+                <SidebarViewHeader title={currentProject.name} onBack={goToRootView} />
+                <SidebarGroup className="px-2.5 py-1 group-data-[collapsible=icon]:px-2">
+                  <SidebarGroupContent>
+                    <SidebarMenu className="gap-0.5">
+                      <SidebarMenuItem>
+                        <SidebarMenuButton
+                          isActive={pathname === `/projects/${currentProject.id}`}
+                          tooltip="Overview"
+                          className="h-9 gap-2.5 rounded-lg px-2.5 text-sm"
+                          render={<Link href={`/projects/${currentProject.id}`} />}
+                        >
+                          <LayoutDashboardIcon className="size-4" />
+                          <span>Overview</span>
+                        </SidebarMenuButton>
+                      </SidebarMenuItem>
+                      <SidebarMenuItem>
+                        <SidebarMenuButton
+                          isActive={pathname === "/sessions"}
+                          tooltip="New Session"
+                          className="h-9 gap-2.5 rounded-lg px-2.5 text-sm"
+                          render={<Link href={`/sessions?project=${currentProject.id}`} />}
+                        >
+                          <PlusIcon className="size-4" />
+                          <span>New Session</span>
+                        </SidebarMenuButton>
+                      </SidebarMenuItem>
+                    </SidebarMenu>
+                  </SidebarGroupContent>
+                </SidebarGroup>
+
+                {currentProject.recentRuns.length > 0 && (
+                  <SidebarGroup className="px-2.5 py-1 group-data-[collapsible=icon]:hidden">
+                    <SidebarGroupLabel className="px-2.5 font-mono text-2xs uppercase tracking-wider text-muted-foreground/80">
+                      Sessions
+                    </SidebarGroupLabel>
+                    <SidebarGroupContent>
+                      <ProjectRunList
+                        runs={currentProject.recentRuns}
+                        pathname={pathname}
+                        unreadFinishedRuns={unreadFinishedRuns}
+                        markRunSeen={markRunSeen}
+                        expandedRunIds={expandedRunIds}
+                        onToggleRun={(runId, open) =>
+                          setExpandedRunIds((prev) => ({ ...prev, [runId]: open }))
+                        }
+                      />
+                    </SidebarGroupContent>
+                  </SidebarGroup>
                 )}
-              </SidebarMenu>
-            </SidebarGroupContent>
-          </SidebarGroup>
+              </>
+            )}
 
-          <SidebarSeparator className="mx-3 my-1 bg-sidebar-border/80" />
-
-          {/* Settings collapsible tree right inside the shared sidebar */}
-          <React.Suspense fallback={null}>
-            <SettingsSidebarTree
-              pathname={pathname}
-              onlineRunnerCount={onlineRunners.length}
-              totalRunnerCount={data.runners.length}
-            />
-          </React.Suspense>
+            {view.kind === "settings" && (
+              <>
+                <SidebarViewHeader title="Settings" onBack={goToRootView} />
+                <SidebarGroup className="px-2.5 py-1 group-data-[collapsible=icon]:px-2">
+                  <SidebarGroupContent>
+                    <React.Suspense fallback={null}>
+                      <SettingsSidebarNav
+                        pathname={pathname}
+                        onlineRunnerCount={onlineRunners.length}
+                        totalRunnerCount={data.runners.length}
+                      />
+                    </React.Suspense>
+                  </SidebarGroupContent>
+                </SidebarGroup>
+              </>
+            )}
+          </div>
         </SidebarContent>
 
         <SidebarFooter className="gap-2 border-t border-sidebar-border/70 p-2.5 group-data-[collapsible=icon]:p-2">
@@ -841,7 +871,7 @@ export function AppShell({
             <div className="flex flex-col gap-2.5 rounded-lg border bg-card p-3 group-data-[collapsible=icon]:hidden">
               <div className="flex items-center justify-between text-xs">
                 <span className="text-muted-foreground">Finish setup</span>
-                <span className="flex items-center gap-1.5 font-mono text-[11px] text-muted-foreground">
+                <span className="flex items-center gap-1.5 font-mono text-xs text-muted-foreground">
                   <span>{setupCompleted}/2</span>
                   <SetupRing completed={setupCompleted} total={2} />
                 </span>
@@ -859,6 +889,21 @@ export function AppShell({
             </div>
           )}
 
+          {/* Settings — pinned to the bottom, drills into the settings view */}
+          <SidebarMenu>
+            <SidebarMenuItem>
+              <SidebarMenuButton
+                isActive={view.kind === "settings"}
+                tooltip="Settings"
+                className="h-9 gap-2.5 rounded-lg px-2.5 text-sm"
+                render={<Link href="/settings" />}
+              >
+                <SettingsIcon className="size-4" />
+                <span>Settings</span>
+              </SidebarMenuButton>
+            </SidebarMenuItem>
+          </SidebarMenu>
+
           {/* Clean footer row — Avatar + Name */}
           <Link
             href="/settings?tab=general"
@@ -871,14 +916,14 @@ export function AppShell({
               {data.user?.avatarUrl && (
                 <AvatarImage src={data.user.avatarUrl} alt={userName} />
               )}
-              <AvatarFallback className="text-[10px] font-medium">
+              <AvatarFallback className="text-2xs font-medium">
                 {initials}
               </AvatarFallback>
             </Avatar>
             <div className="flex min-w-0 flex-1 flex-col group-data-[collapsible=icon]:hidden">
               <span className="truncate text-xs font-medium leading-tight">{userName}</span>
               {data.user?.githubLogin && (
-                <span className="truncate font-mono text-[10px] text-muted-foreground">
+                <span className="truncate font-mono text-2xs text-muted-foreground">
                   @{data.user.githubLogin}
                 </span>
               )}
@@ -952,15 +997,6 @@ export function AppShell({
             <CommandItem
               onSelect={() => {
                 setSearchOpen(false);
-                router.push("/automations");
-              }}
-            >
-              <RefreshCwIcon />
-              <span>Automations</span>
-            </CommandItem>
-            <CommandItem
-              onSelect={() => {
-                setSearchOpen(false);
                 router.push("/analytics");
               }}
             >
@@ -981,9 +1017,6 @@ export function AppShell({
                 >
                   <FolderIcon />
                   <span>{p.name}</span>
-                  <span className="ml-auto font-mono text-xs text-muted-foreground">
-                    {p.engine}
-                  </span>
                 </CommandItem>
               ))}
             </CommandGroup>

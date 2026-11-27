@@ -123,7 +123,7 @@ export function SettingsDialog({
               <KeyRoundIcon className="size-4.5" />
             </span>
             <div className="flex min-w-0 flex-col gap-1">
-              <DialogTitle className="text-base font-semibold tracking-tight">
+              <DialogTitle className="text-lg font-semibold tracking-tight">
                 Quick Settings
               </DialogTitle>
               <DialogDescription className="text-xs leading-relaxed">
@@ -189,7 +189,7 @@ export function SettingsDialog({
             )}
 
             <div className="flex flex-col gap-2 rounded-lg border bg-card p-3">
-              <span className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
+              <span className="font-mono text-2xs uppercase tracking-wider text-muted-foreground">
                 Quick CLI connect
               </span>
               <div className="flex items-center justify-between gap-2 rounded-md border bg-background px-2.5 py-1.5 font-mono text-xs">
@@ -217,7 +217,7 @@ export function SettingsDialog({
             </div>
 
             <div className="flex flex-col gap-2">
-              <div className="flex items-center justify-between font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
+              <div className="flex items-center justify-between font-mono text-2xs uppercase tracking-wider text-muted-foreground">
                 <span>Active keys ({activeTokens.length})</span>
                 {loading && <Spinner />}
               </div>
@@ -234,7 +234,7 @@ export function SettingsDialog({
                     >
                       <div className="flex min-w-0 flex-col">
                         <span className="truncate font-medium text-foreground">{t.label}</span>
-                        <span className="font-mono text-[11px] text-muted-foreground">
+                        <span className="font-mono text-xs text-muted-foreground">
                           {t.prefix}… · {t.lastUsedAt ? formatRelativeTime(t.lastUsedAt) : "unused"}
                         </span>
                       </div>
@@ -270,7 +270,7 @@ export function SettingsDialog({
                       <StatusDot status={r.status} />
                       <div className="flex min-w-0 flex-col">
                         <span className="truncate font-medium text-foreground">{r.name}</span>
-                        <span className="truncate font-mono text-[11px] text-muted-foreground tabular-nums">
+                        <span className="truncate font-mono text-xs text-muted-foreground tabular-nums">
                           {r.os} · {r.activeRuns}/{r.maxConcurrency} slots
                         </span>
                       </div>

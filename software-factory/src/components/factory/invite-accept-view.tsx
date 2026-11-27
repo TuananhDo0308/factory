@@ -110,7 +110,7 @@ export function InviteAcceptView({
                     <span className="text-sm font-medium text-foreground">
                       {invite.projectName}
                     </span>
-                    <span className="font-mono text-[11px] text-muted-foreground">
+                    <span className="font-mono text-xs text-muted-foreground">
                       Owner: @{invite.ownerLogin} · {invite.engine}
                     </span>
                   </div>

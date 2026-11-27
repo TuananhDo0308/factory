@@ -22,7 +22,7 @@ const spaceGrotesk = Space_Grotesk({
 export const metadata: Metadata = {
   title: "Factory | Agent-Native Software Control Plane",
   description:
-    "Control plane for multi-agent Software Factory runs across Antigravity and Claude Code.",
+    "Control plane for factory v2 on Claude Code: BA sessions, epic runs, live agents, tokens and cost.",
 };
 
 export default function RootLayout({ children }: LayoutProps<"/">) {

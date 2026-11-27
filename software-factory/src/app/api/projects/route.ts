@@ -12,7 +12,6 @@ import { getCurrentSession } from "@/lib/session";
 import { getAccessibleRunners } from "@/lib/team-access";
 import { isRunnerOnline } from "@/lib/workspace-data";
 
-const VALID_ENGINES = new Set(["antigravity", "claude"]);
 
 function str(value: unknown): string {
   return typeof value === "string" ? value.trim() : "";
@@ -81,8 +80,7 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: 'mode must be "github" or "new"' }, { status: 400 });
   }
 
-  const engineRaw = str(body.engine) || "antigravity";
-  const engine = VALID_ENGINES.has(engineRaw) ? engineRaw : "antigravity";
+  const engine = "claude";
   const localPath = str(body.localPath) || null;
 
   if (mode === "github") {
@@ -257,8 +255,7 @@ export async function POST(request: NextRequest) {
   const resolvedLocalPath = localPath || path.join(/* turbopackIgnore: true */ workspaceDir, slug);
 
   // Initialize folder immediately when running locally (non-Vercel).
-  // Do NOT write a stub `.factory/project.json` here — `/factory init` (Stage 1) owns `.factory/`.
-  const initStatus = "none";
+  // Do NOT write a stub `.factory/` here — new-ba and new-factory own it.
   if (!process.env.VERCEL && resolvedLocalPath) {
     try {
       mkdirSync(/* turbopackIgnore: true */ resolvedLocalPath, { recursive: true });
@@ -302,7 +299,6 @@ export async function POST(request: NextRequest) {
       source: createdRepo ? "github" : "new",
       engine,
       localPath: resolvedLocalPath ? resolvedLocalPath.slice(0, 1024) : null,
-      initStatus,
       githubRepoId: createdRepo?.githubRepoId ?? null,
       githubFullName: createdRepo?.fullName ?? null,
       githubOwner: createdRepo?.owner ?? null,

@@ -1,6 +1,5 @@
 import { type NextRequest, NextResponse } from "next/server";
 import { authenticateBearer } from "@/lib/api-auth";
-import { dispatchAutoProjectsForRunner } from "@/lib/auto-dispatch";
 import { emitFactoryEvent } from "@/lib/events";
 import { prisma } from "@/lib/prisma";
 import { safeJsonParse } from "@/lib/workspace-data";
@@ -23,7 +22,7 @@ export async function POST(request: NextRequest) {
   const name = str(body.name) || str(body.hostname) || "local-runner";
   const hostname = str(body.hostname) || name;
   const os = str(body.os) || "darwin";
-  const engines = Array.isArray(body.engines) ? body.engines : ["antigravity", "claude"];
+  const engines = Array.isArray(body.engines) ? body.engines : ["claude"];
   const models = Array.isArray(body.models) ? body.models : undefined;
   const allowedRoots = Array.isArray(body.allowedRoots) ? body.allowedRoots : undefined;
   const workspaceDir = str(body.workspaceDir) || undefined;
@@ -148,19 +147,9 @@ export async function POST(request: NextRequest) {
     }
   }
 
-  // Auto-Dispatch: if this runner has free slots, queue eligible Ready issues from projects with autoDispatch enabled!
-  const freeSlots = Math.max(0, maxConcurrency - activeRuns);
-  if (freeSlots > 0) {
-    await dispatchAutoProjectsForRunner({
-      userId: auth.user.id,
-      runnerId: runner.id,
-      freeSlots,
-    }).catch(() => {});
-  }
-
   // Always deliver control commands (pause/resume/steer) immediately, plus start commands up to capacity.
   // Match commands explicitly addressed to this runner (including shared team commands) OR unassigned commands owned by this user.
-  const controlTypes = ["pause_run", "resume_run", "answer_interaction", "retry_phase", "sync_context"];
+  const controlTypes = ["pause_run", "resume_run", "answer_interaction", "sync_context"];
   const runnerCmdFilter = {
     OR: [
       { runnerMachineId: runner.id },

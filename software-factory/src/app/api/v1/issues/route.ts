@@ -33,7 +33,7 @@ export async function GET(request: NextRequest) {
 
   return NextResponse.json({
     ok: true,
-    project: { id: project.id, slug: project.slug, name: project.name, engine: project.engine },
+    project: { id: project.id, slug: project.slug, name: project.name },
     issues: issues.map(serializeProjectIssue),
   });
 }

@@ -56,7 +56,6 @@ export default async function SettingsPage({
       teamProjects={projects.map((p) => ({
         id: p.id,
         name: p.name,
-        engine: p.engine,
         isOwner: p.userId === session.user.id,
         ownerLogin: p.user?.githubLogin ?? "local",
         memberCount: p._count.members + 1,
@@ -68,11 +67,6 @@ export default async function SettingsPage({
           name: r.name,
           hostname: r.hostname,
           os: r.os,
-          engines: safeJsonParse<string[]>(r.enginesJson, ["antigravity", "claude"]),
-          models: safeJsonParse<Array<{ id: string; label: string; engine: string }>>(
-            r.modelsJson,
-            [],
-          ),
           allowedRoots: safeJsonParse<string[]>(r.allowedRootsJson, []),
           workspaceDir: r.workspaceDir ?? null,
           discoveredCount: Array.isArray(discovered) ? discovered.length : 0,

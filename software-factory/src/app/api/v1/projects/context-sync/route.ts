@@ -55,21 +55,12 @@ export async function POST(request: NextRequest) {
     type: "context:updated",
     userId: auth.user.id,
     projectId: project.id,
-    payload: { count: result.savedCount, source, initComplete: result.initComplete },
+    payload: { count: result.savedCount, source },
   });
-  if (result.initComplete && project.initStatus !== "complete") {
-    emitFactoryEvent({
-      type: "project:updated",
-      userId: auth.user.id,
-      projectId: project.id,
-      payload: { initStatus: "complete" },
-    });
-  }
 
   return NextResponse.json({
     ok: true,
     projectId: project.id,
     savedCount: result.savedCount,
-    initComplete: result.initComplete,
   });
 }

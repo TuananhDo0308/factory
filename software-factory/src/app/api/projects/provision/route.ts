@@ -2,7 +2,6 @@ import { type NextRequest, NextResponse } from "next/server";
 import { provisionProject } from "@/lib/provision";
 import { getCurrentSession } from "@/lib/session";
 
-const VALID_ENGINES = new Set(["antigravity", "claude"]);
 
 function str(value: unknown): string {
   return typeof value === "string" ? value.trim() : "";
@@ -30,10 +29,7 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: 'mode must be "github" or "new"' }, { status: 400 });
   }
 
-  const engineRaw = str(body.engine) || "antigravity";
-  const engine = (VALID_ENGINES.has(engineRaw) ? engineRaw : "antigravity") as
-    | "antigravity"
-    | "claude";
+  const engine = "claude" as const;
 
   const encoder = new TextEncoder();
   const stream = new ReadableStream<Uint8Array>({

@@ -102,7 +102,6 @@ export function NewProjectDialog({ open, onOpenChange, onCreated }: NewProjectDi
   // Create New Project form state
   const [name, setName] = React.useState("");
   const [defaultBranch, setDefaultBranch] = React.useState("main");
-  const [engine, setEngine] = React.useState("antigravity");
   const [description, setDescription] = React.useState("");
   const [submitting, setSubmitting] = React.useState(false);
 
@@ -157,7 +156,6 @@ export function NewProjectDialog({ open, onOpenChange, onCreated }: NewProjectDi
           mode: "new",
           name: name.trim(),
           description: description.trim(),
-          engine,
           defaultBranch: defaultBranch.trim() || "main",
           runnerId: selectedRunnerId || undefined,
         }),
@@ -197,8 +195,6 @@ export function NewProjectDialog({ open, onOpenChange, onCreated }: NewProjectDi
           name: folder.name,
           localPath: folder.path,
           defaultBranch: folder.defaultBranch || "main",
-          engine,
-          initStatus: folder.hasFactoryInit ? "partial" : "none",
           githubFullName: folder.githubFullName || undefined,
         }),
       });
@@ -238,7 +234,7 @@ export function NewProjectDialog({ open, onOpenChange, onCreated }: NewProjectDi
               <FolderPlusIcon className="size-4.5" />
             </span>
             <div className="flex min-w-0 flex-col gap-1">
-              <DialogTitle className="text-base font-semibold tracking-tight">
+              <DialogTitle className="text-lg font-semibold tracking-tight">
                 Add Project
               </DialogTitle>
               <DialogDescription className="text-xs leading-relaxed">
@@ -258,7 +254,7 @@ export function NewProjectDialog({ open, onOpenChange, onCreated }: NewProjectDi
                 <LaptopIcon className="size-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />
               )}
               <div className="flex min-w-0 flex-1 flex-col gap-0.5">
-                <span className="truncate font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
+                <span className="truncate font-mono text-2xs uppercase tracking-wider text-muted-foreground">
                   Workspace Root
                   {workspace?.activeRunner ? ` · ${workspace.activeRunner.name}` : ""}
                 </span>
@@ -279,7 +275,7 @@ export function NewProjectDialog({ open, onOpenChange, onCreated }: NewProjectDi
                     if (v) setSelectedRunnerId(v);
                   }}
                 >
-                  <SelectTrigger className="h-7 w-36 text-[11px]" aria-label="Select runner">
+                  <SelectTrigger className="h-7 w-36 text-xs" aria-label="Select runner">
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
@@ -337,7 +333,7 @@ export function NewProjectDialog({ open, onOpenChange, onCreated }: NewProjectDi
                       value={name}
                       onChange={(e) => setName(e.target.value)}
                     />
-                    <FieldDescription className="flex items-center gap-1.5 font-mono text-[11px]">
+                    <FieldDescription className="flex items-center gap-1.5 font-mono text-xs">
                       <span className="text-muted-foreground">Folder:</span>
                       <span className="truncate rounded-[2px] bg-muted px-1.5 py-0.5 text-foreground">
                         {workspaceDir.replace(/\/+$/, "")}/{slugPreview}
@@ -357,23 +353,7 @@ export function NewProjectDialog({ open, onOpenChange, onCreated }: NewProjectDi
                   </Field>
                 </FieldGroup>
 
-                <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-                  <Field>
-                    <FieldLabel htmlFor="sf-engine-select">Default engine</FieldLabel>
-                    <Select value={engine} onValueChange={(v) => v && setEngine(v)}>
-                      <SelectTrigger id="sf-engine-select" className="w-full">
-                        <SelectValue>
-                          {engine === "claude" ? "Claude Code (claude)" : "Antigravity (agy)"}
-                        </SelectValue>
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectGroup>
-                          <SelectItem value="antigravity">Antigravity (agy)</SelectItem>
-                          <SelectItem value="claude">Claude Code (claude)</SelectItem>
-                        </SelectGroup>
-                      </SelectContent>
-                    </Select>
-                  </Field>
+                <div className="grid grid-cols-1 gap-4">
                   <Field>
                     <FieldLabel htmlFor="sf-branch">Default branch</FieldLabel>
                     <Input
@@ -403,19 +383,6 @@ export function NewProjectDialog({ open, onOpenChange, onCreated }: NewProjectDi
                     className="h-8 pl-8 text-xs"
                   />
                 </div>
-                <Select value={engine} onValueChange={(v) => v && setEngine(v)}>
-                  <SelectTrigger className="h-8 w-36 text-xs" aria-label="Default engine">
-                    <SelectValue>
-                      {engine === "claude" ? "Claude Code" : "Antigravity"}
-                    </SelectValue>
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectGroup>
-                      <SelectItem value="antigravity">Antigravity</SelectItem>
-                      <SelectItem value="claude">Claude Code</SelectItem>
-                    </SelectGroup>
-                  </SelectContent>
-                </Select>
               </div>
 
               <div className="max-h-60 overflow-y-auto rounded-md border bg-card">
@@ -462,7 +429,7 @@ export function NewProjectDialog({ open, onOpenChange, onCreated }: NewProjectDi
                                 <Badge variant="secondary">.factory</Badge>
                               )}
                             </div>
-                            <span className="truncate font-mono text-[10px] text-muted-foreground">
+                            <span className="truncate font-mono text-2xs text-muted-foreground">
                               {folder.path}
                             </span>
                           </div>
@@ -516,7 +483,7 @@ export function NewProjectDialog({ open, onOpenChange, onCreated }: NewProjectDi
               Configure Daemon Folder
             </Button>
           ) : (
-            <span className="hidden font-mono text-[11px] text-muted-foreground sm:inline">
+            <span className="hidden font-mono text-xs text-muted-foreground sm:inline">
               Initialized with git automatically
             </span>
           )}

@@ -1,18 +1,10 @@
 # Test run outputs (disposable)
 factory-workspace/
-antigravity/factory-workspace/
-claude/factory-workspace/
 .agents/worktrees/
 
-__pycache__/
-*.pyc
 .DS_Store
 *.swp
 *.swo
-
-# Progress of the run in flight, rewritten by the workflow
-antigravity/factory/dashboard/live.js
-claude/factory/dashboard/live.js
 
 # Software Factory app (Next.js / PostgreSQL / Prisma)
 software-factory/node_modules/

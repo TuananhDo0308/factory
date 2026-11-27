@@ -286,7 +286,7 @@ function renderInline(text: string): React.ReactNode[] {
       nodes.push(
         <code
           key={key++}
-          className="rounded bg-muted/80 px-1.5 py-0.5 font-mono text-[12px] text-foreground/90"
+          className="rounded bg-muted/80 px-1.5 py-0.5 font-mono text-xs text-foreground/90"
         >
           {token.slice(1, -1)}
         </code>,
@@ -327,7 +327,7 @@ function renderInline(text: string): React.ReactNode[] {
           <code
             key={key++}
             title={cleanPath}
-            className="rounded bg-muted px-1.5 py-0.5 font-mono text-[12px] text-primary"
+            className="rounded bg-muted px-1.5 py-0.5 font-mono text-xs text-primary"
           >
             {fileMatch[1]}
           </code>,
@@ -364,18 +364,18 @@ function CodeBlock({ lang, code }: { lang: string; code: string }) {
 
   return (
     <div className="my-2 overflow-hidden rounded-[4px] border bg-background">
-      <div className="flex items-center justify-between border-b bg-muted/40 px-3 py-1 font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
+      <div className="flex items-center justify-between border-b bg-muted/40 px-3 py-1 font-mono text-2xs uppercase tracking-wider text-muted-foreground">
         <span>{lang || "code"}</span>
         <button
           type="button"
           onClick={copy}
-          className="inline-flex items-center gap-1 text-[10px] text-muted-foreground transition-colors hover:text-foreground"
+          className="inline-flex items-center gap-1 text-2xs text-muted-foreground transition-colors hover:text-foreground"
         >
           {copied ? <CheckIcon className="size-3 text-success" /> : <CopyIcon className="size-3" />}
           <span>{copied ? "Copied" : "Copy"}</span>
         </button>
       </div>
-      <pre className="overflow-x-auto p-3 font-mono text-[12px] leading-relaxed text-foreground">
+      <pre className="overflow-x-auto p-3 font-mono text-xs leading-relaxed text-foreground">
         <code>{code}</code>
       </pre>
     </div>
@@ -492,7 +492,7 @@ export function TicketsBlockCard({
                 {liveStatus && (
                   <span
                     className={cn(
-                      "rounded-full px-2 py-0.5 text-[11px] font-medium capitalize",
+                      "rounded-full px-2 py-0.5 text-xs font-medium capitalize",
                       ticketStatusTone(liveStatus),
                     )}
                   >
@@ -543,7 +543,7 @@ export function MarkdownContent({
       className={cn(
         isDoc
           ? "flex flex-col gap-3.5 text-sm leading-6.5 text-foreground/90"
-          : "flex flex-col gap-2.5 text-[13.5px] leading-6 text-foreground/95",
+          : "flex flex-col gap-2.5 text-sm leading-6 text-foreground/95",
         className,
       )}
     >
@@ -553,15 +553,15 @@ export function MarkdownContent({
             ? block.level === 1
               ? "mt-2 border-b border-border/70 pb-2 text-xl font-semibold tracking-tight text-foreground first:mt-0"
               : block.level === 2
-                ? "mt-5 border-b border-border/50 pb-1.5 text-base font-semibold tracking-tight text-foreground first:mt-0"
+                ? "mt-5 border-b border-border/50 pb-1.5 text-lg font-semibold tracking-tight text-foreground first:mt-0"
                 : block.level === 3
                   ? "mt-3 text-sm font-semibold tracking-tight text-foreground"
                   : "mt-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground"
             : block.level === 1
-              ? "mt-1 text-base font-semibold tracking-tight text-foreground"
+              ? "mt-1 text-lg font-semibold tracking-tight text-foreground"
               : block.level === 2
-                ? "mt-1 text-[14.5px] font-semibold tracking-tight text-foreground"
-                : "mt-0.5 text-[13.5px] font-semibold text-foreground";
+                ? "mt-1 text-base font-semibold tracking-tight text-foreground"
+                : "mt-0.5 text-sm font-semibold text-foreground";
           return (
             <div key={idx} className={headingCls}>
               {renderInline(block.text)}
@@ -594,7 +594,7 @@ export function MarkdownContent({
           return (
             <blockquote
               key={idx}
-              className="border-l-2 border-primary/60 pl-3 text-[13px] text-muted-foreground"
+              className="border-l-2 border-primary/60 pl-3 text-sm text-muted-foreground"
             >
               {block.lines.map((l, li) => (
                 <p key={li}>{renderInline(l)}</p>
@@ -650,7 +650,7 @@ export function MarkdownContent({
                         key={hi}
                         className={cn(
                           "whitespace-nowrap font-medium text-foreground",
-                          isDoc ? "px-3 py-2 font-mono text-[11px] uppercase tracking-wider text-muted-foreground" : "px-2.5 py-1.5",
+                          isDoc ? "px-3 py-2 font-mono text-xs uppercase tracking-wider text-muted-foreground" : "px-2.5 py-1.5",
                         )}
                       >
                         {renderInline(h)}
@@ -684,15 +684,15 @@ export function MarkdownContent({
                             className={cn(
                               "align-top leading-relaxed text-foreground/90",
                               isDoc ? "px-3 py-2.5" : "px-2.5 py-1.5",
-                              isCompactToken && "whitespace-nowrap font-mono text-[11px]",
+                              isCompactToken && "whitespace-nowrap font-mono text-xs",
                             )}
                           >
                             {isBlocking ? (
-                              <span className="inline-flex items-center rounded-full border border-destructive/35 bg-destructive/10 px-2 py-0.5 font-mono text-[10px] font-medium text-destructive">
+                              <span className="inline-flex items-center rounded-full border border-destructive/35 bg-destructive/10 px-2 py-0.5 font-mono text-2xs font-medium text-destructive">
                                 blocking
                               </span>
                             ) : isMinor ? (
-                              <span className="inline-flex items-center rounded-full border border-border bg-muted px-2 py-0.5 font-mono text-[10px] font-medium text-muted-foreground">
+                              <span className="inline-flex items-center rounded-full border border-border bg-muted px-2 py-0.5 font-mono text-2xs font-medium text-muted-foreground">
                                 minor
                               </span>
                             ) : (

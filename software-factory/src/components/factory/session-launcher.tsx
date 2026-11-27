@@ -9,9 +9,7 @@ import {
   CheckIcon,
   ChevronDownIcon,
   Columns3Icon,
-  CpuIcon,
   FolderIcon,
-  GitBranchIcon,
   LaptopIcon,
   PaperclipIcon,
   PlusIcon,
@@ -21,7 +19,6 @@ import {
 import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Checkbox } from "@/components/ui/checkbox";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -49,19 +46,8 @@ import {
 } from "@/components/factory/chat-attachments";
 import { NewProjectDialog } from "@/components/factory/new-project-dialog";
 import { ATTACHMENT_ACCEPT_ATTR } from "@/lib/attachments";
-import {
-  buildModelFamilies,
-  defaultModelForEngine,
-  findModelChoice,
-} from "@/lib/models";
-import {
-  applySkillPrefixToPrompt,
-  detectSkillFromPrompt,
-  findSkillByIdOrMode,
-  getSlashSuggestions,
-  SESSION_SKILLS,
-  type SessionSkillOption,
-} from "@/lib/skills";
+import { DEFAULT_MODEL, findModelChoice, MODEL_FAMILIES } from "@/lib/models";
+import { BA_SKILL, detectSkillFromPrompt, toBaPrompt } from "@/lib/skills";
 import type { SidebarData } from "@/lib/workspace-data";
 
 export function SessionLauncher({
@@ -82,23 +68,15 @@ export function SessionLauncher({
   const router = useRouter();
   const textareaRef = React.useRef<HTMLTextAreaElement | null>(null);
 
-  const resolvedInitialSkill =
-    findSkillByIdOrMode(initialSkill) ??
-    SESSION_SKILLS.find((s) => s.id === "normal")!;
   const resolvedInitialProject =
     projects.find((p) => p.id === initialProjectId || p.slug === initialProjectId) ??
     projects[0] ??
     null;
 
-  const [skillId, setSkillId] = React.useState<string>(resolvedInitialSkill.id);
   const [prompt, setPrompt] = React.useState<string>(() => {
-    if (initialSkill && resolvedInitialSkill.slash) {
-      return applySkillPrefixToPrompt(initialPrompt || "", resolvedInitialSkill);
-    }
-    return initialPrompt || "";
+    const body = detectSkillFromPrompt(initialPrompt || "")?.body ?? initialPrompt ?? "";
+    return body;
   });
-  const [slashDismissed, setSlashDismissed] = React.useState(false);
-  const [slashIndex, setSlashIndex] = React.useState(0);
 
   const baseProjectId = resolvedInitialProject?.id ?? "";
   const [projectOverride, setProjectOverride] = React.useState<{
@@ -109,40 +87,13 @@ export function SessionLauncher({
     projectOverride?.base === baseProjectId ? projectOverride.value : baseProjectId;
   const selectedProject = projects.find((p) => p.id === projectId) ?? projects[0] ?? null;
 
-  const initialEngine = selectedProject?.engine === "claude" ? "claude" : "antigravity";
-  const [engineOverride, setEngineOverride] = React.useState<{
-    projectId: string;
-    value: "antigravity" | "claude";
-  } | null>(null);
-  const engine: "antigravity" | "claude" =
-    engineOverride?.projectId === (selectedProject?.id ?? "")
-      ? engineOverride.value
-      : initialEngine;
-
   const [modelOverride, setModelOverride] = React.useState<{
     projectId: string;
     value: string;
   } | null>(null);
   const model =
-    modelOverride?.projectId === (selectedProject?.id ?? "")
-      ? modelOverride.value
-      : defaultModelForEngine(engine);
+    modelOverride?.projectId === (selectedProject?.id ?? "") ? modelOverride.value : DEFAULT_MODEL;
 
-  const [branchOverride, setBranchOverride] = React.useState<{
-    projectId: string;
-    value: string;
-  } | null>(null);
-  const branch =
-    branchOverride?.projectId === (selectedProject?.id ?? "")
-      ? branchOverride.value
-      : selectedProject?.defaultBranch || "main";
-
-  const setEngine = React.useCallback(
-    (next: "antigravity" | "claude") => {
-      setEngineOverride({ projectId: selectedProject?.id ?? "", value: next });
-    },
-    [selectedProject?.id],
-  );
   const setModel = React.useCallback(
     (next: string) => {
       setModelOverride({ projectId: selectedProject?.id ?? "", value: next });
@@ -150,14 +101,10 @@ export function SessionLauncher({
     [selectedProject?.id],
   );
 
-  const [useWorktree, setUseWorktree] = React.useState(resolvedInitialSkill.defaultWorktree);
   const [submitting, setSubmitting] = React.useState(false);
   const [addProjectOpen, setAddProjectOpen] = React.useState(false);
   const [noticeDismissed, setNoticeDismissed] = React.useState(false);
   const [daemonWarningHighlight, setDaemonWarningHighlight] = React.useState(false);
-
-  const activeSkill =
-    SESSION_SKILLS.find((s) => s.id === skillId) ?? SESSION_SKILLS[SESSION_SKILLS.length - 1];
 
   // Auto-focus prompt when jumped here from a project's "New Chat" button or skill shortcut
   React.useEffect(() => {
@@ -169,56 +116,17 @@ export function SessionLauncher({
     el.setSelectionRange(pos, pos);
   }, [initialSkill, initialProjectId]);
 
-  const slashSuggestions = React.useMemo(
-    () => (slashDismissed ? [] : getSlashSuggestions(prompt)),
-    [prompt, slashDismissed],
-  );
-  const effectiveSlashIndex =
-    slashSuggestions.length > 0 ? Math.min(slashIndex, slashSuggestions.length - 1) : 0;
-
-  function focusPromptEnd(nextText: string) {
-    requestAnimationFrame(() => {
-      const el = textareaRef.current;
-      if (!el) return;
-      el.focus();
-      el.setSelectionRange(nextText.length, nextText.length);
-    });
-  }
-
-  function handleSelectSkill(nextSkill: SessionSkillOption) {
-    setSkillId(nextSkill.id);
-    setUseWorktree(nextSkill.defaultWorktree);
-    setSlashDismissed(true);
-    setSlashIndex(0);
-    const nextPrompt = applySkillPrefixToPrompt(prompt, nextSkill);
-    setPrompt(nextPrompt);
-    focusPromptEnd(nextPrompt);
-  }
-
   function handlePromptChange(nextValue: string) {
     setPrompt(nextValue);
-    setSlashDismissed(false);
-    setSlashIndex(0);
-
-    const detected = detectSkillFromPrompt(nextValue);
-    if (detected) {
-      if (detected.skill.id !== skillId) {
-        setSkillId(detected.skill.id);
-        setUseWorktree(detected.skill.defaultWorktree);
-      }
-    } else if (!nextValue.trimStart().startsWith("/") && skillId !== "normal") {
-      setSkillId("normal");
-    }
   }
 
   function handleSelectProject(nextProject: SidebarData["projects"][number]) {
     setProjectOverride({ base: baseProjectId, value: nextProject.id });
-    const nextEngine = nextProject.engine === "claude" ? "claude" : "antigravity";
-    setEngineOverride({ projectId: nextProject.id, value: nextEngine });
-    setBranchOverride({ projectId: nextProject.id, value: nextProject.defaultBranch || "main" });
-    setModelOverride({ projectId: nextProject.id, value: defaultModelForEngine(nextEngine) });
+    setModelOverride({ projectId: nextProject.id, value: DEFAULT_MODEL });
     // Clear manual runner override so the newly selected project uses its own default daemon
     setRunnerOverride(null);
+    // Keep the URL (and so the sidebar's project view) in step with the chosen project.
+    router.replace(`/sessions?project=${encodeURIComponent(nextProject.id)}`, { scroll: false });
   }
 
   const onlineRunners = React.useMemo(
@@ -245,20 +153,7 @@ export function SessionLauncher({
       ? runners.find((r) => r.id === preferredRunnerId && r.status !== "online") ?? null
       : null;
   const usingSharedRunner = Boolean(onlineRunner && !onlineRunner.isOwn);
-  const supportedEngines = React.useMemo(() => {
-    const raw = onlineRunner?.engines || [];
-    const filtered = raw.filter(
-      (e): e is "antigravity" | "claude" => e === "antigravity" || e === "claude",
-    );
-    return filtered.length > 0 ? filtered : (["antigravity", "claude"] as const);
-  }, [onlineRunner]);
-  const effectiveEngine: "antigravity" | "claude" = supportedEngines.includes(engine)
-    ? engine
-    : supportedEngines[0];
-  const modelFamilies = React.useMemo(
-    () => buildModelFamilies(effectiveEngine, onlineRunner?.models),
-    [effectiveEngine, onlineRunner],
-  );
+  const modelFamilies = MODEL_FAMILIES;
   const activeSelection = (() => {
     for (const fam of modelFamilies) {
       const eff = fam.efforts.find((e) => e.value === model);
@@ -283,7 +178,7 @@ export function SessionLauncher({
         };
       }
     }
-    const fallback = findModelChoice(effectiveEngine, model);
+    const fallback = findModelChoice(model);
     return {
       value: fallback.value,
       label: fallback.label,
@@ -322,15 +217,7 @@ export function SessionLauncher({
   async function launchSession() {
     const trimmed = prompt.trim();
     if (!trimmed && attachments.length === 0) {
-      toast.error("Describe a task, attach a file/image, or type / to pick a skill first.");
-      return;
-    }
-
-    const detected = trimmed ? detectSkillFromPrompt(trimmed) : null;
-    const effectiveSkill = detected?.skill ?? activeSkill;
-    if (detected && !detected.body && effectiveSkill.id !== "factory-init" && attachments.length === 0) {
-      toast.error(`Describe what you want ${effectiveSkill.slash} to do after the command.`);
-      focusPromptEnd(prompt.endsWith(" ") ? prompt : `${prompt} `);
+      toast.error("Describe what you need, or attach a file or image.");
       return;
     }
 
@@ -352,22 +239,11 @@ export function SessionLauncher({
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
-          prompt: trimmed,
+          prompt: toBaPrompt(trimmed),
           attachments: attachments.length > 0 ? toAttachmentPayload(attachments) : undefined,
           projectId: selectedProject?.id,
           runnerId: onlineRunner?.id,
-          mode: effectiveSkill.mode,
-          skill: effectiveSkill.id,
-          autonomy: "medium",
-          engine: effectiveEngine,
           model: activeSelection.value,
-          branch,
-          useWorktree:
-            effectiveSkill.mode === "ba"
-              ? false
-              : usingSharedRunner
-                ? true
-                : useWorktree,
         }),
       });
       const data = (await res.json().catch(() => null)) as {
@@ -405,30 +281,6 @@ export function SessionLauncher({
 
   function handleKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>) {
     if (e.nativeEvent.isComposing || e.keyCode === 229) return;
-
-    if (slashSuggestions.length > 0) {
-      if (e.key === "ArrowDown") {
-        e.preventDefault();
-        setSlashIndex((i) => (i + 1) % slashSuggestions.length);
-        return;
-      }
-      if (e.key === "ArrowUp") {
-        e.preventDefault();
-        setSlashIndex((i) => (i - 1 + slashSuggestions.length) % slashSuggestions.length);
-        return;
-      }
-      if (e.key === "Tab" || (e.key === "Enter" && !e.shiftKey && !e.metaKey && !e.ctrlKey && !e.altKey)) {
-        e.preventDefault();
-        const chosen = slashSuggestions[effectiveSlashIndex];
-        if (chosen) handleSelectSkill(chosen);
-        return;
-      }
-      if (e.key === "Escape") {
-        e.preventDefault();
-        setSlashDismissed(true);
-        return;
-      }
-    }
 
     if (e.key === "Enter") {
       if (e.metaKey || e.ctrlKey) {
@@ -508,15 +360,16 @@ export function SessionLauncher({
           </div>
         )}
 
-        {/* BA Board Sync Context Strip when `/ba-ticket` is selected */}
-        {activeSkill.mode === "ba" && selectedProject && (
+        {/* The epic new-ba publishes appears on the project's Kanban board */}
+        {selectedProject && (
           <div className="flex w-full items-center justify-between gap-3 rounded-lg border bg-card px-3.5 py-2 text-xs">
             <div className="flex min-w-0 items-center gap-2">
               <SparklesIcon className="size-3.5 shrink-0 text-primary" />
               <span className="truncate text-muted-foreground">
-                Drafted tickets sync to{" "}
+                <span className="font-medium text-foreground">{BA_SKILL.slash}</span> publishes an epic of
+                ready tickets; it appears on the{" "}
                 <strong className="font-medium text-foreground">{selectedProject.name}</strong>{" "}
-                Kanban.
+                board.
               </span>
             </div>
             <Button
@@ -533,54 +386,6 @@ export function SessionLauncher({
 
         {/* Composer + Slash Command Autocomplete wrapper */}
         <div className="relative w-full">
-          {slashSuggestions.length > 0 && (
-            <div
-              role="listbox"
-              aria-label="Slash skills"
-              className="absolute right-0 bottom-full left-0 z-30 mb-1.5 overflow-hidden rounded-[4px] border bg-popover shadow-md"
-            >
-              <div className="flex items-center justify-between border-b bg-muted/40 px-3 py-1.5 font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
-                <span>Skills · Type /skill to auto-select</span>
-                <span>↑↓ · Tab / Enter</span>
-              </div>
-              <div className="flex max-h-64 flex-col overflow-y-auto p-1">
-                {slashSuggestions.map((item, idx) => {
-                  const highlighted = idx === effectiveSlashIndex;
-                  const active = item.id === activeSkill.id;
-                  return (
-                    <button
-                      key={item.id}
-                      type="button"
-                      role="option"
-                      aria-selected={highlighted}
-                      onMouseEnter={() => setSlashIndex(idx)}
-                      onMouseDown={(e) => {
-                        e.preventDefault();
-                        handleSelectSkill(item);
-                      }}
-                      className={`flex w-full items-center justify-between gap-3 rounded-[3px] px-2.5 py-2 text-left text-xs transition-colors ${
-                        highlighted ? "bg-accent text-accent-foreground" : "hover:bg-accent/50"
-                      }`}
-                    >
-                      <div className="flex min-w-0 flex-col gap-0.5">
-                        <div className="flex items-center gap-2">
-                          <span className="font-mono font-semibold text-primary">
-                            {item.slash}
-                          </span>
-                          <span className="font-medium text-foreground">{item.label}</span>
-                        </div>
-                        <span className="truncate text-[11px] text-muted-foreground">
-                          {item.description}
-                        </span>
-                      </div>
-                      {active && <CheckIcon className="size-3.5 shrink-0 text-primary" />}
-                    </button>
-                  );
-                })}
-              </div>
-            </div>
-          )}
-
           {/* Clean bordered composer card (supports file picker, Cmd+V image paste, and drag-and-drop) */}
           <InputGroup
             onDragOver={(e) => {
@@ -623,11 +428,7 @@ export function SessionLauncher({
               onKeyDown={handleKeyDown}
               onPaste={handlePaste}
               rows={3}
-              placeholder={
-                activeSkill.mode === "ba"
-                  ? "/ba-ticket Describe a feature to break into tickets (or paste/drop images & specs)..."
-                  : "Describe a task, type / for skills, or paste/drop images & files..."
-              }
+              placeholder="Describe a feature or a change — the BA asks what it needs and writes the tickets (paste or drop images & files)…"
               className="min-h-24 px-4 pt-3.5 text-sm"
             />
 
@@ -652,54 +453,17 @@ export function SessionLauncher({
                   <PlusIcon />
                 </InputGroupButton>
 
-                {/* Skill / Slash Command selector — syncs 2-way with `/skill` in prompt */}
-                <DropdownMenu>
-                  <DropdownMenuTrigger
-                    render={
-                      <Button type="button" variant="ghost" size="sm">
-                        <SparklesIcon data-icon="inline-start" />
-                        <span>{activeSkill.label}</span>
-                        {activeSkill.slash && (
-                          <span className="font-mono text-[11px] text-primary">
-                            {activeSkill.slash}
-                          </span>
-                        )}
-                        <ChevronDownIcon data-icon="inline-end" />
-                      </Button>
-                    }
-                  />
-                  <DropdownMenuContent align="start" className="w-80">
-                    <DropdownMenuGroup>
-                      <DropdownMenuLabel>Skill / Execution Mode</DropdownMenuLabel>
-                      {SESSION_SKILLS.map((s) => (
-                        <DropdownMenuItem
-                          key={s.id}
-                          onClick={() => handleSelectSkill(s)}
-                          className="justify-between gap-2"
-                        >
-                          <div className="flex min-w-0 flex-col gap-0.5">
-                            <div className="flex items-center gap-1.5">
-                              <span className="font-medium">{s.label}</span>
-                              {s.slash && (
-                                <span className="font-mono text-[11px] text-primary">
-                                  {s.slash}
-                                </span>
-                              )}
-                            </div>
-                            <span className="truncate text-[11px] text-muted-foreground">
-                              {s.description}
-                            </span>
-                          </div>
-                          {activeSkill.id === s.id && <CheckIcon className="size-3.5 shrink-0" />}
-                        </DropdownMenuItem>
-                      ))}
-                    </DropdownMenuGroup>
-                  </DropdownMenuContent>
-                </DropdownMenu>
+                <span
+                  className="inline-flex h-7 items-center gap-1.5 rounded-md border bg-muted/50 px-2 text-xs font-medium text-foreground"
+                  title={BA_SKILL.description}
+                >
+                  <SparklesIcon className="size-3.5 text-primary" />
+                  {BA_SKILL.slash}
+                </span>
               </div>
 
               <div className="flex items-center gap-1.5">
-                {/* Gemini-style 2-level Model -> Thinking effort selector */}
+                {/* 2-level Model -> Thinking effort selector */}
                 <DropdownMenu>
                   <DropdownMenuTrigger
                     render={
@@ -737,7 +501,7 @@ export function SessionLauncher({
                                   {family.label}
                                 </span>
                                 {family.badge && (
-                                  <span className="shrink-0 rounded-full bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">
+                                  <span className="shrink-0 rounded-full bg-muted px-1.5 py-0.5 text-2xs text-muted-foreground">
                                     {family.badge}
                                   </span>
                                 )}
@@ -765,7 +529,7 @@ export function SessionLauncher({
                                   </span>
                                 )}
                                 {family.badge && (
-                                  <span className="shrink-0 rounded-full bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">
+                                  <span className="shrink-0 rounded-full bg-muted px-1.5 py-0.5 text-2xs text-muted-foreground">
                                     {family.badge}
                                   </span>
                                 )}
@@ -853,12 +617,12 @@ export function SessionLauncher({
                       </span>
                       {onlineRunner &&
                         selectedProject?.defaultRunnerId === onlineRunner.id && (
-                          <Badge variant="outline" className="h-4 px-1 text-[10px]">
+                          <Badge variant="outline" className="h-4 px-1 text-2xs">
                             default
                           </Badge>
                         )}
                       {usingSharedRunner && (
-                        <Badge variant="secondary" className="h-4 px-1 text-[10px]">
+                        <Badge variant="secondary" className="h-4 px-1 text-2xs">
                           shared
                         </Badge>
                       )}
@@ -889,12 +653,12 @@ export function SessionLauncher({
                             <StatusDot status={r.status} />
                             <span className="truncate font-mono text-xs">{r.name}</span>
                             {isProjectDefault && (
-                              <Badge variant="secondary" className="h-4 px-1 text-[10px]">
+                              <Badge variant="secondary" className="h-4 px-1 text-2xs">
                                 default
                               </Badge>
                             )}
                             {!r.isOwn && (
-                              <Badge variant="outline" className="h-4 px-1 text-[10px]">
+                              <Badge variant="outline" className="h-4 px-1 text-2xs">
                                 @{r.ownerLogin}
                               </Badge>
                             )}
@@ -939,7 +703,7 @@ export function SessionLauncher({
                         <span className="flex items-center gap-1.5">
                           <span>{p.name}</span>
                           {!p.isOwner && (
-                            <Badge variant="outline" className="h-4 px-1 text-[10px]">
+                            <Badge variant="outline" className="h-4 px-1 text-2xs">
                               @{p.ownerLogin}
                             </Badge>
                           )}
@@ -963,80 +727,6 @@ export function SessionLauncher({
             )}
           </div>
 
-          <div className="flex flex-wrap items-center gap-2.5">
-            {supportedEngines.length > 1 ? (
-              <DropdownMenu>
-                <DropdownMenuTrigger
-                  render={
-                    <Button type="button" variant="ghost" size="xs">
-                      <CpuIcon data-icon="inline-start" />
-                      <span>{effectiveEngine === "claude" ? "Claude" : "Antigravity"}</span>
-                      <ChevronDownIcon data-icon="inline-end" />
-                    </Button>
-                  }
-                />
-                <DropdownMenuContent align="end">
-                  <DropdownMenuGroup>
-                    <DropdownMenuItem
-                      onClick={() => {
-                        setEngine("antigravity");
-                        setModel(defaultModelForEngine("antigravity"));
-                      }}
-                    >
-                      <span className="flex-1">Antigravity (agy)</span>
-                      {effectiveEngine === "antigravity" && <CheckIcon className="size-3.5" />}
-                    </DropdownMenuItem>
-                    <DropdownMenuItem
-                      onClick={() => {
-                        setEngine("claude");
-                        setModel(defaultModelForEngine("claude"));
-                      }}
-                    >
-                      <span className="flex-1">Claude Code (claude)</span>
-                      {effectiveEngine === "claude" && <CheckIcon className="size-3.5" />}
-                    </DropdownMenuItem>
-                  </DropdownMenuGroup>
-                </DropdownMenuContent>
-              </DropdownMenu>
-            ) : (
-              <span
-                className="inline-flex items-center gap-1 px-1 text-xs text-muted-foreground"
-                title="Only one CLI engine is installed on this runner"
-              >
-                <CpuIcon className="size-3.5" />
-                <span>{supportedEngines[0] === "claude" ? "Claude" : "Antigravity"}</span>
-              </span>
-            )}
-
-            <span className="inline-flex items-center gap-1 font-mono">
-              <GitBranchIcon className="size-3.5" />
-              {branch}
-            </span>
-
-            <label
-              className="flex cursor-pointer items-center gap-1.5 select-none"
-              title={
-                activeSkill.mode === "ba"
-                  ? "BA Planning reads the workspace directly"
-                  : usingSharedRunner
-                    ? "Isolated worktree is enforced on shared runners"
-                    : "Run in an isolated git branch & folder (.agents/worktrees) without modifying your main workspace"
-              }
-            >
-              <Checkbox
-                checked={
-                  activeSkill.mode === "ba"
-                    ? false
-                    : usingSharedRunner
-                      ? true
-                      : useWorktree
-                }
-                disabled={activeSkill.mode === "ba" || usingSharedRunner}
-                onCheckedChange={(checked) => setUseWorktree(checked === true)}
-              />
-              <span>Worktree</span>
-            </label>
-          </div>
         </div>
       </div>
 

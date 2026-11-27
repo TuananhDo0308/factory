@@ -180,7 +180,8 @@ export function QuestionSelectorDock({
   }
 
   async function handleSubmit() {
-    if (busy || answeredCount === 0) return;
+    // Every question must be answered before the reply goes out.
+    if (busy || !allAnswered) return;
     const formatted = formatQuestionAnswers(questions, answers);
     if (!formatted) return;
     await onSubmit(formatted);
@@ -222,7 +223,7 @@ export function QuestionSelectorDock({
       className="border-t bg-muted/25 px-5 py-2.5"
       onKeyDown={handleContainerKeyDown}
     >
-      <div className="mx-auto w-full max-w-3xl">
+      <div className="mx-auto w-full max-w-5xl">
         <div className="overflow-hidden rounded-lg border bg-card">
           {/* Top Stepper / Tabs Header */}
           <div className="flex items-center justify-between gap-2 border-b bg-muted/30 px-3 py-2">
@@ -269,7 +270,7 @@ export function QuestionSelectorDock({
                       ) : (
                         <span
                           className={cn(
-                            "inline-flex size-4 items-center justify-center rounded-full font-mono text-[10px]",
+                            "inline-flex size-4 items-center justify-center rounded-full font-mono text-2xs",
                             isActive
                               ? "bg-primary text-primary-foreground"
                               : "bg-muted text-muted-foreground",
@@ -286,7 +287,7 @@ export function QuestionSelectorDock({
             </div>
 
             <div className="flex shrink-0 items-center gap-2">
-              <span className="font-mono text-[11px] text-muted-foreground tabular-nums">
+              <span className="font-mono text-xs text-muted-foreground tabular-nums">
                 {answeredCount}/{questions.length}
               </span>
               {collapsed && answeredCount === 0 && allHaveRecommended && (
@@ -372,7 +373,7 @@ export function QuestionSelectorDock({
 
                         <div className="flex min-w-0 flex-1 flex-col gap-0.5">
                           <div className="flex flex-wrap items-center gap-1.5">
-                            <span className="text-[13px] font-medium leading-snug text-foreground">
+                            <span className="text-sm font-medium leading-snug text-foreground">
                               {opt.label}
                             </span>
                             {opt.recommended && <Badge variant="secondary">Recommended</Badge>}
@@ -385,7 +386,7 @@ export function QuestionSelectorDock({
                         </div>
 
                         {oIdx < 9 && (
-                          <span className="mt-0.5 hidden shrink-0 font-mono text-[10px] text-muted-foreground/60 sm:inline">
+                          <span className="mt-0.5 hidden shrink-0 font-mono text-2xs text-muted-foreground/60 sm:inline">
                             {oIdx + 1}
                           </span>
                         )}
@@ -435,7 +436,7 @@ export function QuestionSelectorDock({
                         onKeyDown={(e) => {
                           if (e.key === "Enter" && !e.shiftKey) {
                             e.preventDefault();
-                            if (!goToNextUnanswered(safeIdx) && answeredCount > 0) {
+                            if (!goToNextUnanswered(safeIdx) && allAnswered) {
                               void handleSubmit();
                             }
                           }
@@ -500,23 +501,33 @@ export function QuestionSelectorDock({
                   )}
                 </div>
 
-                <Button
-                  type="button"
-                  size="sm"
-                  disabled={busy || answeredCount === 0}
-                  onClick={() => void handleSubmit()}
-                >
-                  {busy ? (
-                    <Spinner data-icon="inline-start" />
-                  ) : (
-                    <ArrowUpIcon data-icon="inline-start" />
+                <div className="flex items-center gap-2.5">
+                  {!allAnswered && questions.length > 1 && (
+                    <span className="text-xs text-muted-foreground">
+                      {unansweredQuestions.length === 1
+                        ? "1 question left"
+                        : `${unansweredQuestions.length} questions left`}
+                    </span>
                   )}
-                  {questions.length === 1
-                    ? "Send answer"
-                    : allAnswered
-                      ? "Submit answers"
-                      : `Submit (${answeredCount}/${questions.length})`}
-                </Button>
+                  <Button
+                    type="button"
+                    size="sm"
+                    disabled={busy || !allAnswered}
+                    title={allAnswered ? undefined : "Answer every question to submit"}
+                    onClick={() => void handleSubmit()}
+                  >
+                    {busy ? (
+                      <Spinner data-icon="inline-start" />
+                    ) : (
+                      <ArrowUpIcon data-icon="inline-start" />
+                    )}
+                    {questions.length === 1
+                      ? "Send answer"
+                      : allAnswered
+                        ? "Submit answers"
+                        : `Submit (${answeredCount}/${questions.length})`}
+                  </Button>
+                </div>
               </div>
             </>
           )}
@@ -568,7 +579,7 @@ export function AskedQuestionsSummary({
                       <span
                         key={opt.id}
                         className={cn(
-                          "rounded border px-2 py-0.5 text-[11px]",
+                          "rounded border px-2 py-0.5 text-xs",
                           opt.recommended
                             ? "border-primary/40 bg-primary/10 text-foreground"
                             : "bg-background text-muted-foreground",

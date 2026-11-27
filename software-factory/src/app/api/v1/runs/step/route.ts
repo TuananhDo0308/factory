@@ -1,7 +1,10 @@
 import { type NextRequest, NextResponse } from "next/server";
 import { authenticateRequest, resolveUserProject } from "@/lib/api-auth";
+import { mapTicketStatus, ticketIssueKey } from "@/lib/epics";
 import { emitFactoryEvent } from "@/lib/events";
 import { prisma } from "@/lib/prisma";
+import { applyHtmlToolCall, readPrototypeToolCall } from "@/lib/prototype-capture";
+import { upsertProjectPrototype } from "@/lib/prototype-server";
 
 const VALID_STEP_STATUSES = new Set([
   "started",
@@ -105,19 +108,64 @@ export async function POST(request: NextRequest) {
     }
   }
 
-  const FACTORY_PHASES = new Set([
-    "Spec",
-    "Build",
-    "Check",
-    "Review",
-    "QC",
-    "Repair",
-    "Verdict",
-    "BA Planning",
-    "Clarify",
-    "Refine",
-    "Judge",
-  ]);
+  // A new-ba run drawing its prototype or a design direction: keep the latest HTML as a
+  // ProjectPrototype of the run, and store the step without the (large) file content.
+  const prototypeCall = readPrototypeToolCall(body.data);
+  if (prototypeCall) {
+    const { target } = prototypeCall;
+    let captured: { id: string; slug: string; version: number } | null = null;
+    const runRow = await prisma.factoryRun.findUnique({
+      where: { projectId_runKey: { projectId: project.id, runKey } },
+      select: { id: true },
+    });
+    const replayed =
+      runRow && idempotent && !upsert
+        ? await prisma.runStep.findFirst({
+            where: { runId: runRow.id, step: stepName.slice(0, 80) },
+            select: { id: true },
+          })
+        : null;
+    if (runRow && !replayed) {
+      const existing = await prisma.projectPrototype.findUnique({
+        where: { projectId_slug: { projectId: project.id, slug: target.slug } },
+        select: { htmlContent: true },
+      });
+      const html = applyHtmlToolCall(
+        existing?.htmlContent ?? null,
+        prototypeCall.tool,
+        prototypeCall.input,
+      );
+      if (html?.trim()) {
+        const saved = await upsertProjectPrototype({
+          projectId: project.id,
+          userId: auth.user.id,
+          runId: runRow.id,
+          slug: target.slug,
+          title: target.title,
+          kind: target.kind === "prototype" ? "whole_flow" : "first_screen",
+          binding: target.kind === "prototype" ? "flow" : "look",
+          htmlContent: html,
+          localPath: prototypeCall.filePath,
+        }).catch(() => null);
+        if (saved) captured = { id: saved.id, slug: saved.slug, version: saved.version };
+      }
+    }
+    dataJson = JSON.stringify({
+      kind: "tool_call",
+      tool: prototypeCall.tool,
+      input: { file_path: prototypeCall.filePath },
+      prototype: {
+        kind: target.kind,
+        batch: target.batch,
+        slug: captured?.slug ?? target.slug,
+        title: target.title,
+        ...(captured ? { id: captured.id, version: captured.version } : {}),
+      },
+    });
+  }
+
+  // Run-level phases: an agent's step in one of these moves the run's phase (factory v2).
+  const FACTORY_PHASES = new Set(["BA", "Plan", "Prepare", "Build", "Final", "Report"]);
 
   const result = await prisma.$transaction(async (tx) => {
     const run = await tx.factoryRun.findUnique({
@@ -315,8 +363,13 @@ export async function POST(request: NextRequest) {
       run.status === "blocked" ||
       run.status === "cancelled" ||
       Boolean(run.finishedAt);
-    const nextRunStatus =
-      isTerminalRun ? run.status : status === "blocked" ? "blocked" : "running";
+    // A ticket or alarm step reports one ticket; a blocked ticket does not block the epic run.
+    const isTicketReport = dataKind === "ticket" || dataKind === "alarm";
+    const nextRunStatus = isTerminalRun
+      ? run.status
+      : status === "blocked" && !isTicketReport
+        ? "blocked"
+        : "running";
     const shouldUpdatePhase = !isSubagent || FACTORY_PHASES.has(phase);
     const shouldUpdateRunSummary =
       !isSubagent &&
@@ -359,7 +412,36 @@ export async function POST(request: NextRequest) {
         .catch(() => {});
     }
 
-    return { notFound: false as const, step: createdStep, run: updatedRun, skipped: false };
+    // `ticket` steps of an epic run move the ticket on the board.
+    let ticketUpdate: { issueId: string; status: string } | null = null;
+    if (dataKind === "ticket" && run.mode === "epic") {
+      const data = body.data as Record<string, unknown>;
+      const issue = Number(data.issue);
+      if (Number.isInteger(issue) && issue > 0) {
+        const rounds = Number(data.rounds);
+        const row = await tx.projectIssue
+          .update({
+            where: { projectId_issueKey: { projectId: project.id, issueKey: ticketIssueKey(issue) } },
+            data: {
+              ...(typeof data.status === "string" && data.status ? { status: mapTicketStatus(data.status) } : {}),
+              ...(Number.isInteger(rounds) ? { rounds } : {}),
+              currentPhase: phase.slice(0, 60),
+              runKey: run.runKey,
+            },
+            select: { id: true, status: true },
+          })
+          .catch(() => null);
+        if (row) ticketUpdate = { issueId: row.id, status: row.status };
+      }
+    }
+
+    return {
+      notFound: false as const,
+      step: createdStep,
+      run: updatedRun,
+      skipped: false,
+      ticketUpdate,
+    };
   });
 
   if (result.notFound) {
@@ -383,6 +465,16 @@ export async function POST(request: NextRequest) {
         status: result.run.status,
       },
       step: { id: result.step.id, seq: result.step.seq },
+    });
+  }
+
+  if (result.ticketUpdate) {
+    emitFactoryEvent({
+      type: "issue:updated",
+      userId: auth.user.id,
+      projectId: project.id,
+      runId: result.run.id,
+      payload: result.ticketUpdate,
     });
   }
 

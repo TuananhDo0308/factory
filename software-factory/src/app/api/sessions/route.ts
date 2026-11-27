@@ -4,34 +4,12 @@ import {
   validateIncomingAttachments,
   type StoredAttachmentRef,
 } from "@/lib/attachments";
-import {
-  buildIssueFactoryPrompt,
-  getProjectAutoApprove,
-  isUnattendedFactoryMode,
-} from "@/lib/auto-dispatch";
+import { newRunKey, pickOnlineRunner } from "@/lib/dispatch";
 import { emitFactoryEvent } from "@/lib/events";
-import { syncProjectInitStatus } from "@/lib/init-issue";
-import { defaultModelForEngine } from "@/lib/models";
+import { DEFAULT_MODEL, findModelChoice } from "@/lib/models";
 import { prisma } from "@/lib/prisma";
-import { detectSkillFromPrompt } from "@/lib/skills";
-import {
-  accessibleProjectsWhere,
-  getAccessibleRunners,
-  getProjectAccess,
-} from "@/lib/team-access";
-import { safeJsonParse } from "@/lib/workspace-data";
-
-const VALID_MODES = new Set([
-  "ba",
-  "init",
-  "normal",
-  "clarify",
-  "factory",
-  "mission",
-  "ui-refine",
-  "pr-judge",
-]);
-const VALID_AUTONOMIES = new Set(["off", "low", "medium", "high"]);
+import { detectSkillFromPrompt, toBaPrompt } from "@/lib/skills";
+import { accessibleProjectsWhere, getProjectAccess } from "@/lib/team-access";
 
 function str(v: unknown): string {
   return typeof v === "string" ? v.trim() : "";
@@ -72,9 +50,11 @@ export async function GET(request: NextRequest) {
       currentPhase: r.currentPhase,
       model: r.model,
       risk: r.risk,
+      epicNumber: r.epicNumber,
       costUsd: r.costUsd,
       inputTokens: r.inputTokens,
       outputTokens: r.outputTokens,
+      cacheReadTokens: r.cacheReadTokens,
       durationMs: r.durationMs,
       project: r.project,
       agentCount: r.agents.length,
@@ -86,6 +66,10 @@ export async function GET(request: NextRequest) {
   });
 }
 
+/**
+ * Starts a BA session: `/new-ba <request>` in the project's local clone, on the project's daemon.
+ * Epic runs start from the Kanban board (`POST /api/projects/[id]/epics/[number]/run`).
+ */
 export async function POST(request: NextRequest) {
   const auth = await authenticateRequest(request);
   if (!auth) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
@@ -105,23 +89,22 @@ export async function POST(request: NextRequest) {
   if (attachmentError) {
     return NextResponse.json({ error: attachmentError }, { status: 400 });
   }
-  const prompt =
-    rawPrompt ||
+  const typed = detectSkillFromPrompt(rawPrompt)?.body.trim() ?? rawPrompt;
+  const requestText =
+    typed ||
     (validatedAttachments.length > 0
-      ? `Analyze the attached file${validatedAttachments.length === 1 ? "" : "s"} (${validatedAttachments.map((a) => a.name).join(", ")}).`
+      ? `Use the attached file${validatedAttachments.length === 1 ? "" : "s"} (${validatedAttachments.map((a) => a.name).join(", ")}).`
       : "");
-  if (!prompt && !explicitTitle) {
+  if (!requestText && !explicitTitle) {
     return NextResponse.json({ error: "Prompt, title, or attachment is required" }, { status: 400 });
   }
+  const prompt = toBaPrompt(requestText || explicitTitle);
 
-  let projectId = str(body.projectId);
+  const projectId = str(body.projectId);
   let project = null as Awaited<ReturnType<typeof prisma.project.findFirst>>;
-
   if (projectId) {
     const access = await getProjectAccess(auth.user, projectId);
-    if (!access) {
-      return NextResponse.json({ error: "Project not found" }, { status: 404 });
-    }
+    if (!access) return NextResponse.json({ error: "Project not found" }, { status: 404 });
     if (!access.canWrite) {
       return NextResponse.json(
         { error: "Viewer role cannot launch sessions on this project" },
@@ -144,203 +127,24 @@ export async function POST(request: NextRequest) {
       }
     }
   }
-
   if (!project) {
-    // Create a default workspace project on-the-fly if none exists yet.
-    project = await prisma.project.create({
-      data: {
-        userId: auth.user.id,
-        name: "Default Workspace",
-        slug: "default-workspace",
-        source: "local",
-        engine: str(body.engine) === "claude" ? "claude" : "antigravity",
-        defaultBranch: "main",
-      },
-    });
-  }
-  projectId = project.id;
-
-  const detectedSkill = detectSkillFromPrompt(prompt);
-  const modeRaw = detectedSkill?.skill.mode || str(body.mode) || "factory";
-  const mode = VALID_MODES.has(modeRaw) ? modeRaw : "factory";
-  const autonomyRaw = isUnattendedFactoryMode(mode) ? "high" : str(body.autonomy) || "high";
-  const autonomy = VALID_AUTONOMIES.has(autonomyRaw) ? autonomyRaw : "high";
-  const requestedEngine = str(body.engine);
-  const engine =
-    requestedEngine === "claude" || requestedEngine === "antigravity"
-      ? requestedEngine
-      : project.engine || "antigravity";
-  const model = str(body.model) || defaultModelForEngine(engine);
-  const targetBranch = str(body.branch) || project.defaultBranch || "main";
-  const requestedWorktree = body.useWorktree !== false;
-  const issueId = str(body.issueId) || null;
-  const missionId = str(body.missionId) || null;
-  const requestedRunnerId = str(body.runnerId) || null;
-
-  // Load linked issue if provided (also enforces lock & pre-populates criteria + Factory prompt)
-  let linkedIssue: Awaited<ReturnType<typeof prisma.projectIssue.findFirst>> = null;
-  if (issueId) {
-    linkedIssue = await prisma.projectIssue.findFirst({
-      where: { id: issueId, projectId },
-    });
-    const activeIssueRun = await prisma.factoryRun.findFirst({
-      where: {
-        projectId,
-        issueId,
-        status: { in: ["running", "queued", "awaiting_input"] },
-      },
-      include: {
-        triggeredBy: { select: { githubLogin: true } },
-        user: { select: { githubLogin: true } },
-      },
-    });
-    if (activeIssueRun) {
-      const who =
-        activeIssueRun.triggeredBy?.githubLogin || activeIssueRun.user?.githubLogin || "another member";
-      return NextResponse.json(
-        {
-          error: `Issue is already being executed by @${who}. Watch live instead.`,
-          activeRunId: activeIssueRun.id,
-        },
-        { status: 409 },
-      );
-    }
+    return NextResponse.json(
+      { error: "Create or connect a project first: a BA session runs in the project's local clone." },
+      { status: 400 },
+    );
   }
 
-  const titleBase =
-    explicitTitle ||
-    (detectedSkill?.body
-      ? detectedSkill.skill.mode === "ba"
-        ? `BA: ${detectedSkill.body.split(/\r?\n/)[0]}`
-        : detectedSkill.body.split(/\r?\n/)[0]
-      : prompt.split(/\r?\n/)[0]) ||
-    "New Session";
-  const title = titleBase.slice(0, 140);
-  const runKey = linkedIssue
-    ? `${new Date().toISOString().slice(0, 10)}-${linkedIssue.issueKey.toLowerCase().replace(/[^a-z0-9]+/g, "")}-${Math.random().toString(36).slice(2, 6)}`
-    : `${new Date().toISOString().slice(0, 10)}-${Math.random().toString(36).slice(2, 8)}`;
-  const autoApprove =
-    mode === "factory" ? await getProjectAutoApprove(projectId) : false;
-  if (linkedIssue && mode === "factory") {
-    const initComplete = await syncProjectInitStatus(project);
-    if (!initComplete) {
-      return NextResponse.json(
-        {
-          error:
-            "Project has not completed /factory init yet. Run Factory Init before starting unattended Factory builds.",
-          code: "INIT_REQUIRED",
-        },
-        { status: 412 },
-      );
-    }
-    if (linkedIssue.status === "backlog" || linkedIssue.status === "needs_human") {
-      return NextResponse.json(
-        {
-          error: `Ticket ${linkedIssue.issueKey} must be clarified and approved to Ready before starting Factory build.`,
-          code: "CLARIFY_REQUIRED",
-        },
-        { status: 412 },
-      );
-    }
-  }
-  const effectivePrompt =
-    linkedIssue && mode === "factory"
-      ? buildIssueFactoryPrompt(linkedIssue, runKey, { autoApprove, targetBranch })
-      : prompt || title;
+  const model = findModelChoice(str(body.model) || DEFAULT_MODEL).value;
+  const title = (explicitTitle || `BA: ${(requestText || "New request").split(/\r?\n/)[0]}`).slice(0, 140);
+  const runKey = newRunKey("ba");
 
-  // For quick `normal` chat sessions, attach a compact project snapshot (issues + recent runs)
-  // in `contextNote` (kept out of the UI prompt) so the AI answers immediately without running
-  // sqlite3 against dev.db, and knows to use the `software-factory` MCP tools for fresh details.
-  let contextNote: string | undefined;
-  if (mode === "normal" && !linkedIssue) {
-    const [projectIssues, recentRuns] = await Promise.all([
-      prisma.projectIssue.findMany({
-        where: { projectId },
-        orderBy: [{ priority: "asc" }, { createdAt: "asc" }],
-        take: 40,
-        select: {
-          issueKey: true,
-          status: true,
-          priority: true,
-          tier: true,
-          title: true,
-          goal: true,
-        },
-      }),
-      prisma.factoryRun.findMany({
-        where: { projectId },
-        orderBy: { updatedAt: "desc" },
-        take: 8,
-        select: {
-          runKey: true,
-          mode: true,
-          status: true,
-          currentPhase: true,
-          title: true,
-        },
-      }),
-    ]);
-    const ctxLines: string[] = [
-      `[Software Factory Project Context]`,
-      `Project: ${project.name} (slug: "${project.slug}", branch: "${targetBranch}"${project.localPath ? `, path: ${project.localPath}` : ""})`,
-      `To inspect live issues (including full body & criteria), runs, inbox, or lessons, ALWAYS use the \`software-factory\` MCP tools (\`sf_list_issues\`, \`sf_list_runs\`, \`sf_workspace_summary\`, \`sf_get_inbox\`, \`sf_get_lessons\`) or \`sf issues list --project ${project.slug} --json\`. NEVER open or query \`dev.db\` with \`sqlite3\`.`,
-      `This chat runs headless over Software Factory (do NOT call interactive-only \`ask_question\` / \`AskUserQuestion\`). Whenever you need to ask the user multiple-choice questions, end your reply with a fenced \`\`\`sf-questions JSON block ({ "questions": [{ "id": "Q1", "header": "Topic", "question": "...", "multiSelect": false, "options": [{ "label": "...", "description": "...", "recommended": true }], "allowOther": true }] }) so the UI renders clickable options.`,
-    ];
-    if (projectIssues.length > 0) {
-      ctxLines.push("Current Kanban issues:");
-      for (const iss of projectIssues) {
-        const goalShort = iss.goal && iss.goal !== iss.title ? ` — ${iss.goal.slice(0, 110)}` : "";
-        ctxLines.push(`- ${iss.issueKey} [${iss.status}] (${iss.priority}/${iss.tier}) ${iss.title}${goalShort}`);
-      }
-    } else {
-      ctxLines.push("Current Kanban issues: (none yet)");
-    }
-    if (recentRuns.length > 0) {
-      ctxLines.push("Recent Factory runs:");
-      for (const r of recentRuns) {
-        ctxLines.push(`- ${r.runKey} [${r.status}/${r.currentPhase}] (${r.mode}) ${r.title}`);
-      }
-    }
-    contextNote = ctxLines.join("\n");
-  }
-  const initialCriteriaJson = linkedIssue
-    ? (() => {
-        const list = safeJsonParse<Array<{ id: string; text: string }>>(linkedIssue.criteriaJson, []);
-        return list.length > 0
-          ? JSON.stringify(list.map((c) => ({ id: c.id, text: c.text, status: "" })))
-          : null;
-      })()
-    : null;
-
-  // Runner Selection: prefer explicit runnerId (if accessible & online), then own online runner,
-  // then an online shared team runner on this project!
-  const cutoffMs = Date.now() - 65_000;
-  const candidateRunners = (
-    await getAccessibleRunners(auth.user.id, {
-      projectId,
-      githubLogin: auth.user.githubLogin,
-    })
-  ).filter((r) => r.status === "online" && r.lastHeartbeatAt.getTime() > cutoffMs);
-
-  let onlineRunner = requestedRunnerId
-    ? candidateRunners.find((r) => r.id === requestedRunnerId) ?? null
-    : null;
-  if (!onlineRunner && project.defaultRunnerId) {
-    onlineRunner = candidateRunners.find((r) => r.id === project.defaultRunnerId) ?? null;
-  }
-  if (!onlineRunner) {
-    const ownOnline = candidateRunners
-      .filter((r) => r.userId === auth.user.id)
-      .sort((a, b) => a.activeRuns - b.activeRuns);
-    const sharedOnline = candidateRunners
-      .filter((r) => r.userId !== auth.user.id && r.visibility === "team")
-      .sort((a, b) => a.activeRuns - b.activeRuns);
-    onlineRunner = ownOnline[0] ?? sharedOnline[0] ?? null;
-  }
-
-  // Safety guardrail: require an online daemon unless the caller explicitly opts into offline queuing.
-  const allowOfflineQueue = body.allowOfflineQueue === true;
-  if (!onlineRunner && !allowOfflineQueue) {
+  const onlineRunner = await pickOnlineRunner({
+    user: auth.user,
+    projectId: project.id,
+    requestedRunnerId: str(body.runnerId) || null,
+    projectDefaultRunnerId: project.defaultRunnerId,
+  });
+  if (!onlineRunner && body.allowOfflineQueue !== true) {
     return NextResponse.json(
       {
         error:
@@ -350,49 +154,27 @@ export async function POST(request: NextRequest) {
       { status: 503 },
     );
   }
-
-  // Safety guardrail: always enforce isolated git worktree when dispatching onto a teammate's shared daemon!
-  const isSharedDispatch = Boolean(onlineRunner && onlineRunner.userId !== auth.user.id);
-  const useWorktree =
-    mode === "ba" || mode === "init" ? false : isSharedDispatch ? true : requestedWorktree;
-
-  const initialStatus = "queued";
-  const initialPhase =
-    mode === "ba"
-      ? "BA Planning"
-      : mode === "init"
-        ? "Factory Init"
-        : mode === "clarify"
-          ? "Clarify"
-          : mode === "ui-refine"
-            ? "Refine"
-            : mode === "pr-judge"
-              ? "Judge"
-              : "Spec";
+  const phase = "BA";
+  const projectRef = project;
 
   const created = await prisma.$transaction(async (tx) => {
     const run = await tx.factoryRun.create({
       data: {
-        projectId,
-        userId: project.userId,
+        projectId: projectRef.id,
+        userId: projectRef.userId,
         triggeredById: auth.user.id,
-        issueId,
-        missionId,
         runnerMachineId: onlineRunner?.id ?? null,
         runKey,
         title,
-        prompt: effectivePrompt,
-        mode,
-        autonomy,
-        engine,
-        status: initialStatus,
-        currentPhase: initialPhase,
-        targetBranch,
-        worktreePath: useWorktree
-          ? `.agents/worktrees/${mode}-${runKey}`
-          : project.localPath,
+        prompt,
+        mode: "ba",
+        autonomy: "medium",
+        engine: "claude",
+        status: "queued",
+        currentPhase: phase,
+        targetBranch: projectRef.defaultBranch || "main",
+        worktreePath: projectRef.localPath,
         model,
-        criteriaJson: initialCriteriaJson,
         lastHeartbeatAt: new Date(),
       },
     });
@@ -401,19 +183,14 @@ export async function POST(request: NextRequest) {
       data: {
         runId: run.id,
         agentKey: "orchestrator",
-        name:
-          mode === "ba"
-            ? "BA Ticket Planner"
-            : mode === "mission"
-              ? "Mission Orchestrator"
-              : "Session Orchestrator",
+        name: "BA",
         role: "orchestrator",
         level: 0,
         model,
         status: onlineRunner ? "working" : "waiting_on_you",
         activity: onlineRunner
-          ? `Dispatched to ${isSharedDispatch ? "shared " : ""}runner "${onlineRunner.name}" (${engine})`
-          : "Waiting for local `sf daemon` or CLI session attachment",
+          ? `Dispatched to runner "${onlineRunner.name}"`
+          : "Waiting for a local `sf daemon`",
       },
     });
 
@@ -446,12 +223,12 @@ export async function POST(request: NextRequest) {
         runAgentId: orch.id,
         seq: 1,
         step: "session-created",
-        phase: initialPhase,
+        phase,
         status: "started",
         role: "orchestrator",
         model,
-        label: `${mode} · ${engine} · autonomy:${autonomy}`,
-        summary: (prompt || title).slice(0, 500),
+        label: "BA session",
+        summary: prompt.slice(0, 500),
         dataJson:
           storedAttachments.length > 0
             ? JSON.stringify({ kind: "session_created", attachments: storedAttachments })
@@ -459,50 +236,23 @@ export async function POST(request: NextRequest) {
       },
     });
 
-    if (issueId) {
-      await tx.projectIssue
-        .update({
-          where: { id: issueId },
-          data: { status: "in_progress", currentPhase: initialPhase, runKey },
-        })
-        .catch(() => {});
-    }
-
-    const commandType =
-      mode === "ba"
-        ? "run_ba"
-        : mode === "clarify"
-          ? "run_clarify"
-          : mode === "ui-refine"
-            ? "run_ui_refine"
-            : mode === "pr-judge"
-              ? "run_pr_judge"
-              : "start_run";
-
     await tx.runnerCommand.create({
       data: {
-        userId: onlineRunner?.userId ?? project.userId,
+        userId: onlineRunner?.userId ?? projectRef.userId,
         runnerMachineId: onlineRunner?.id ?? null,
-        projectId,
+        projectId: projectRef.id,
         runId: run.id,
-        type: commandType,
+        type: "start_run",
         payloadJson: JSON.stringify({
           runKey,
-          projectId,
-          projectSlug: project.slug,
-          prompt: effectivePrompt,
-          ...(contextNote ? { contextNote } : {}),
-          ...(storedAttachments.length > 0 ? { attachments: storedAttachments } : {}),
-          mode,
-          autonomy,
-          engine,
+          projectId: projectRef.id,
+          projectSlug: projectRef.slug,
+          mode: "ba",
+          engine: "claude",
           model,
-          branch: targetBranch,
-          useWorktree,
-          localPath: project.localPath,
-          issueId,
-          issueKey: linkedIssue?.issueKey ?? null,
-          missionId,
+          prompt,
+          localPath: projectRef.localPath,
+          ...(storedAttachments.length > 0 ? { attachments: storedAttachments } : {}),
         }),
         status: "pending",
       },
@@ -511,21 +261,12 @@ export async function POST(request: NextRequest) {
     return run;
   });
 
-  if (issueId) {
-    emitFactoryEvent({
-      type: "issue:updated",
-      userId: auth.user.id,
-      projectId,
-      runId: created.id,
-      payload: { issueId, status: "in_progress", phase: initialPhase },
-    });
-  }
   emitFactoryEvent({
     type: "run:updated",
     userId: auth.user.id,
-    projectId,
+    projectId: project.id,
     runId: created.id,
-    payload: { status: created.status, mode },
+    payload: { status: created.status, mode: "ba" },
   });
 
   return NextResponse.json(

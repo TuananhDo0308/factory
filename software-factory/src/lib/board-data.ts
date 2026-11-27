@@ -1,6 +1,5 @@
-import { getProjectAutoApprove } from "@/lib/auto-dispatch";
-import { syncProjectInitStatus } from "@/lib/init-issue";
-import type { LiveJsSpec } from "@/lib/live-sync";
+import { ACTIVE_RUN_STATUSES } from "@/lib/dispatch";
+import { repoFullName, ticketOfAgent } from "@/lib/epics";
 import { prisma } from "@/lib/prisma";
 import { serializeProjectIssue, type SerializedProjectIssue } from "@/lib/project-stats";
 import { serializePrototype } from "@/lib/prototype-server";
@@ -8,61 +7,69 @@ import type { SerializedPrototype } from "@/lib/prototypes";
 import { getAccessibleRunners } from "@/lib/team-access";
 import { isRunnerOnline, safeJsonParse } from "@/lib/workspace-data";
 
-export type BoardIssueRunSummary = {
-  runId: string;
+export type BoardAgent = {
+  id: string;
+  agentKey: string;
+  name: string;
+  role: string;
+  status: string;
+  activity: string | null;
+  model: string | null;
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens: number;
+  costUsd: number;
+  updatedAt: string;
+};
+
+export type BoardRunSummary = {
+  id: string;
   runKey: string;
+  title: string;
   mode: string;
   status: string;
   currentPhase: string;
-  specLine: string | null;
-  specs: LiveJsSpec[];
-  criteriaStatus: Array<{ id: string; text: string; status?: string }>;
-  risk: string | null;
-  mergeDecision: string | null;
+  epicNumber: number | null;
   summary: string | null;
   costUsd: number;
   inputTokens: number;
   outputTokens: number;
+  cacheReadTokens: number;
   durationMs: number | null;
-  startedAt: string;
-  updatedAt: string;
   triggeredBy: string | null;
   pendingInteractionsCount: number;
-  agents: Array<{
-    id: string;
-    agentKey: string;
-    name: string;
-    role: string;
-    specId: string | null;
-    status: string;
-    activity: string | null;
-    model: string | null;
-    updatedAt: string;
-  }>;
-  recentSteps: Array<{
-    id: string;
-    seq: number;
-    step: string;
-    phase: string;
-    status: string;
-    label: string | null;
-    summary: string | null;
-    createdAt: string;
-  }>;
-  pullRequests: Array<{
-    id: string;
-    number: number;
-    title: string;
-    url: string | null;
-    state: string;
-    ciStatus: string;
-    judgeVerdict: string | null;
-  }>;
+  startedAt: string;
+  finishedAt: string | null;
+  updatedAt: string;
+};
+
+export type BoardDecision = {
+  interactionId: string;
+  runId: string;
+  question: string;
+  reason: string;
+  createdAt: string;
 };
 
 export type EnrichedBoardIssue = SerializedProjectIssue & {
-  latestRun: BoardIssueRunSummary | null;
   prototypes: SerializedPrototype[];
+  /** Agents of the latest run of this ticket's epic that worked on this ticket. */
+  agents: BoardAgent[];
+  /** The pending decision for this ticket, when it needs one. */
+  decision: BoardDecision | null;
+};
+
+export type BoardEpic = {
+  id: string;
+  number: number;
+  title: string;
+  url: string | null;
+  status: string;
+  summary: string | null;
+  ticketCount: number;
+  mergedCount: number;
+  latestRun: BoardRunSummary | null;
+  activeRunId: string | null;
 };
 
 export type ActiveBaRunSummary = {
@@ -78,14 +85,12 @@ export type ActiveBaRunSummary = {
 };
 
 export type ProjectBoardSnapshot = {
-  initStatus: string;
-  autoDispatch: boolean;
-  autoApprove: boolean;
   maxConcurrency: number;
+  repo: string | null;
+  epics: BoardEpic[];
+  /** Tickets (every issue but the epic rows). */
   issues: EnrichedBoardIssue[];
   prototypes: SerializedPrototype[];
-  activeRunByIssueId: Record<string, { runId: string; triggeredBy: string }>;
-  activeInitRun: ActiveBaRunSummary | null;
   activeBaRun: ActiveBaRunSummary | null;
   runners: Array<{
     id: string;
@@ -98,100 +103,123 @@ export type ProjectBoardSnapshot = {
     status: string;
     activeRuns: number;
     maxConcurrency: number;
-    engines: string[];
   }>;
-  runs: Array<{
-    id: string;
-    runKey: string;
-    title: string;
-    mode: string;
-    status: string;
-    currentPhase: string;
-    risk: string | null;
+  /** The 30 latest runs (BA sessions and epic runs). */
+  runs: BoardRunSummary[];
+  /** Exact totals over every run of the project (summed server-side from the runs' recorded usage). */
+  totals: {
+    runs: number;
     costUsd: number;
     inputTokens: number;
     outputTokens: number;
     cacheReadTokens: number;
-    durationMs: number | null;
-    workMs: number;
-    waitMs: number;
-    humanInterventions: number;
-    interactionsCount: number;
-    criteriaMet: number;
-    criteriaTotal: number;
-    repairRounds: number;
-    failureCount: number;
-    checksPassed: boolean | null;
-    reviewsPassed: number;
-    reviewsTotal: number;
-    triggeredBy: string | null;
-    startedAt: string;
-    finishedAt: string | null;
-    updatedAt: string;
-  }>;
+    durationMs: number;
+  };
 };
+
+type RunRow = {
+  id: string;
+  runKey: string;
+  title: string;
+  mode: string;
+  status: string;
+  currentPhase: string;
+  epicNumber: number | null;
+  summary: string | null;
+  costUsd: number;
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens: number;
+  durationMs: number | null;
+  startedAt: Date;
+  finishedAt: Date | null;
+  updatedAt: Date;
+  triggeredBy: { githubLogin: string } | null;
+  user: { githubLogin: string } | null;
+  interactions: Array<{ status: string }>;
+};
+
+function summarizeRun(r: RunRow): BoardRunSummary {
+  return {
+    id: r.id,
+    runKey: r.runKey,
+    title: r.title,
+    mode: r.mode,
+    status: r.status,
+    currentPhase: r.currentPhase,
+    epicNumber: r.epicNumber,
+    summary: r.summary,
+    costUsd: r.costUsd,
+    inputTokens: r.inputTokens,
+    outputTokens: r.outputTokens,
+    cacheReadTokens: r.cacheReadTokens,
+    durationMs: r.durationMs,
+    triggeredBy: r.triggeredBy?.githubLogin || r.user?.githubLogin || null,
+    pendingInteractionsCount: r.interactions.filter((i) => i.status === "pending").length,
+    startedAt: r.startedAt.toISOString(),
+    finishedAt: r.finishedAt?.toISOString() ?? null,
+    updatedAt: r.updatedAt.toISOString(),
+  };
+}
 
 export async function getProjectBoardSnapshot(params: {
   projectId: string;
   viewerUserId: string;
   viewerGithubLogin?: string | null;
 }): Promise<ProjectBoardSnapshot | null> {
-  const [project, accessibleRunners] = await Promise.all([
+  const runInclude = {
+    triggeredBy: { select: { githubLogin: true } },
+    user: { select: { githubLogin: true } },
+    interactions: { select: { status: true } },
+  } as const;
+
+  const [project, accessibleRunners, totals, epicRuns, pendingDecisions] = await Promise.all([
     prisma.project.findUnique({
       where: { id: params.projectId },
       include: {
         issues: {
-          orderBy: [{ priority: "asc" }, { createdAt: "asc" }],
-          include: {
-            runs: {
-              orderBy: { startedAt: "desc" },
-              take: 1,
-              include: {
-                triggeredBy: { select: { githubLogin: true } },
-                user: { select: { githubLogin: true } },
-                agents: {
-                  orderBy: [{ level: "asc" }, { startedAt: "asc" }],
-                },
-                steps: {
-                  orderBy: { seq: "desc" },
-                  take: 8,
-                },
-                pullRequests: {
-                  orderBy: { updatedAt: "desc" },
-                  take: 3,
-                },
-                _count: {
-                  select: { interactions: { where: { status: "pending" } } },
-                },
-              },
-            },
-          },
+          orderBy: [{ epicNumber: "desc" }, { wave: "asc" }, { githubIssueNumber: "asc" }, { createdAt: "asc" }],
         },
         runs: {
           orderBy: { startedAt: "desc" },
           take: 30,
           include: {
-            triggeredBy: { select: { githubLogin: true, name: true } },
-            user: { select: { githubLogin: true, name: true } },
-            agents: {
-              where: { role: "orchestrator" },
-              take: 1,
-              select: { activity: true },
-            },
-            interactions: {
-              select: { status: true },
-            },
+            ...runInclude,
+            agents: { where: { role: "orchestrator" }, take: 1, select: { activity: true } },
           },
         },
-        prototypes: {
-          orderBy: { updatedAt: "desc" },
-          take: 50,
-        },
+        prototypes: { orderBy: { updatedAt: "desc" }, take: 50 },
       },
     }),
     getAccessibleRunners(params.viewerUserId, {
       projectId: params.projectId,
       githubLogin: params.viewerGithubLogin ?? undefined,
+    }),
+    prisma.factoryRun.aggregate({
+      where: { projectId: params.projectId },
+      _count: { _all: true },
+      _sum: {
+        costUsd: true,
+        inputTokens: true,
+        outputTokens: true,
+        cacheReadTokens: true,
+        durationMs: true,
+      },
+    }),
+    // The latest run of each epic, with its agents (one query; small per project).
+    prisma.factoryRun.findMany({
+      where: { projectId: params.projectId, mode: "epic", epicNumber: { not: null } },
+      orderBy: { startedAt: "desc" },
+      take: 60,
+      include: {
+        ...runInclude,
+        agents: { orderBy: { startedAt: "asc" } },
+      },
+    }),
+    prisma.runInteraction.findMany({
+      where: { type: "decision", status: "pending", run: { projectId: params.projectId } },
+      orderBy: { createdAt: "desc" },
+      select: { id: true, runId: true, payloadJson: true, prompt: true, createdAt: true },
     }),
   ]);
 
@@ -199,157 +227,83 @@ export async function getProjectBoardSnapshot(params: {
 
   const serializedPrototypes = project.prototypes.map(serializePrototype);
 
-  const activeRunByIssueId: Record<string, { runId: string; triggeredBy: string }> = {};
+  const latestRunByEpic = new Map<number, (typeof epicRuns)[number]>();
+  const activeRunByEpic = new Map<number, string>();
+  for (const r of epicRuns) {
+    const n = r.epicNumber as number;
+    if (!latestRunByEpic.has(n)) latestRunByEpic.set(n, r);
+    if (ACTIVE_RUN_STATUSES.includes(r.status) && !activeRunByEpic.has(n)) activeRunByEpic.set(n, r.id);
+  }
 
-  const enrichedIssues: EnrichedBoardIssue[] = project.issues.map((iss) => {
-    const base = serializeProjectIssue(iss);
-    const issueKeyUpper = iss.issueKey.toUpperCase();
-    const issuePrototypes = serializedPrototypes.filter((p) =>
-      p.issueKeys.some((k) => k.toUpperCase() === issueKeyUpper),
-    );
-    const latest = iss.runs[0] ?? null;
+  const decisionByIssue = new Map<number, BoardDecision>();
+  for (const d of pendingDecisions) {
+    const payload = safeJsonParse<{ issue?: unknown; question?: unknown; reason?: unknown }>(d.payloadJson, {});
+    const issue = Number(payload.issue);
+    if (!Number.isInteger(issue) || decisionByIssue.has(issue)) continue;
+    decisionByIssue.set(issue, {
+      interactionId: d.id,
+      runId: d.runId,
+      question: typeof payload.question === "string" ? payload.question : d.prompt || "",
+      reason: typeof payload.reason === "string" ? payload.reason : "",
+      createdAt: d.createdAt.toISOString(),
+    });
+  }
 
-    if (
-      latest &&
-      (latest.status === "running" ||
-        latest.status === "queued" ||
-        latest.status === "awaiting_input")
-    ) {
-      activeRunByIssueId[iss.id] = {
-        runId: latest.id,
-        triggeredBy: latest.triggeredBy?.githubLogin || latest.user?.githubLogin || "member",
-      };
-    }
+  const epicRows = project.issues.filter((i) => i.tier === "epic");
+  const ticketRows = project.issues.filter((i) => i.tier !== "epic");
 
-    let latestRun: BoardIssueRunSummary | null = null;
-    if (latest) {
-      const storedSpecs = safeJsonParse<LiveJsSpec[]>(latest.specsJson, []);
-      // Synthesize specs from RunAgents if specsJson hasn't been populated yet
-      const specs: LiveJsSpec[] =
-        storedSpecs.length > 0
-          ? storedSpecs
-          : (() => {
-              const bySpec = new Map<string, LiveJsSpec>();
-              for (const ag of latest.agents) {
-                if (!ag.specId) continue;
-                const entry = bySpec.get(ag.specId) ?? {
-                  id: ag.specId,
-                  title: ag.name.replace(new RegExp(`^${ag.specId}[:\\s-]+`, "i"), "") || ag.specId,
-                };
-                const mapped =
-                  ag.status === "passed"
-                    ? "ok"
-                    : ag.status === "working"
-                      ? "run"
-                      : ag.status === "failed"
-                        ? "fail"
-                        : "wait";
-                if (ag.role === "implementer") {
-                  entry.impl = mapped;
-                  entry.implNote = ag.activity || undefined;
-                } else if (ag.role === "qa") {
-                  entry.test = mapped;
-                  entry.testNote = ag.activity || undefined;
-                }
-                bySpec.set(ag.specId, entry);
-              }
-              return Array.from(bySpec.values());
-            })();
-
-      latestRun = {
-        runId: latest.id,
-        runKey: latest.runKey,
-        mode: latest.mode,
-        status: latest.status,
-        currentPhase: latest.currentPhase,
-        specLine: latest.specLine,
-        specs,
-        criteriaStatus: safeJsonParse<Array<{ id: string; text: string; status?: string }>>(
-          latest.criteriaJson,
-          [],
-        ),
-        risk: latest.risk,
-        mergeDecision: latest.mergeDecision,
-        summary: latest.summary,
-        costUsd: latest.costUsd,
-        inputTokens: latest.inputTokens,
-        outputTokens: latest.outputTokens,
-        durationMs: latest.durationMs,
-        startedAt: latest.startedAt.toISOString(),
-        updatedAt: latest.updatedAt.toISOString(),
-        triggeredBy: latest.triggeredBy?.githubLogin || latest.user?.githubLogin || null,
-        pendingInteractionsCount: latest._count.interactions,
-        agents: latest.agents.map((a) => ({
-          id: a.id,
-          agentKey: a.agentKey,
-          name: a.name,
-          role: a.role,
-          specId: a.specId,
-          status: a.status,
-          activity: a.activity,
-          model: a.model,
-          updatedAt: a.updatedAt.toISOString(),
-        })),
-        recentSteps: [...latest.steps].reverse().map((s) => ({
-          id: s.id,
-          seq: s.seq,
-          step: s.step,
-          phase: s.phase,
-          status: s.status,
-          label: s.label,
-          summary: s.summary,
-          createdAt: s.createdAt.toISOString(),
-        })),
-        pullRequests: latest.pullRequests.map((pr) => ({
-          id: pr.id,
-          number: pr.number,
-          title: pr.title,
-          url: pr.url,
-          state: pr.state,
-          ciStatus: pr.ciStatus,
-          judgeVerdict: pr.judgeVerdict,
-        })),
-      };
-    }
-
-    return { ...base, latestRun, prototypes: issuePrototypes };
+  const issues: EnrichedBoardIssue[] = ticketRows.map((iss) => {
+    const keys = [iss.issueKey.toUpperCase(), iss.ticketKey?.toUpperCase()].filter(Boolean);
+    const latest = iss.epicNumber ? latestRunByEpic.get(iss.epicNumber) : undefined;
+    const agents: BoardAgent[] = (latest?.agents ?? [])
+      .filter((a) => iss.githubIssueNumber && ticketOfAgent(a.agentKey, a.name) === iss.githubIssueNumber)
+      .map((a) => ({
+        id: a.id,
+        agentKey: a.agentKey,
+        name: a.name,
+        role: a.role,
+        status: a.status,
+        activity: a.activity,
+        model: a.model,
+        inputTokens: a.inputTokens,
+        outputTokens: a.outputTokens,
+        cacheReadTokens: a.cacheReadTokens,
+        costUsd: a.costUsd,
+        updatedAt: a.updatedAt.toISOString(),
+      }));
+    return {
+      ...serializeProjectIssue(iss),
+      prototypes: serializedPrototypes.filter((p) => p.issueKeys.some((k) => keys.includes(k.toUpperCase()))),
+      agents,
+      decision: iss.githubIssueNumber ? (decisionByIssue.get(iss.githubIssueNumber) ?? null) : null,
+    };
   });
 
-  // Find latest active/pending Init & BA sessions for banner visibility on the Kanban board
-  const initRun = project.runs.find((r) => {
-    const pendingInteractions = r.interactions.filter((i) => i.status === "pending").length;
-    return (
-      r.mode === "init" &&
-      (r.status === "running" ||
-        r.status === "queued" ||
-        r.status === "awaiting_input" ||
-        pendingInteractions > 0)
-    );
-  });
-  const activeInitRun: ActiveBaRunSummary | null = initRun
-    ? {
-        id: initRun.id,
-        runKey: initRun.runKey,
-        title: initRun.title,
-        status: initRun.status,
-        currentPhase: initRun.currentPhase,
-        activity: initRun.agents[0]?.activity ?? null,
-        pendingInteractionsCount: initRun.interactions.filter((i) => i.status === "pending").length,
-        startedAt: initRun.startedAt.toISOString(),
-        updatedAt: initRun.updatedAt.toISOString(),
-      }
-    : null;
+  const epics: BoardEpic[] = epicRows
+    .map((e) => {
+      const number = e.epicNumber ?? e.githubIssueNumber ?? 0;
+      const tickets = ticketRows.filter((t) => t.epicNumber === number);
+      const latest = latestRunByEpic.get(number);
+      return {
+        id: e.id,
+        number,
+        title: e.title,
+        url: e.githubIssueUrl,
+        status: e.status,
+        summary: e.summary,
+        ticketCount: tickets.length,
+        mergedCount: tickets.filter((t) => t.status === "passed").length,
+        latestRun: latest ? summarizeRun(latest) : null,
+        activeRunId: activeRunByEpic.get(number) ?? null,
+      };
+    })
+    .filter((e) => e.number > 0);
 
-  const baRun = project.runs.find((r) => {
-    const pendingInteractions = r.interactions.filter((i) => i.status === "pending").length;
-    return (
+  const baRun = project.runs.find(
+    (r) =>
       r.mode === "ba" &&
-      (r.status === "running" ||
-        r.status === "queued" ||
-        r.status === "awaiting_input" ||
-        pendingInteractions > 0)
-    );
-  });
+      (ACTIVE_RUN_STATUSES.includes(r.status) || r.interactions.some((i) => i.status === "pending")),
+  );
   const activeBaRun: ActiveBaRunSummary | null = baRun
     ? {
         id: baRun.id,
@@ -364,21 +318,14 @@ export async function getProjectBoardSnapshot(params: {
       }
     : null;
 
-  const [autoApprove, initComplete] = await Promise.all([
-    getProjectAutoApprove(project.id),
-    syncProjectInitStatus(project),
-  ]);
-  const initStatus = initComplete ? "complete" : project.initStatus;
+  const repo = repoFullName(project);
 
   return {
-    initStatus,
-    autoDispatch: project.autoDispatch,
-    autoApprove,
     maxConcurrency: project.maxConcurrency,
-    issues: enrichedIssues,
+    repo,
+    epics,
+    issues,
     prototypes: serializedPrototypes,
-    activeRunByIssueId,
-    activeInitRun,
     activeBaRun,
     runners: accessibleRunners.map((r) => ({
       id: r.id,
@@ -391,72 +338,15 @@ export async function getProjectBoardSnapshot(params: {
       status: isRunnerOnline(r.status, r.lastHeartbeatAt) ? "online" : "offline",
       activeRuns: r.activeRuns,
       maxConcurrency: r.maxConcurrency,
-      engines: safeJsonParse<string[]>(r.enginesJson, ["antigravity", "claude"]),
     })),
-    runs: project.runs.map((r) => {
-      const criteria = safeJsonParse<Array<{ id: string; text: string; status?: string }>>(
-        r.criteriaJson,
-        [],
-      );
-      const criteriaMet = criteria.filter((c) => c.status === "met").length;
-      const failureLog = safeJsonParse<Array<unknown>>(r.failureLogJson, []);
-      const checkpoint = safeJsonParse<{
-        repairRounds?: number;
-        repairs?: Array<unknown>;
-        check?: { state?: string } | null;
-        review?: Array<{ state?: string }>;
-      } | null>(r.checkpointJson, null);
-
-      const repairRounds =
-        typeof checkpoint?.repairRounds === "number"
-          ? checkpoint.repairRounds
-          : Array.isArray(checkpoint?.repairs)
-            ? checkpoint.repairs.length
-            : 0;
-
-      const checkState = checkpoint?.check?.state?.toLowerCase();
-      const checksPassed =
-        checkState === "ok" || checkState === "pass" || checkState === "passed"
-          ? true
-          : checkState === "fail" || checkState === "failed"
-            ? false
-            : null;
-
-      const reviews = Array.isArray(checkpoint?.review) ? checkpoint.review : [];
-      const reviewsPassed = reviews.filter((rv) => {
-        const st = rv.state?.toLowerCase();
-        return st === "ok" || st === "pass" || st === "passed";
-      }).length;
-
-      return {
-        id: r.id,
-        runKey: r.runKey,
-        title: r.title,
-        mode: r.mode,
-        status: r.status,
-        currentPhase: r.currentPhase,
-        risk: r.risk,
-        costUsd: r.costUsd,
-        inputTokens: r.inputTokens,
-        outputTokens: r.outputTokens,
-        cacheReadTokens: r.cacheReadTokens,
-        durationMs: r.durationMs,
-        workMs: r.workMs,
-        waitMs: r.waitMs,
-        humanInterventions: r.humanInterventions,
-        interactionsCount: r.interactions.length,
-        criteriaMet,
-        criteriaTotal: criteria.length,
-        repairRounds,
-        failureCount: failureLog.length,
-        checksPassed,
-        reviewsPassed,
-        reviewsTotal: reviews.length,
-        triggeredBy: r.triggeredBy?.githubLogin || r.user?.githubLogin || null,
-        startedAt: r.startedAt.toISOString(),
-        finishedAt: r.finishedAt?.toISOString() ?? null,
-        updatedAt: r.updatedAt.toISOString(),
-      };
-    }),
+    runs: project.runs.map(summarizeRun),
+    totals: {
+      runs: totals._count._all,
+      costUsd: totals._sum.costUsd ?? 0,
+      inputTokens: totals._sum.inputTokens ?? 0,
+      outputTokens: totals._sum.outputTokens ?? 0,
+      cacheReadTokens: totals._sum.cacheReadTokens ?? 0,
+      durationMs: totals._sum.durationMs ?? 0,
+    },
   };
 }

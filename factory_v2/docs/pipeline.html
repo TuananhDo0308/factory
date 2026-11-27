@@ -1,0 +1,495 @@
+<title>New Factory Pipeline</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Overpass:wght@400;600;800&family=Overpass+Mono:wght@400;600&display=swap" rel="stylesheet">
+<style>
+/* VOICE work: a technical explainer for engineers, read and passed around
+   IDEA a railway signal box: a batch is a line that forks into parallel tracks and joins again at staging
+   PICTURE a track diagram of the whole pipeline: request, BA, epic, foundation, four tickets in parallel, staging, QC, you, main
+   COLOUR white ground, near-black ink and track, signal green (agents), amber (you), red (danger) only where failure is the subject
+   TYPE Overpass 800 (highway-sign lettering) + Overpass, Overpass Mono for commands
+   LAYOUT laptop: title and intro across the top, diagram full width beneath; phone: title, then the diagram turned vertical */
+:root{color-scheme:light dark;--bg:light-dark(#ffffff,#0f1214);--ink:light-dark(#14181c,#e9ecee);--muted:light-dark(#56606a,#9da7b0);--rule:light-dark(#dde2e6,#2a3137);--panel:light-dark(#f3f5f6,#171c20);--track:light-dark(#2a3036,#c3cbd2);--go:light-dark(#0a8f4e,#2fd27f);--wait:light-dark(#c78600,#ffc23d);--stop:light-dark(#d4241c,#ff5d52)}
+:root[data-theme=light]{color-scheme:light}
+:root[data-theme=dark]{color-scheme:dark}
+*{box-sizing:border-box;min-width:0}
+body{background:var(--bg);color:var(--ink);font:16px/1.55 Overpass,system-ui,sans-serif;overflow-x:clip;margin:0}
+.band{padding-block:clamp(28px,4vw,60px);padding-left:max(5vw,16px,env(safe-area-inset-left,0px));padding-right:max(5vw,16px,env(safe-area-inset-right,0px));border-top:1px solid var(--rule)}
+.band:first-child{border-top:0}
+.wrap{max-width:1240px;margin:0 auto}
+h1,h2,h3{font-weight:800;letter-spacing:-.02em;line-height:1.08;margin:0}
+h1{font-size:clamp(34px,4.6vw,52px);max-width:16ch}
+h2{font-size:clamp(26px,3.2vw,38px);max-width:24ch;margin-bottom:18px}
+h3{font-size:19px;letter-spacing:-.01em;margin:26px 0 10px}
+p{margin:0 0 12px;max-width:68ch}
+code,.mono{font-family:"Overpass Mono",ui-monospace,monospace;font-size:.92em}
+.meta{color:var(--muted);font-size:14px;margin:10px 0 0}
+.top{display:grid;grid-template-columns:minmax(0,1.1fr) minmax(0,1fr);gap:clamp(20px,4vw,56px);align-items:end}
+.lede{font-size:17px}
+.legend{display:flex;flex-wrap:wrap;gap:8px 20px;font-size:14px;color:var(--muted);margin-top:6px}
+.legend span{display:inline-flex;align-items:center;gap:8px}
+.k{display:inline-block;width:11px;height:11px;flex:none}
+.k.script{background:var(--ink)}
+.k.agent{background:var(--go);border-radius:50%}
+.k.you{background:var(--wait);border-radius:50%}
+.k.stop{background:var(--stop);border-radius:50%}
+.fig{position:relative;height:380px;margin-top:22px}
+.fig>svg{position:absolute;inset:0;width:100%;height:100%}
+svg text{paint-order:stroke;stroke:var(--bg);stroke-width:4px;font-family:Overpass,system-ui,sans-serif}
+.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,230px),1fr));gap:12px}
+.card{background:var(--panel);border:1px solid var(--rule);border-radius:6px;padding:16px 18px}
+.card b{display:block;font-family:"Overpass Mono",monospace;font-size:15px;margin-bottom:6px}
+.card p{margin:0;font-size:15px}
+.cols{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:clamp(20px,4vw,48px)}
+dl{margin:0}
+dt{font-weight:800}
+dd{margin:0 0 12px;color:var(--ink)}
+ol.steps{margin:0;padding-left:22px}
+ol.steps li{margin-bottom:6px}
+ul{margin:0;padding-left:20px}
+li{margin-bottom:5px}
+.scroll{overflow-x:auto}
+table{border-collapse:collapse;width:100%;font-size:15px}
+th{text-align:left;font-weight:800;border-bottom:2px solid var(--ink);padding:8px 10px 8px 0;vertical-align:bottom}
+td{border-bottom:1px solid var(--rule);padding:9px 10px 9px 0;vertical-align:top}
+td.c,th.c{text-align:center;padding-right:0}
+.ok{color:var(--go);font-weight:800}
+.line{list-style:none;margin:0;padding:0}
+.line li{display:grid;grid-template-columns:34px minmax(0,1fr);gap:14px;margin:0}
+.rail{position:relative}
+.rail::before{content:"";position:absolute;left:16px;top:0;bottom:0;width:3px;background:var(--track)}
+.line li:first-child .rail::before{top:14px}
+.line li:last-child .rail::before{bottom:calc(100% - 14px)}
+.lamp{position:absolute;left:9px;top:6px;width:17px;height:17px;border:3px solid var(--bg)}
+.lamp.script{background:var(--ink)}
+.lamp.agent{background:var(--go);border-radius:50%}
+.lamp.you{background:var(--wait);border-radius:50%}
+.lamp.mix{background:linear-gradient(90deg,var(--ink) 50%,var(--go) 50%);border-radius:50%}
+.stop{padding:2px 0 18px}
+.stop h3{margin:0 0 4px;font-size:18px;display:flex;flex-wrap:wrap;gap:6px 12px;align-items:baseline}
+.stop h3 small{font-family:"Overpass Mono",monospace;font-weight:600;font-size:13px;color:var(--muted)}
+.stop p{margin:0}
+.who{font-size:13px;font-weight:600;color:var(--muted)}
+.big{display:grid;grid-template-columns:repeat(auto-fit,minmax(9em,1fr));gap:12px;margin-top:8px}
+.big div{border-top:3px solid var(--ink);padding-top:10px}
+.big strong{display:block;font-size:clamp(30px,4vw,44px);font-weight:800;letter-spacing:-.02em;line-height:1;white-space:nowrap}
+.note{color:var(--muted);font-size:14px}
+.red{color:var(--stop);font-weight:800}
+footer{color:var(--muted);font-size:14px}
+@media(max-width:860px){.top{grid-template-columns:minmax(0,1fr)}}
+@media(max-width:700px){.cols{grid-template-columns:minmax(0,1fr)}}
+@media(max-width:600px){table{font-size:13px}th,td{padding:6px 4px}.stack thead{display:none}.stack tr{display:grid;padding-block:10px;border-bottom:1px solid var(--rule)}.stack td{display:flex;justify-content:space-between;gap:12px;border:0;padding:3px 0}.stack td::before{content:attr(data-l);font-weight:800;flex:none;max-width:40%}}
+@media(prefers-reduced-motion:reduce){.train{display:none}}
+</style>
+
+<section class="band">
+  <div class="wrap">
+    <div class="top">
+      <div>
+        <h1>Every batch runs on parallel tracks.</h1>
+        <p class="meta"><code>/new-ba</code> and <code>/new-factory</code> for Claude Code · design approved 26 Nov 2026 · <code>new-ba</code> built, <code>new-factory</code> in build</p>
+      </div>
+      <div>
+        <p class="lede">The old factory ran one issue at a time and split each issue into specs that waited on each other: a todo app took about five hours, and almost none of it was fixing bugs. The new pipeline moves the split to the start. The BA lays out a whole batch so most tickets build at once; the factory runs each on its own track, with one implementer, gates that are code rather than agents, and one QC at the end.</p>
+        <div class="legend"><span><i class="k script"></i>script: decided by code</span><span><i class="k agent"></i>agent: a fresh Claude session judges</span><span><i class="k you"></i>you, at the two ends</span></div>
+      </div>
+    </div>
+    <div class="fig" id="line" role="img" aria-label="Track diagram: a request goes to the BA, becomes an epic, the foundation ticket T1 builds first, then tickets T2 to T5 run on four parallel tracks, join at staging, pass one QC, reach you, then main."></div>
+  </div>
+</section>
+
+<section class="band">
+  <div class="wrap">
+    <h2>One request is one batch, and one batch is one run.</h2>
+    <div class="cards">
+      <div class="card"><b>/new-ba</b><p>Turns a request into an epic and its tickets, designed to run in parallel, and publishes them to GitHub.</p></div>
+      <div class="card"><b>you, on GitHub</b><p>Read the batch and comment if something must change; <code>/new-ba</code> revises it.</p></div>
+      <div class="card"><b>/new-factory #10</b><p>Builds every ticket of epic #10, merges each into <code>staging</code>, runs one QC, reports.</p></div>
+      <div class="card"><b>you</b><p>Check <code>staging</code> and decide when it goes to <code>main</code>. The factory never touches <code>main</code>.</p></div>
+    </div>
+  </div>
+</section>
+
+<section class="band">
+  <div class="wrap">
+    <h2>The BA lays out the tracks before any train leaves.</h2>
+    <p>The old BA divided work by layer, “data model before the screens”, a chain where every ticket waited for the last. The new BA divides by behavior and pulls everything shared into one foundation ticket, so the tickets after it never touch each other.</p>
+    <div class="cols">
+      <div>
+        <h3>Five words the BA thinks in</h3>
+        <dl>
+          <dt>Slice</dt><dd>One thing a user can do from start to end: add a task, filter the list. Never a layer.</dd>
+          <dt>Owns</dt><dd>The only files a ticket may change. A folder is <code>dir/**</code>; its tests live inside it.</dd>
+          <dt>Foundation</dt><dd>Wave 0: types, interfaces, slots, registry, test setup, design tokens. No feature logic.</dd>
+          <dt>Contract</dt><dd>A shape the foundation provides and slices build on (<code>TaskRepo</code>, <code>slot:input</code>). Only added to after wave 0, never changed.</dd>
+          <dt>Wave</dt><dd>0 is the foundation, 1 needs only the foundation, 2 needs another slice’s behavior. At most three.</dd>
+        </dl>
+      </div>
+      <div>
+        <h3>Twelve steps</h3>
+        <ol class="steps">
+          <li>Understand the request; keep the user’s words in <code>said.md</code>; choose the design direction.</li>
+          <li>Read the architecture, or choose one: a folder per feature and a registry that loads them.</li>
+          <li>List the slices, at most about eight criteria each.</li>
+          <li>Give each slice its Owns.</li>
+          <li>Pull out the foundation: one ticket by default.</li>
+          <li>Order the waves. Two slices that share a file merge; they are never queued.</li>
+          <li>Write the tickets.</li>
+          <li>Prototype the whole flow, with a design reviewer for at most two rounds.</li>
+          <li>Check the batch with <code>check-batch.mjs</code>.</li>
+          <li>One fresh reader for the whole batch.</li>
+          <li>Publish the epic and its tickets.</li>
+          <li>Revise after feedback, keeping every published criterion number.</li>
+        </ol>
+      </div>
+    </div>
+
+    <div class="cols">
+      <div>
+        <h3>What a ticket looks like</h3>
+        <div class="scroll"><table class="stack">
+          <thead><tr><th>Field</th><th>Example</th></tr></thead>
+          <tbody>
+            <tr><td data-l="Field">Title</td><td data-l="Example">Add a task</td></tr>
+            <tr><td data-l="Field">Objective</td><td data-l="Example">People add a task by typing it.</td></tr>
+            <tr><td data-l="Field">Criteria</td><td data-l="Example"><b>C5</b> Given the list page, when the person types “Mua sữa” and presses Enter, then it appears at the bottom and the field is empty. <b>C6</b> … <b>C7</b> …</td></tr>
+            <tr><td data-l="Field">Out of scope</td><td data-l="Example">Editing a task after it is added.</td></tr>
+            <tr><td data-l="Field">Wave · Size</td><td data-l="Example">1 · S, one field in an existing slot</td></tr>
+            <tr><td data-l="Field">Owns</td><td data-l="Example"><code>src/features/add-task/**</code> · <code>e2e/add-task.spec.ts</code></td></tr>
+            <tr><td data-l="Field">Uses</td><td data-l="Example"><code>TaskRepo.add(title)</code> · <code>slot:input</code>, from #11</td></tr>
+            <tr><td data-l="Field">Depends on</td><td data-l="Example">#11</td></tr>
+            <tr><td data-l="Field">New dependencies</td><td data-l="Example">none</td></tr>
+          </tbody>
+        </table></div>
+        <p class="note">Criteria are numbered across the batch: the foundation has C1–C4, the next ticket starts at C5.</p>
+      </div>
+      <div>
+        <h3>How each criterion is written</h3>
+        <ul>
+          <li><b>Checkable from outside:</b> someone holding only the ticket and the product says met or not met.</li>
+          <li><b>Every behavior that must hold,</b> including the cases that go wrong.</li>
+          <li><b>One wording per rule,</b> said once.</li>
+          <li><b>Behavior, not implementation,</b> except a contract, which is exact.</li>
+          <li><b>Their words are not narrowed:</b> “all”, “every”, “never” and numbers stay.</li>
+          <li><b>No open questions, no secrets, no real people’s data.</b></li>
+        </ul>
+        <h3>The foundation lays the rails for parallel runs</h3>
+        <ul>
+          <li>Dev server and e2e read <code>PORT</code> and <code>BASE_URL</code>; e2e always starts its own server.</li>
+          <li>E2e runs on the Playwright CLI with a JSON reporter.</li>
+          <li>CSS is scoped per feature.</li>
+          <li>Each feature declares its routes, storage keys and shortcuts; the registry fails a test on a duplicate.</li>
+          <li>Its tests assert only what later tickets will not change.</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="cols">
+      <div>
+        <h3>Size decides how much ceremony a ticket gets</h3>
+        <div class="scroll"><table class="stack">
+          <thead><tr><th>Size</th><th>When</th></tr></thead>
+          <tbody>
+            <tr><td data-l="Size"><b>S</b></td><td data-l="When">Copy, config, a small bug: at most 3 criteria, no new screen, no auth, money or migration.</td></tr>
+            <tr><td data-l="Size"><b>M</b></td><td data-l="When">A normal feature. The default.</td></tr>
+            <tr><td data-l="Size"><b>L</b></td><td data-l="When">A complex new screen, or anything touching auth, money, migrations or security, however small.</td></tr>
+          </tbody>
+        </table></div>
+        <p class="note">The higher of size and risk. The factory checks it by script and only ever raises it.</p>
+        <h3>One reader, then GitHub</h3>
+        <p>A fresh agent, never a fork, asks three things: can each ticket be built without guessing, can two tickets that run together be built without knowing about each other, does the foundation hold every contract. Then <code>publish-batch.mjs</code> scans for secrets, creates the epic and its sub-issues, pushes the prototype and labels everything <code>ready</code>. The tickets are the source of truth; the plan in the epic is a summary built from them.</p>
+      </div>
+      <div>
+        <h3><code>check-batch</code> refuses</h3>
+        <ul>
+          <li>two tickets that can run at once and own the same file;</li>
+          <li>a dependency not on an earlier wave, or a cycle;</li>
+          <li>a criterion id in two tickets, or one rule said twice;</li>
+          <li>a contract used but not defined, or not from a ticket it depends on;</li>
+          <li>more than three waves without a reason;</li>
+          <li>a size below what the factory would give;</li>
+          <li>one library declared at two versions;</li>
+          <li>a foundation with e2e but no <code>PORT</code> criterion;</li>
+          <li>an Owns with no room for its tests;</li>
+          <li>a plan that does not fit <code>plan-schema.json</code>.</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="band">
+  <div class="wrap">
+    <h2>Follow one ticket down the line.</h2>
+    <ol class="line">
+      <li><div class="rail"><i class="lamp script"></i></div><div class="stop"><h3>Queue <small>0</small><span class="who">script</span></h3><p>One batch at a time on <code>staging</code>. A second waits and starts from the newest <code>staging</code>.</p></div></li>
+      <li><div class="rail"><i class="lamp script"></i></div><div class="stop"><h3>Plan <small>1</small><span class="who">script</span></h3><p>Refuses without <code>ready</code>. Rebuilds the plan from the tickets with <code>check-batch</code>, seconds and no tokens. Edits since the BA are reported, not blocked.</p></div></li>
+      <li><div class="rail"><i class="lamp script"></i></div><div class="stop"><h3>Prepare <small>2</small><span class="who">script</span></h3><p>Once per batch: adds every declared library, copies the prototype, installs once, clones <code>node_modules</code> copy-on-write into each worktree, starts two servers on two ports and checks for a browser.</p></div></li>
+      <li><div class="rail"><i class="lamp script"></i></div><div class="stop"><h3>Schedule <small>3</small><span class="who">script</span></h3><p>A ticket starts as soon as what it depends on has merged. About four at once, each with its own worktree, port and cache.</p></div></li>
+      <li><div class="rail"><i class="lamp agent"></i></div><div class="stop"><h3>Build <small>4a</small><span class="who">agent</span></h3><p>One implementer, no planner, no spec. Codes, then one test per criterion named with its id (<code>C5</code>). Changes only what the ticket owns.</p></div></li>
+      <li><div class="rail"><i class="lamp script"></i></div><div class="stop"><h3>Gates <small>4b</small><span class="who">script</span></h3><p>The project’s checks; the diff against Owns, from the commits against this ticket’s own base; a test with a real assertion for every criterion.</p></div></li>
+      <li><div class="rail"><i class="lamp agent"></i></div><div class="stop"><h3>Review <small>4c</small><span class="who">agent</span></h3><p>S none, M one reviewer, L one on Opus plus a security review. The reviewer reads the tests too.</p></div></li>
+      <li><div class="rail"><i class="lamp mix"></i></div><div class="stop"><h3>Back to Build <small>4d</small><span class="who">script + agent</span></h3><p>Two fix rounds, then a diagnosis, then a third round or <code>needs-decision</code>.</p></div></li>
+      <li><div class="rail"><i class="lamp script"></i></div><div class="stop"><h3>Merge <small>5</small><span class="who">script</span></h3><p>Straight into <code>staging</code> with <code>--no-ff</code>. Lockfiles regenerated. Checked once when a dependent ticket is waiting on it.</p></div></li>
+      <li><div class="rail"><i class="lamp mix"></i></div><div class="stop"><h3>QC <small>6</small><span class="who">script + agent</span></h3><p>Once, when every ticket is done: a full check on the final <code>staging</code>, e2e reported per criterion, one agent using the app in a browser.</p></div></li>
+      <li><div class="rail"><i class="lamp script"></i></div><div class="stop"><h3>Report <small>7</small><span class="who">script</span></h3><p>What was delivered, what waits on you and why, what changed since the BA.</p></div></li>
+      <li><div class="rail"><i class="lamp you"></i></div><div class="stop"><h3>You <small>8</small><span class="who">you</span></h3><p>Check <code>staging</code>; send it to <code>main</code> when you are satisfied.</p></div></li>
+    </ol>
+  </div>
+</section>
+
+<section class="band">
+  <div class="wrap">
+    <h2>Code owns the skeleton. Agents own the judgment.</h2>
+    <p>The old factory ran inside a Workflow script, which cannot read a file, run a command or tell the time, so every deterministic step became an agent: a checker that ran tests, a recorder that wrote the dashboard. The new orchestrator is a plain Node program with no dependencies. It keeps its state in <code>state.json</code> and calls <code>claude -p</code> only when judgment is needed.</p>
+    <div class="cols">
+      <div>
+        <h3>The script decides</h3>
+        <ul>
+          <li>the order tickets start, from the dependency graph;</li>
+          <li>which files a ticket may change, and whether it did;</li>
+          <li>whether the checks passed, from their exit codes;</li>
+          <li>whether every criterion has a test;</li>
+          <li>every merge, revert, label and comment;</li>
+          <li>who a failure belongs to;</li>
+          <li>when an agent is stuck, and why;</li>
+          <li>the time, the cost and the dashboard.</li>
+        </ul>
+      </div>
+      <div>
+        <h3>Agents judge</h3>
+        <ul>
+          <li><b>Implementer:</b> writes the code and its tests.</li>
+          <li><b>Reviewer:</b> is the change right against its criteria, and do its tests test them.</li>
+          <li><b>Diagnoser:</b> after two failed rounds, why it still fails.</li>
+          <li><b>Second reviewer:</b> settles a dispute with the first.</li>
+          <li><b>QC:</b> does the product do what the criteria say, used as a person would.</li>
+        </ul>
+      </div>
+    </div>
+    <h3>Lock table: a ticket needs a file it does not own</h3>
+    <div class="scroll"><table class="stack">
+      <thead><tr><th>Situation</th><th>What the script does</th></tr></thead>
+      <tbody>
+        <tr><td data-l="Situation">The file is free</td><td data-l="Does">Locks it, widens the ticket’s Owns, runs the next round.</td></tr>
+        <tr><td data-l="Situation">Held by a ticket that depends on this one</td><td data-l="Does">Hands the lock over: the holder only starts after this ticket merges.</td></tr>
+        <tr><td data-l="Situation">Held by a ticket in <code>needs-decision</code></td><td data-l="Does">This ticket waits too, as “waiting on #X”, and is reported as not delivered.</td></tr>
+        <tr><td data-l="Situation">Held by a ticket still running</td><td data-l="Does">Waits for it to merge, then runs from the new <code>staging</code>.</td></tr>
+        <tr><td data-l="Situation">Waiting would close a circle</td><td data-l="Does"><code>needs-decision</code> at once, never an endless wait.</td></tr>
+        <tr><td data-l="Situation">It is a contract file</td><td data-l="Does">Additions only; nothing already there may change.</td></tr>
+      </tbody>
+    </table></div>
+  </div>
+</section>
+
+<section class="band">
+  <div class="wrap">
+    <h2>Every failure is routed to the ticket that caused it.</h2>
+    <div class="scroll"><table class="stack">
+      <thead><tr><th>Failure</th><th>Found by</th><th>Sent to</th></tr></thead>
+      <tbody>
+        <tr><td data-l="Failure">A check fails in the worktree</td><td data-l="Found by">script, 4b</td><td data-l="Sent to">that ticket</td></tr>
+        <tr><td data-l="Failure">A file outside Owns was changed</td><td data-l="Found by">script, 4b</td><td data-l="Sent to">that ticket, through the lock table</td></tr>
+        <tr><td data-l="Failure">A criterion has no test, or an empty one</td><td data-l="Found by">script, 4b</td><td data-l="Sent to">that ticket</td></tr>
+        <tr><td data-l="Failure">A blocking review finding</td><td data-l="Found by">reviewer, 4c</td><td data-l="Sent to">that ticket</td></tr>
+        <tr><td data-l="Failure">Tests pass alone, fail once merged</td><td data-l="Found by">script, 5</td><td data-l="Sent to">the ticket whose merge broke them, found by halving the merges and re-running only the failing tests</td></tr>
+        <tr><td data-l="Failure">Final <code>staging</code> does not typecheck or build</td><td data-l="Found by">script, 6</td><td data-l="Sent to">the same halving</td></tr>
+        <tr><td data-l="Failure">QC sees a criterion fail</td><td data-l="Found by">QC, 6</td><td data-l="Sent to">the ticket that owns it; QC re-checks only what failed</td></tr>
+        <tr><td data-l="Failure">A command never exits</td><td data-l="Found by">watchdog</td><td data-l="Sent to">that child process is killed by PID; the agent carries on; you get an alarm</td></tr>
+      </tbody>
+    </table></div>
+
+    <div class="cols">
+      <div>
+        <h3>When two rounds are not enough</h3>
+        <div class="scroll"><table class="stack">
+          <thead><tr><th>Diagnosis</th><th>What happens</th></tr></thead>
+          <tbody>
+            <tr><td data-l="Diagnosis"><b>Hard code</b></td><td data-l="Then">A third round on a stronger model (S → Sonnet, M → Opus, L → Opus at the highest effort), with the diagnosis.</td></tr>
+            <tr><td data-l="Diagnosis"><b>The ticket lacks room</b></td><td data-l="Then">The lock table.</td></tr>
+            <tr><td data-l="Diagnosis"><b>The judge was wrong</b></td><td data-l="Then">Checks run again; a second reviewer decides.</td></tr>
+            <tr><td data-l="Diagnosis"><b>The rules contradict</b></td><td data-l="Then"><code>needs-decision</code> at once.</td></tr>
+          </tbody>
+        </table></div>
+        <p class="note">At most four fix rounds per ticket over the whole batch, counting those sent back after merge or by QC.</p>
+      </div>
+      <div>
+        <h3><span class="red">needs-decision</span>, never “failed”</h3>
+        <ul>
+          <li>Its branch is kept.</li>
+          <li>Its issue gets the diagnosis and one concrete question, with the label <code>needs-decision</code>.</li>
+          <li>If it was merged, it is reverted from <code>staging</code> with its dependents, so <code>staging</code> holds only work that passed QC.</li>
+          <li>The rest of the batch carries on.</li>
+          <li>Once you answer, it resumes alone, reverting the revert if it had been merged, then its dependents, then QC on their criteria.</li>
+        </ul>
+      </div>
+    </div>
+
+    <h3>No timeouts. An alarm with a reason.</h3>
+    <p>An agent with no progress for 30 minutes raises an alarm: ticket, stop, agent, how long, the cause, what was done, the last 20 log lines, as a macOS notification and a comment on the issue. Nothing is killed except a child process whose cause is recognised.</p>
+    <div class="scroll"><table class="stack">
+      <thead><tr><th>Cause</th><th>Sign</th><th>Done on its own</th></tr></thead>
+      <tbody>
+        <tr><td data-l="Cause">A command never exits</td><td data-l="Sign">dev server in the foreground, tests in watch mode, a y/n prompt</td><td data-l="Done">kills that child process by PID</td></tr>
+        <tr><td data-l="Cause">API errors</td><td data-l="Sign">429 or 5xx, retrying</td><td data-l="Done">waits and retries</td></tr>
+        <tr><td data-l="Cause">A loop</td><td data-l="Sign">the same command or failing test again and again</td><td data-l="Done">alarm only</td></tr>
+        <tr><td data-l="Cause">A locked port or file</td><td data-l="Sign"><code>EADDRINUSE</code>, a lock file</td><td data-l="Done">alarm only</td></tr>
+        <tr><td data-l="Cause">Unknown</td><td data-l="Sign">none of the above</td><td data-l="Done">alarm only</td></tr>
+      </tbody>
+    </table></div>
+  </div>
+</section>
+
+<section class="band">
+  <div class="wrap">
+    <h2>One ticket, one implementer, one session.</h2>
+    <div class="scroll"><table class="stack">
+      <thead><tr><th>Role</th><th>Model</th><th>Sees</th><th>May change</th></tr></thead>
+      <tbody>
+        <tr><td data-l="Role"><b>Implementer</b></td><td data-l="Model">S Haiku · M Sonnet · L Opus</td><td data-l="Sees">its ticket, the contracts it uses, its part of the prototype</td><td data-l="May change">its owned files and tests, commits in its worktree</td></tr>
+        <tr><td data-l="Role"><b>Reviewer</b></td><td data-l="Model">M Sonnet · L Opus + security</td><td data-l="Sees">the ticket, the diff, the tests</td><td data-l="May change">nothing</td></tr>
+        <tr><td data-l="Role"><b>Diagnoser</b></td><td data-l="Model">chosen at build</td><td data-l="Sees">both rounds’ failures, the diff, the ticket</td><td data-l="May change">nothing</td></tr>
+        <tr><td data-l="Role"><b>Second reviewer</b></td><td data-l="Model">chosen at build</td><td data-l="Sees">the ticket, the diff, the disputed finding</td><td data-l="May change">nothing</td></tr>
+        <tr><td data-l="Role"><b>QC</b></td><td data-l="Model">chosen at build</td><td data-l="Sees">the criteria, how to start the app</td><td data-l="May change">nothing</td></tr>
+      </tbody>
+    </table></div>
+    <p class="note">No agent merges, pushes, labels or comments; the orchestrator does all of it. Each brief stays under about 4 KB.</p>
+
+    <h3>Gates from a ticket’s last commit to <code>main</code></h3>
+    <div class="scroll"><table>
+      <thead><tr><th>Gate</th><th>Who</th><th class="c">S</th><th class="c">M</th><th class="c">L</th></tr></thead>
+      <tbody>
+        <tr><td>Project checks: lint, format, typecheck, build, unit, e2e</td><td>script</td><td class="c ok">✓</td><td class="c ok">✓</td><td class="c ok">✓</td></tr>
+        <tr><td>Changes only what it owns</td><td>script</td><td class="c ok">✓</td><td class="c ok">✓</td><td class="c ok">✓</td></tr>
+        <tr><td>A test with a real assertion for every criterion</td><td>script</td><td class="c ok">✓</td><td class="c ok">✓</td><td class="c ok">✓</td></tr>
+        <tr><td>Review of the code and its tests</td><td>agent</td><td class="c">—</td><td class="c ok">✓</td><td class="c ok">✓ + sec</td></tr>
+        <tr><td>Check after merging, when a ticket waits on it</td><td>script</td><td class="c">if</td><td class="c">if</td><td class="c">if</td></tr>
+        <tr><td>Full check on the final <code>staging</code></td><td>script</td><td class="c ok">✓</td><td class="c ok">✓</td><td class="c ok">✓</td></tr>
+        <tr><td>QC: e2e per criterion and a browser smoke</td><td>script + agent</td><td class="c ok">✓</td><td class="c ok">✓</td><td class="c ok">✓</td></tr>
+        <tr><td>You</td><td>you</td><td class="c ok">✓</td><td class="c ok">✓</td><td class="c ok">✓</td></tr>
+      </tbody>
+    </table></div>
+    <p class="note">At most two agents judge a ticket: its reviewer and QC. The old factory had four or five for every criterion.</p>
+  </div>
+</section>
+
+<section class="band">
+  <div class="wrap">
+    <h2>Why it should be faster than the old line.</h2>
+    <div class="scroll"><table class="stack">
+      <thead><tr><th></th><th>Old factory</th><th>New pipeline</th></tr></thead>
+      <tbody>
+        <tr><td data-l="">Unit of a run</td><td data-l="Old">one issue</td><td data-l="New">one batch of tickets</td></tr>
+        <tr><td data-l="">Split</td><td data-l="Old">the planner, into specs by layer, in sequence</td><td data-l="New">the BA, into slices by behavior, in parallel</td></tr>
+        <tr><td data-l="">Who runs the checks</td><td data-l="Old">a checker agent</td><td data-l="New">the orchestrator</td></tr>
+        <tr><td data-l="">Who writes the dashboard</td><td data-l="Old">a recorder agent at every step</td><td data-l="New">the orchestrator</td></tr>
+        <tr><td data-l="">Judges per criterion</td><td data-l="Old">4–5</td><td data-l="New">1–2</td></tr>
+        <tr><td data-l="">QC</td><td data-l="Old">per issue, clicking through MCP</td><td data-l="New">once per batch, e2e first</td></tr>
+        <tr><td data-l="">Test-first proof</td><td data-l="Old">required, with its own runs</td><td data-l="New">dropped; a test per criterion checked by script</td></tr>
+        <tr><td data-l="">A stuck run</td><td data-l="Old">could hang for hours</td><td data-l="New">alarm with a cause; known causes cleared</td></tr>
+        <tr><td data-l="">Many failed rounds</td><td data-l="Old">the run fails</td><td data-l="New"><code>needs-decision</code>: one question, the rest carries on</td></tr>
+      </tbody>
+    </table></div>
+    <h3>Targets per ticket, not yet measured</h3>
+    <div class="big">
+      <div><strong>5–10 min</strong>S ticket</div>
+      <div><strong>15–20 min</strong>M ticket</div>
+      <div><strong>~30 min</strong>L ticket</div>
+      <div><strong>~5 h</strong>old factory, todo app</div>
+    </div>
+  </div>
+</section>
+
+<section class="band">
+  <div class="wrap">
+    <h2>Every run so far, as the dashboard recorded it.</h2>
+    <div class="scroll"><table>
+      <thead><tr><th>Date</th><th>Batch</th><th>Tickets · waves</th><th>Agents</th><th>Returns</th><th>Wall clock</th><th>Result</th></tr></thead>
+      <tbody><tr><td>—</td><td colspan="6">No runs yet. The first is the todo app on the sandbox repository.</td></tr></tbody>
+    </table></div>
+    <p class="note"><b>Returns</b> counts fix rounds over the batch. <b>Agents</b> counts every <code>claude -p</code> session the orchestrator started. The orchestrator fills this table from <code>state.json</code>. For comparison, the old factory on the same todo app ran four issues one after another, about 42 minutes each to build, about five hours end to end.</p>
+  </div>
+</section>
+
+<section class="band">
+  <footer class="wrap">new_factory · design approved 26 Nov 2026 · <code>new-ba</code> built · <code>new-factory</code> in build</footer>
+</section>
+
+<script>
+{
+  const s = document.getElementById('line');
+  const reduce = matchMedia('(prefers-reduced-motion: reduce)').matches;
+  const lanes = [
+    { off: -1.5, name: 'T2 · add a task', short: 'T2' },
+    { off: -0.5, name: 'T3 · mark done', short: 'T3' },
+    { off: 0.5, name: 'T4 · delete', short: 'T4' },
+    { off: 1.5, name: 'T5 · filter', short: 'T5' }
+  ];
+  const stations = [
+    { t: 0.02, kind: 'you', name: 'Request', sub: 'your words' },
+    { t: 0.13, kind: 'agent', name: '/new-ba', sub: 'slices · owns · foundation' },
+    { t: 0.24, kind: 'script', name: 'Epic #10', sub: 'plan + tickets, ready' },
+    { t: 0.345, kind: 'agent', name: 'T1 · foundation', sub: 'wave 0, contracts' },
+    { t: 0.74, kind: 'script', name: 'staging', sub: 'merged --no-ff' },
+    { t: 0.835, kind: 'agent', name: 'QC once', sub: 'full check + browser' },
+    { t: 0.925, kind: 'you', name: 'You', sub: 'check staging' },
+    { t: 0.995, kind: 'script', name: 'main', sub: '' }
+  ];
+  const draw = () => {
+    const W = s.clientWidth;
+    const vert = W < 640;
+    const H = vert ? 680 : 380;
+    s.style.height = H + 'px';
+    const m = vert ? 34 : 50;
+    const gap = vert ? Math.min(54, W * 0.13) : Math.min(46, (H - 150) / 4);
+    const axis = vert ? W * 0.36 : H * 0.5;
+    const P = (t, l) => vert ? [axis + l * gap, m + t * (H - 2 * m)] : [m + t * (W - 2 * m), axis + l * gap];
+    const pt = (t, l) => P(t, l).map(v => v.toFixed(1)).join(' ');
+    const showSub = vert || W >= 980;
+    let out = '';
+    out += `<path d="M ${pt(0, 0)} L ${pt(0.42, 0)} M ${pt(0.70, 0)} L ${pt(1, 0)}" fill="none" stroke="var(--track)" stroke-width="5" stroke-linecap="round"/>`;
+    lanes.forEach((ln, i) => {
+      const k = ln.off;
+      const d = `M ${pt(0.42, 0)} C ${pt(0.455, 0)} ${pt(0.445, k)} ${pt(0.48, k)} L ${pt(0.64, k)} C ${pt(0.675, k)} ${pt(0.665, 0)} ${pt(0.70, 0)}`;
+      out += `<path id="lane${i}" d="${d}" fill="none" stroke="var(--track)" stroke-width="4" stroke-linecap="round"/>`;
+      const marks = [[0.52, 'agent'], [0.57, 'script'], [0.615, 'agent']];
+      marks.forEach(([t, kind]) => {
+        const [x, y] = P(t, k);
+        out += kind === 'agent'
+          ? `<circle cx="${x}" cy="${y}" r="5.5" fill="var(--go)" stroke="var(--bg)" stroke-width="2"/>`
+          : `<rect x="${x - 5}" y="${y - 5}" width="10" height="10" fill="var(--ink)" stroke="var(--bg)" stroke-width="2"/>`;
+      });
+      if (vert) {
+        const [x, y] = P(0.495, k);
+        out += `<text x="${x}" y="${y}" text-anchor="middle" dominant-baseline="middle" font-size="13" font-weight="800" fill="var(--ink)">${ln.short}</text>`;
+      } else {
+        const [x, y] = P(0.485, k);
+        out += `<text x="${x}" y="${y - 9}" font-size="13" font-weight="600" fill="var(--ink)">${ln.name}</text>`;
+      }
+      if (!reduce) {
+        out += `<g class="train"><rect x="-10" y="-4.5" width="20" height="9" rx="2" fill="var(--ink)"/><animateMotion dur="6s" repeatCount="indefinite" begin="${(-i * 1.4).toFixed(1)}s" rotate="auto"><mpath href="#lane${i}"/></animateMotion></g>`;
+      }
+    });
+    stations.forEach(st => {
+      const [x, y] = P(st.t, 0);
+      if (st.kind === 'script') out += `<rect x="${x - 8}" y="${y - 8}" width="16" height="16" fill="var(--ink)" stroke="var(--bg)" stroke-width="3"/>`;
+      else out += `<circle cx="${x}" cy="${y}" r="9" fill="var(--${st.kind === 'you' ? 'wait' : 'go'})" stroke="var(--bg)" stroke-width="3"/>`;
+      const anchor = vert ? 'start' : (st.t < 0.05 ? 'start' : st.t > 0.97 ? 'end' : 'middle');
+      const tx = vert ? x + 18 : x;
+      const ty = vert ? y + 5 : y + 32;
+      out += `<text x="${tx}" y="${ty}" text-anchor="${anchor}" font-size="14" font-weight="800" fill="var(--ink)">${st.name}</text>`;
+      if (showSub && st.sub) out += `<text x="${tx}" y="${ty + 18}" text-anchor="${anchor}" font-size="13" fill="var(--muted)">${st.sub}</text>`;
+    });
+    const note = vert ? ['run at', 'the same', 'time'] : ['T2–T5 run at the same time, each in its own folder'];
+    const [nx, ny] = vert ? P(0.56, 1.5) : P(0.56, -1.5);
+    note.forEach((line, i) => {
+      out += vert
+        ? `<text x="${nx + 16}" y="${ny - 18 + i * 17}" font-size="13" fill="var(--muted)">${line}</text>`
+        : `<text x="${nx}" y="${ny - 34}" text-anchor="middle" font-size="13" fill="var(--muted)">${line}</text>`;
+    });
+    s.innerHTML = `<svg viewBox="0 0 ${W} ${H}" aria-hidden="true">${out}</svg>`;
+  };
+  const ro = new ResizeObserver(draw);
+  ro.observe(s);
+}
+</script>

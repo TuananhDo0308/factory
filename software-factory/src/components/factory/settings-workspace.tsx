@@ -27,14 +27,6 @@ import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import {
-  Select,
-  SelectContent,
-  SelectGroup,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
 import { Slider } from "@/components/ui/slider";
 import { Spinner } from "@/components/ui/spinner";
 import { Switch } from "@/components/ui/switch";
@@ -70,8 +62,6 @@ type RunnerItem = {
   name: string;
   hostname: string;
   os: string;
-  engines: string[];
-  models: Array<{ id: string; label: string; engine: string }>;
   allowedRoots: string[];
   workspaceDir: string | null;
   discoveredCount: number;
@@ -124,7 +114,7 @@ const NAV_ITEMS = [
     icon: SettingsIcon,
     title: "General",
     description: "Account profile, connected providers, and session defaults.",
-    keywords: "account profile workspace github git engine autonomy preferences",
+    keywords: "account profile workspace github git preferences",
   },
   {
     id: "appearance",
@@ -147,7 +137,7 @@ const NAV_ITEMS = [
     label: "Runners",
     icon: LaptopIcon,
     title: "Runners",
-    description: "Local machines executing Factory pipelines via sf daemon.",
+    description: "Machines running sf daemon: BA sessions and epic runs execute there.",
     keywords: "droid daemon machine local worktree share cli install setup doctor",
   },
   {
@@ -163,31 +153,27 @@ const NAV_ITEMS = [
     label: "MCP",
     icon: PlugIcon,
     title: "MCP Context Lake",
-    description: "Expose workspace projects, issues, alerts, and lessons over stdio JSON-RPC.",
-    keywords: "mcp context lake json rpc claude antigravity tools stdio",
+    description: "Expose workspace projects, tickets, runs, and alerts over stdio JSON-RPC.",
+    keywords: "mcp context lake json rpc claude tools stdio",
   },
 ] as const;
 
 const MCP_TOOLS = [
   {
     name: "sf_workspace_summary",
-    desc: "Projects, active missions, online runners, and inbox counts.",
+    desc: "Projects, online runners, and inbox counts.",
   },
   {
     name: "sf_list_issues",
-    desc: "Kanban tickets with full goal, body, criteria, priority, tier, and status.",
+    desc: "Kanban epics and tickets with body, criteria, size, wave, and status.",
   },
   {
     name: "sf_list_runs",
-    desc: "Recent Factory runs/sessions with status, phase, engine, model, and cost.",
+    desc: "Recent BA sessions and epic runs with status, phase, model, tokens, and cost.",
   },
   {
     name: "sf_get_inbox",
     desc: "Pending approvals, blocked runs, and human-attention items.",
-  },
-  {
-    name: "sf_get_lessons",
-    desc: "Recurring failure patterns and accepted engineering lessons.",
   },
 ] as const;
 
@@ -308,7 +294,7 @@ function ThemePreviewCard({
           {label}
         </span>
         {active && (
-          <span className="font-mono text-[10px] text-primary">Active</span>
+          <span className="font-mono text-2xs text-primary">Active</span>
         )}
       </div>
     </button>
@@ -329,7 +315,7 @@ function CommandRow({
   return (
     <div className="flex flex-col gap-1">
       {label && (
-        <span className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
+        <span className="font-mono text-2xs uppercase tracking-wider text-muted-foreground">
           {label}
         </span>
       )}
@@ -383,22 +369,9 @@ export function SettingsWorkspace({
   }
 
   // General preferences persisted in localStorage
-  const [engineOverride, setEngineOverride] = React.useState<string | null>(null);
-  const [autonomyOverride, setAutonomyOverride] = React.useState<string | null>(null);
   const [staticStatusOverride, setStaticStatusOverride] = React.useState<boolean | null>(null);
   const [autoArtifactsOverride, setAutoArtifactsOverride] = React.useState<boolean | null>(null);
-  const [openPrOverride, setOpenPrOverride] = React.useState<boolean | null>(null);
 
-  const storedEngine = React.useSyncExternalStore(
-    () => () => {},
-    () => readStoredString("sf.pref.engine", "antigravity"),
-    () => "antigravity",
-  );
-  const storedAutonomy = React.useSyncExternalStore(
-    () => () => {},
-    () => readStoredString("sf.pref.autonomy", "high"),
-    () => "high",
-  );
   const storedStaticStatus = React.useSyncExternalStore(
     () => () => {},
     () => readStoredBool("sf.pref.disableDynamicStatus", false),
@@ -409,29 +382,8 @@ export function SettingsWorkspace({
     () => readStoredBool("sf.pref.autoOpenArtifacts", false),
     () => false,
   );
-  const storedOpenPr = React.useSyncExternalStore(
-    () => () => {},
-    () => readStoredBool("sf.pref.openPrInReview", true),
-    () => true,
-  );
-
-  const defaultEngine = engineOverride ?? storedEngine;
-  const defaultAutonomy = autonomyOverride ?? storedAutonomy;
   const disableDynamicStatus = staticStatusOverride ?? storedStaticStatus;
   const autoOpenArtifacts = autoArtifactsOverride ?? storedAutoArtifacts;
-  const openPrInReview = openPrOverride ?? storedOpenPr;
-
-  function updateEngine(val: string) {
-    setEngineOverride(val);
-    writeStored("sf.pref.engine", val);
-    toast.success(`Default engine set to ${val === "claude" ? "Claude Code" : "Antigravity"}`);
-  }
-
-  function updateAutonomy(val: string) {
-    setAutonomyOverride(val);
-    writeStored("sf.pref.autonomy", val);
-    toast.success(`Default autonomy set to ${val}`);
-  }
 
   function updateBoolPref(
     key: string,
@@ -752,13 +704,13 @@ export function SettingsWorkspace({
                       <Icon className="size-3.5" aria-hidden="true" />
                       <span>{item.label}</span>
                       {item.id === "runners" && runnerList.length > 0 && (
-                        <span className="ml-0.5 flex items-center gap-1 font-mono text-[10px] text-muted-foreground tabular-nums">
+                        <span className="ml-0.5 flex items-center gap-1 font-mono text-2xs text-muted-foreground tabular-nums">
                           <StatusDot status={onlineRunnerCount > 0 ? "online" : "offline"} />
                           {onlineRunnerCount}/{runnerList.length}
                         </span>
                       )}
                       {item.id === "keys" && tokens.length > 0 && (
-                        <span className="ml-0.5 font-mono text-[10px] text-muted-foreground tabular-nums">
+                        <span className="ml-0.5 font-mono text-2xs text-muted-foreground tabular-nums">
                           {tokens.length}
                         </span>
                       )}
@@ -776,7 +728,7 @@ export function SettingsWorkspace({
           {effectiveTab === "general" && (
             <>
               <section className="flex flex-col gap-2.5">
-                <h2 className="font-mono text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
+                <h2 className="font-mono text-xs font-medium uppercase tracking-wider text-muted-foreground">
                   Account &amp; Workspace
                 </h2>
                 <div className="divide-y rounded-lg border bg-card">
@@ -794,7 +746,7 @@ export function SettingsWorkspace({
                             {displayName}
                           </span>
                           {isLocalMode && (
-                            <Badge variant="secondary" className="text-[10px]">
+                            <Badge variant="secondary" className="text-2xs">
                               Local Mode
                             </Badge>
                           )}
@@ -842,7 +794,7 @@ export function SettingsWorkspace({
               </section>
 
               <section className="flex flex-col gap-2.5">
-                <h2 className="font-mono text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
+                <h2 className="font-mono text-xs font-medium uppercase tracking-wider text-muted-foreground">
                   Code Providers
                 </h2>
                 <div className="divide-y rounded-lg border bg-card">
@@ -903,66 +855,10 @@ export function SettingsWorkspace({
               </section>
 
               <section className="flex flex-col gap-2.5">
-                <h2 className="font-mono text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
+                <h2 className="font-mono text-xs font-medium uppercase tracking-wider text-muted-foreground">
                   Session Defaults
                 </h2>
                 <div className="divide-y rounded-lg border bg-card">
-                  <div className="flex flex-wrap items-center justify-between gap-4 px-5 py-3.5">
-                    <div className="flex flex-col gap-0.5">
-                      <label htmlFor="pref-engine" className="text-xs font-medium text-foreground">
-                        Default engine
-                      </label>
-                      <span className="text-xs text-muted-foreground">
-                        Pre-selected engine when starting a new session.
-                      </span>
-                    </div>
-                    <Select value={defaultEngine} onValueChange={(v) => v && updateEngine(v)}>
-                      <SelectTrigger id="pref-engine" className="w-44">
-                        <SelectValue>
-                          {defaultEngine === "claude" ? "Claude Code" : "Antigravity"}
-                        </SelectValue>
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectGroup>
-                          <SelectItem value="antigravity">Antigravity</SelectItem>
-                          <SelectItem value="claude">Claude Code</SelectItem>
-                        </SelectGroup>
-                      </SelectContent>
-                    </Select>
-                  </div>
-
-                  <div className="flex flex-wrap items-center justify-between gap-4 px-5 py-3.5">
-                    <div className="flex flex-col gap-0.5">
-                      <label
-                        htmlFor="pref-autonomy"
-                        className="text-xs font-medium text-foreground"
-                      >
-                        Default autonomy
-                      </label>
-                      <span className="text-xs text-muted-foreground">
-                        Whether agents pause for approval between phases.
-                      </span>
-                    </div>
-                    <Select value={defaultAutonomy} onValueChange={(v) => v && updateAutonomy(v)}>
-                      <SelectTrigger id="pref-autonomy" className="w-44">
-                        <SelectValue>
-                          {defaultAutonomy === "high"
-                            ? "High"
-                            : defaultAutonomy === "low"
-                              ? "Low"
-                              : "Medium"}
-                        </SelectValue>
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectGroup>
-                          <SelectItem value="low">Low</SelectItem>
-                          <SelectItem value="medium">Medium</SelectItem>
-                          <SelectItem value="high">High</SelectItem>
-                        </SelectGroup>
-                      </SelectContent>
-                    </Select>
-                  </div>
-
                   <div className="flex items-center justify-between gap-4 px-5 py-3.5">
                     <div className="flex flex-col gap-0.5">
                       <label
@@ -1005,26 +901,6 @@ export function SettingsWorkspace({
                     />
                   </div>
 
-                  <div className="flex items-center justify-between gap-4 px-5 py-3.5">
-                    <div className="flex flex-col gap-0.5">
-                      <label
-                        htmlFor="pref-pr-review"
-                        className="cursor-pointer text-xs font-medium text-foreground"
-                      >
-                        Open pull requests in Code Review
-                      </label>
-                      <span className="text-xs text-muted-foreground">
-                        Route PR links inside sessions to the built-in review view.
-                      </span>
-                    </div>
-                    <Switch
-                      id="pref-pr-review"
-                      checked={openPrInReview}
-                      onCheckedChange={(v) =>
-                        updateBoolPref("sf.pref.openPrInReview", v, setOpenPrOverride)
-                      }
-                    />
-                  </div>
                 </div>
               </section>
             </>
@@ -1034,7 +910,7 @@ export function SettingsWorkspace({
           {effectiveTab === "appearance" && (
             <>
               <section className="flex flex-col gap-3">
-                <h2 className="font-mono text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
+                <h2 className="font-mono text-xs font-medium uppercase tracking-wider text-muted-foreground">
                   Theme Mode
                 </h2>
                 <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
@@ -1060,7 +936,7 @@ export function SettingsWorkspace({
               </section>
 
               <section className="flex flex-col gap-2.5">
-                <h2 className="font-mono text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
+                <h2 className="font-mono text-xs font-medium uppercase tracking-wider text-muted-foreground">
                   Color &amp; Contrast
                 </h2>
                 <div className="divide-y rounded-lg border bg-card">
@@ -1097,7 +973,7 @@ export function SettingsWorkspace({
                           </button>
                         );
                       })}
-                      <span className="hidden rounded-md border bg-muted/40 px-2 py-1 font-mono text-[11px] text-muted-foreground sm:inline-block">
+                      <span className="hidden rounded-md border bg-muted/40 px-2 py-1 font-mono text-xs text-muted-foreground sm:inline-block">
                         {accentHex}
                       </span>
                     </div>
@@ -1167,7 +1043,7 @@ export function SettingsWorkspace({
                         <span
                           key={sw.label}
                           title={`${sw.label}: ${sw.hex}`}
-                          className="inline-flex items-center gap-1.5 rounded-md border bg-background px-2 py-1 font-mono text-[11px] text-muted-foreground"
+                          className="inline-flex items-center gap-1.5 rounded-md border bg-background px-2 py-1 font-mono text-xs text-muted-foreground"
                         >
                           <span
                             aria-hidden="true"
@@ -1183,12 +1059,12 @@ export function SettingsWorkspace({
               </section>
 
               <section className="flex flex-col gap-2.5">
-                <h2 className="font-mono text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
+                <h2 className="font-mono text-xs font-medium uppercase tracking-wider text-muted-foreground">
                   Typography
                 </h2>
                 <div className="grid grid-cols-1 divide-y rounded-lg border bg-card sm:grid-cols-3 sm:divide-x sm:divide-y-0">
                   <div className="flex flex-col gap-1 px-5 py-4">
-                    <span className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
+                    <span className="font-mono text-2xs uppercase tracking-wider text-muted-foreground">
                       Brand
                     </span>
                     <span className="font-brand text-base font-bold tracking-[-0.03em] text-foreground">
@@ -1197,14 +1073,14 @@ export function SettingsWorkspace({
                     <span className="text-xs text-muted-foreground">Wordmark</span>
                   </div>
                   <div className="flex flex-col gap-1 px-5 py-4">
-                    <span className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
+                    <span className="font-mono text-2xs uppercase tracking-wider text-muted-foreground">
                       Interface
                     </span>
                     <span className="text-base font-medium text-foreground">Geist</span>
                     <span className="text-xs text-muted-foreground">Labels &amp; prose</span>
                   </div>
                   <div className="flex flex-col gap-1 px-5 py-4">
-                    <span className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
+                    <span className="font-mono text-2xs uppercase tracking-wider text-muted-foreground">
                       Telemetry
                     </span>
                     <span className="font-mono text-base font-medium text-foreground">
@@ -1232,7 +1108,7 @@ export function SettingsWorkspace({
           {effectiveTab === "runners" && (
             <>
               <section className="flex flex-col gap-2.5">
-                <h2 className="font-mono text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
+                <h2 className="font-mono text-xs font-medium uppercase tracking-wider text-muted-foreground">
                   Connected Machines ({runnerList.length})
                 </h2>
 
@@ -1269,13 +1145,13 @@ export function SettingsWorkspace({
                                       {r.name}
                                     </span>
                                     {r.cliVersion && (
-                                      <span className="shrink-0 font-mono text-[10px] text-muted-foreground">
+                                      <span className="shrink-0 font-mono text-2xs text-muted-foreground">
                                         v{r.cliVersion}
                                       </span>
                                     )}
                                   </div>
                                   <span
-                                    className="truncate font-mono text-[11px] text-muted-foreground"
+                                    className="truncate font-mono text-xs text-muted-foreground"
                                     title={
                                       r.workspaceDir
                                         ? `${r.hostname} (${r.os}) · ${r.workspaceDir}`
@@ -1291,17 +1167,10 @@ export function SettingsWorkspace({
 
                               <TableCell>
                                 <div className="flex flex-wrap items-center gap-1">
-                                  {r.engines.map((e) => (
-                                    <Badge key={e} variant="secondary">
-                                      <CpuIcon data-icon="inline-start" />
-                                      {e}
-                                    </Badge>
-                                  ))}
-                                  {r.models.length > 0 && (
-                                    <span className="font-mono text-[11px] text-muted-foreground">
-                                      · {r.models.length} models
-                                    </span>
-                                  )}
+                                  <Badge variant="secondary">
+                                    <CpuIcon data-icon="inline-start" />
+                                    claude
+                                  </Badge>
                                 </div>
                               </TableCell>
 
@@ -1325,7 +1194,7 @@ export function SettingsWorkspace({
                                     </label>
                                   </div>
                                 ) : (
-                                  <Badge variant="outline" className="font-mono text-[10px]">
+                                  <Badge variant="outline" className="font-mono text-2xs">
                                     @{r.ownerLogin}
                                   </Badge>
                                 )}
@@ -1355,10 +1224,10 @@ export function SettingsWorkspace({
 
               <section className="flex flex-col gap-2.5">
                 <div className="flex items-center justify-between">
-                  <h2 className="font-mono text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
+                  <h2 className="font-mono text-xs font-medium uppercase tracking-wider text-muted-foreground">
                     Connect a Machine
                   </h2>
-                  <Badge variant="secondary" className="font-mono text-[10px]">
+                  <Badge variant="secondary" className="font-mono text-2xs">
                     OAuth Device Login
                   </Badge>
                 </div>
@@ -1400,7 +1269,7 @@ export function SettingsWorkspace({
           {effectiveTab === "keys" && (
             <>
               <section className="flex flex-col gap-2.5">
-                <h2 className="font-mono text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
+                <h2 className="font-mono text-xs font-medium uppercase tracking-wider text-muted-foreground">
                   Generate Key
                 </h2>
                 <form
@@ -1460,7 +1329,7 @@ export function SettingsWorkspace({
               </section>
 
               <section className="flex flex-col gap-2.5">
-                <h2 className="font-mono text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
+                <h2 className="font-mono text-xs font-medium uppercase tracking-wider text-muted-foreground">
                   Active Keys ({tokens.length})
                 </h2>
 
@@ -1504,7 +1373,7 @@ export function SettingsWorkspace({
               </section>
 
               <section className="flex flex-col gap-2.5">
-                <h2 className="font-mono text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
+                <h2 className="font-mono text-xs font-medium uppercase tracking-wider text-muted-foreground">
                   CLI Authentication
                 </h2>
                 <div className="rounded-lg border bg-card p-5">
@@ -1523,7 +1392,7 @@ export function SettingsWorkspace({
             <>
               <section className="flex flex-col gap-2.5">
                 <div className="flex items-center justify-between gap-2">
-                  <h2 className="font-mono text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
+                  <h2 className="font-mono text-xs font-medium uppercase tracking-wider text-muted-foreground">
                     Client Configuration
                   </h2>
                   <span className="font-mono text-xs text-muted-foreground">
@@ -1557,7 +1426,7 @@ export function SettingsWorkspace({
               </section>
 
               <section className="flex flex-col gap-2.5">
-                <h2 className="font-mono text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
+                <h2 className="font-mono text-xs font-medium uppercase tracking-wider text-muted-foreground">
                   Exposed Tools
                 </h2>
                 <div className="grid grid-cols-1 divide-y rounded-lg border bg-card sm:grid-cols-2 sm:divide-y-0">

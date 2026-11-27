@@ -1,7 +1,6 @@
 import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { emitFactoryEvent } from "@/lib/events";
-import type { LiveJsSpec } from "@/lib/live-sync";
 import { prisma } from "@/lib/prisma";
 import { serializeProjectIssue } from "@/lib/project-stats";
 import { serializePrototype } from "@/lib/prototype-server";
@@ -98,14 +97,9 @@ export async function getSidebarData(userId: string) {
 
   const [
     projects,
-    missions,
     runners,
     pendingInteractions,
-    needsHumanIssues,
     blockedOrStalledRuns,
-    personMergePrs,
-    proposedLessons,
-    openPrCount,
     latestInteractions,
     latestAttentionRuns,
   ] = await Promise.all([
@@ -142,55 +136,30 @@ export async function getSidebarData(userId: string) {
           },
         },
         _count: {
-          select: { issues: true, runs: true, pullRequests: true, members: true },
+          select: { issues: true, runs: true, members: true },
         },
-      },
-    }),
-    prisma.mission.findMany({
-      where: { project: projectAccessFilter },
-      orderBy: { updatedAt: "desc" },
-      take: 10,
-      include: {
-        project: { select: { id: true, name: true, slug: true } },
-        issues: { select: { status: true } },
       },
     }),
     getAccessibleRunners(userId, { githubLogin: user?.githubLogin }),
     prisma.runInteraction.count({
       where: {
         status: "pending",
-        run: { project: projectAccessFilter, mode: { notIn: ["factory", "mission"] } },
+        run: { project: projectAccessFilter },
       },
-    }),
-    prisma.projectIssue.count({
-      where: { status: "needs_human", project: projectAccessFilter },
     }),
     prisma.factoryRun.count({
       where: {
         project: projectAccessFilter,
         OR: [
           { status: { in: ["blocked", "stalled"] } },
-          { status: "awaiting_input", mode: { notIn: ["factory", "mission"] } },
+          { status: "awaiting_input", mode: "ba" },
         ],
       },
-    }),
-    prisma.pullRequest.count({
-      where: {
-        state: "open",
-        mergeDecision: "person",
-        project: projectAccessFilter,
-      },
-    }),
-    prisma.lesson.count({
-      where: { OR: [{ userId }, { project: projectAccessFilter }], status: "proposed" },
-    }),
-    prisma.pullRequest.count({
-      where: { state: { in: ["open", "draft"] }, project: projectAccessFilter },
     }),
     prisma.runInteraction.findMany({
       where: {
         status: "pending",
-        run: { project: projectAccessFilter, mode: { notIn: ["factory", "mission"] } },
+        run: { project: projectAccessFilter },
       },
       orderBy: { createdAt: "desc" },
       take: 5,
@@ -208,7 +177,7 @@ export async function getSidebarData(userId: string) {
         project: projectAccessFilter,
         OR: [
           { status: { in: ["blocked", "stalled"] } },
-          { status: "awaiting_input", mode: { notIn: ["factory", "mission"] } },
+          { status: "awaiting_input", mode: "ba" },
         ],
       },
       orderBy: { updatedAt: "desc" },
@@ -233,11 +202,6 @@ export async function getSidebarData(userId: string) {
       name: r.name,
       hostname: r.hostname,
       os: r.os,
-      engines: safeJsonParse<string[]>(r.enginesJson, ["antigravity", "claude"]),
-      models: safeJsonParse<Array<{ id: string; label: string; engine: string }>>(
-        r.modelsJson,
-        [],
-      ),
       allowedRoots: safeJsonParse<string[]>(r.allowedRootsJson, []),
       cliVersion: r.cliVersion ?? null,
       visibility: r.visibility === "team" ? "team" : "personal",
@@ -251,12 +215,8 @@ export async function getSidebarData(userId: string) {
     };
   });
 
-  const inboxCount =
-    pendingInteractions +
-    needsHumanIssues +
-    blockedOrStalledRuns +
-    personMergePrs +
-    proposedLessons;
+  // A needs-decision ticket is counted once, through its pending decision interaction.
+  const inboxCount = pendingInteractions + blockedOrStalledRuns;
 
   const inboxAlerts = [
     ...latestInteractions.map((i) => ({
@@ -281,39 +241,21 @@ export async function getSidebarData(userId: string) {
     user,
     inboxCount,
     inboxAlerts,
-    openPrCount,
     runners: normalizedRunners,
-    missions: missions.map((m) => {
-      const done = m.issues.filter((i) => i.status === "passed").length;
-      return {
-        id: m.id,
-        projectId: m.projectId,
-        projectName: m.project.name,
-        title: m.title,
-        status: m.status,
-        completedIssues: done,
-        totalIssues: m.issues.length,
-        updatedAt: m.updatedAt.toISOString(),
-      };
-    }),
     projects: projects.map((p) => ({
       id: p.id,
       name: p.name,
       slug: p.slug,
-      engine: p.engine,
       source: p.source,
       localPath: p.localPath,
       githubFullName: p.githubFullName,
       defaultBranch: p.defaultBranch || "main",
       defaultRunnerId: p.defaultRunnerId ?? null,
-      initStatus: p.initStatus,
-      readinessScore: p.readinessScore,
       isOwner: p.userId === userId,
       ownerLogin: p.user?.githubLogin ?? "local",
       memberCount: p._count.members + 1,
       issueCount: p._count.issues,
       runCount: p._count.runs,
-      prCount: p._count.pullRequests,
       recentRuns: p.runs.map((r) => ({
         id: r.id,
         runKey: r.runKey,
@@ -352,7 +294,6 @@ export async function getRunDetail(userId: string, runId: string) {
       user: { select: { id: true, githubLogin: true, name: true } },
       triggeredBy: { select: { id: true, githubLogin: true, name: true } },
       issue: true,
-      mission: true,
       runner: {
         include: {
           user: { select: { id: true, githubLogin: true, name: true } },
@@ -362,24 +303,36 @@ export async function getRunDetail(userId: string, runId: string) {
       steps: { orderBy: [{ createdAt: "asc" }, { seq: "asc" }] },
       interactions: { orderBy: { createdAt: "desc" } },
       artifacts: { orderBy: { createdAt: "desc" } },
-      pullRequests: { orderBy: { updatedAt: "desc" } },
       prototypes: { orderBy: { updatedAt: "desc" } },
     },
   });
 
   if (!run) return null;
 
-  const [projectDraftIssues, projectPrototypes, accessibleRunners, pendingCommandCount] =
+  const [projectDraftIssues, epicTickets, projectPrototypes, accessibleRunners, pendingCommandCount] =
     await Promise.all([
+      // The tickets a BA session published (synced through /api/v1/epics/sync since it started).
       run.mode === "ba"
         ? prisma.projectIssue
             .findMany({
-              where: { projectId: run.projectId },
-              orderBy: [{ priority: "asc" }, { createdAt: "asc" }],
+              where: {
+                projectId: run.projectId,
+                NOT: { tier: "epic" },
+                updatedAt: { gte: run.startedAt },
+              },
+              orderBy: [{ epicNumber: "desc" }, { wave: "asc" }, { githubIssueNumber: "asc" }],
             })
             .then((rows) => rows.map(serializeProjectIssue))
         : Promise.resolve([]),
-      run.mode === "ba" || run.mode === "clarify" || run.issue
+      run.mode === "epic" && run.epicNumber
+        ? prisma.projectIssue
+            .findMany({
+              where: { projectId: run.projectId, epicNumber: run.epicNumber, NOT: { tier: "epic" } },
+              orderBy: [{ wave: "asc" }, { githubIssueNumber: "asc" }],
+            })
+            .then((rows) => rows.map(serializeProjectIssue))
+        : Promise.resolve([]),
+      run.mode === "ba"
         ? prisma.projectPrototype
             .findMany({
               where: { projectId: run.projectId },
@@ -429,6 +382,7 @@ export async function getRunDetail(userId: string, runId: string) {
     mode: run.mode,
     autonomy: run.autonomy,
     engine: run.engine,
+    epicNumber: run.epicNumber,
     status: run.status,
     currentPhase: run.currentPhase,
     baseCommit: run.baseCommit,
@@ -436,32 +390,10 @@ export async function getRunDetail(userId: string, runId: string) {
     worktreePath: run.worktreePath,
     mergedCommit: run.mergedCommit,
     model: run.model,
-    risk: run.risk,
-    surfaces: safeJsonParse<string[]>(run.surfacesJson, []),
-    mergeDecision: run.mergeDecision,
-    mergeReasons: safeJsonParse<string[]>(run.mergeReasonsJson, []),
     summary: run.summary,
-    specLine: run.specLine,
-    specs: safeJsonParse<LiveJsSpec[]>(run.specsJson, []),
+    epicTickets,
     projectDraftIssues,
     prototypes: combinedPrototypes,
-    criteria: safeJsonParse<Array<{ id: string; text: string; status?: string }>>(
-      run.criteriaJson,
-      [],
-    ),
-    failureLog: safeJsonParse<
-      Array<{
-        stage?: string;
-        round?: number;
-        kind?: string;
-        specs?: string[];
-        file?: string;
-        line?: number;
-        problem: string;
-        sentBack?: boolean;
-      }>
-    >(run.failureLogJson, []),
-    checkpoint: safeJsonParse<Record<string, unknown> | null>(run.checkpointJson, null),
     prNumber: run.prNumber,
     prUrl: run.prUrl,
     inputTokens: run.inputTokens,
@@ -483,13 +415,8 @@ export async function getRunDetail(userId: string, runId: string) {
       githubFullName: run.project.githubFullName,
       githubUrl: run.project.githubUrl,
       defaultBranch: run.project.defaultBranch || "main",
-      engine: run.project.engine,
-      initStatus: run.project.initStatus,
     },
     issue: run.issue ? serializeProjectIssue(run.issue) : null,
-    mission: run.mission
-      ? { id: run.mission.id, title: run.mission.title, status: run.mission.status }
-      : null,
     runner: run.runner
       ? {
           id: run.runner.id,
@@ -580,24 +507,6 @@ export async function getRunDetail(userId: string, runId: string) {
       meta: safeJsonParse<Record<string, unknown>>(art.metaJson, {}),
       createdAt: art.createdAt.toISOString(),
     })),
-    pullRequests: run.pullRequests.map((pr) => ({
-      id: pr.id,
-      number: pr.number,
-      title: pr.title,
-      url: pr.url,
-      headBranch: pr.headBranch,
-      baseBranch: pr.baseBranch,
-      state: pr.state,
-      ciStatus: pr.ciStatus,
-      mergeDecision: pr.mergeDecision,
-      autoFix: pr.autoFix,
-      queueStatus: pr.queueStatus,
-      judgeVerdict: pr.judgeVerdict,
-      additions: pr.additions,
-      deletions: pr.deletions,
-      commentsCount: pr.commentsCount,
-      updatedAt: pr.updatedAt.toISOString(),
-    })),
   };
 }
 
@@ -610,12 +519,12 @@ export async function getInboxData(userId: string) {
   });
   const projectFilter = accessibleProjectsWhere(userId, viewer?.githubLogin);
 
-  const [interactions, needsHumanIssues, attentionRuns, reviewPrs, proposedLessons] =
+  const [interactions, needsHumanIssues, attentionRuns] =
     await Promise.all([
       prisma.runInteraction.findMany({
         where: {
           status: "pending",
-          run: { project: projectFilter, mode: { notIn: ["factory", "mission"] } },
+          run: { project: projectFilter },
         },
         orderBy: { createdAt: "desc" },
         include: {
@@ -625,6 +534,8 @@ export async function getInboxData(userId: string) {
               runKey: true,
               title: true,
               currentPhase: true,
+              mode: true,
+              epicNumber: true,
               project: { select: { id: true, name: true, slug: true } },
             },
           },
@@ -632,10 +543,10 @@ export async function getInboxData(userId: string) {
         },
       }),
       prisma.projectIssue.findMany({
-        where: { status: "needs_human", project: projectFilter },
-        orderBy: [{ priority: "asc" }, { updatedAt: "desc" }],
+        where: { status: "needs_human", project: projectFilter, NOT: { tier: "epic" } },
+        orderBy: [{ updatedAt: "desc" }],
         include: {
-          project: { select: { id: true, name: true, slug: true, engine: true } },
+          project: { select: { id: true, name: true, slug: true } },
         },
       }),
       prisma.factoryRun.findMany({
@@ -643,27 +554,12 @@ export async function getInboxData(userId: string) {
           project: projectFilter,
           OR: [
             { status: { in: ["blocked", "stalled"] } },
-            { status: "awaiting_input", mode: { notIn: ["factory", "mission"] } },
+            { status: "awaiting_input", mode: "ba" },
           ],
         },
         orderBy: { updatedAt: "desc" },
         include: {
           project: { select: { id: true, name: true, slug: true } },
-        },
-      }),
-      prisma.pullRequest.findMany({
-        where: { state: "open", mergeDecision: "person", project: projectFilter },
-        orderBy: { updatedAt: "desc" },
-        include: {
-          project: { select: { id: true, name: true, slug: true } },
-          run: { select: { id: true, runKey: true, risk: true } },
-        },
-      }),
-      prisma.lesson.findMany({
-        where: { OR: [{ userId }, { project: projectFilter }], status: "proposed" },
-        orderBy: [{ occurrences: "desc" }, { updatedAt: "desc" }],
-        include: {
-          project: { select: { id: true, name: true } },
         },
       }),
     ]);
@@ -682,13 +578,14 @@ export async function getInboxData(userId: string) {
       phase: i.run.currentPhase,
       projectId: i.run.project.id,
       projectName: i.run.project.name,
+      runMode: i.run.mode,
+      epicNumber: i.run.epicNumber,
       agentName: i.agent?.name ?? null,
     })),
     needsHumanIssues: needsHumanIssues.map((iss) => ({
       ...serializeProjectIssue(iss),
       projectId: iss.project.id,
       projectName: iss.project.name,
-      engine: iss.project.engine,
     })),
     attentionRuns: attentionRuns.map((r) => ({
       id: r.id,
@@ -704,99 +601,7 @@ export async function getInboxData(userId: string) {
       projectId: r.project.id,
       projectName: r.project.name,
     })),
-    reviewPrs: reviewPrs.map((pr) => ({
-      id: pr.id,
-      number: pr.number,
-      title: pr.title,
-      url: pr.url,
-      headBranch: pr.headBranch,
-      baseBranch: pr.baseBranch,
-      ciStatus: pr.ciStatus,
-      judgeVerdict: pr.judgeVerdict,
-      additions: pr.additions,
-      deletions: pr.deletions,
-      projectId: pr.project.id,
-      projectName: pr.project.name,
-      runId: pr.run?.id ?? null,
-      risk: pr.run?.risk ?? null,
-      updatedAt: pr.updatedAt.toISOString(),
-    })),
-    proposedLessons: proposedLessons.map((l) => ({
-      id: l.id,
-      patternKey: l.patternKey,
-      title: l.title,
-      occurrences: l.occurrences,
-      target: l.target,
-      proposal: l.proposal,
-      projectName: l.project?.name ?? "Global",
-      createdAt: l.createdAt.toISOString(),
-    })),
   };
-}
-
-export async function getReviewsData(userId: string) {
-  const prs = await prisma.pullRequest.findMany({
-    where: { project: { userId } },
-    orderBy: { updatedAt: "desc" },
-    include: {
-      project: { select: { id: true, name: true, slug: true, githubFullName: true } },
-      issue: { select: { id: true, issueKey: true, title: true } },
-      run: {
-        select: {
-          id: true,
-          runKey: true,
-          risk: true,
-          status: true,
-          mergeDecision: true,
-          mergeReasonsJson: true,
-          artifacts: {
-            where: { kind: { in: ["qc_shot", "baseline_diff", "axe", "pr_judge", "mockup"] } },
-            orderBy: { createdAt: "desc" },
-          },
-        },
-      },
-    },
-  });
-
-  return prs.map((pr) => ({
-    id: pr.id,
-    projectId: pr.project.id,
-    projectName: pr.project.name,
-    projectSlug: pr.project.slug,
-    githubFullName: pr.project.githubFullName,
-    number: pr.number,
-    title: pr.title,
-    url: pr.url,
-    headBranch: pr.headBranch,
-    baseBranch: pr.baseBranch,
-    state: pr.state,
-    ciStatus: pr.ciStatus,
-    mergeDecision: pr.mergeDecision,
-    autoFix: pr.autoFix,
-    queueStatus: pr.queueStatus,
-    judgeVerdict: pr.judgeVerdict,
-    judgeReport: safeJsonParse<Record<string, unknown> | null>(pr.judgeReportJson, null),
-    walkthroughMd: pr.walkthroughMd,
-    diffSummary: pr.diffSummary,
-    additions: pr.additions,
-    deletions: pr.deletions,
-    commentsCount: pr.commentsCount,
-    issueKey: pr.issue?.issueKey ?? null,
-    issueTitle: pr.issue?.title ?? null,
-    runId: pr.run?.id ?? null,
-    runKey: pr.run?.runKey ?? null,
-    risk: pr.run?.risk ?? null,
-    mergeReasons: safeJsonParse<string[]>(pr.run?.mergeReasonsJson, []),
-    artifacts: (pr.run?.artifacts ?? []).map((a) => ({
-      id: a.id,
-      kind: a.kind,
-      title: a.title,
-      pathOrUrl: a.pathOrUrl,
-      mimeType: a.mimeType,
-    })),
-    createdAt: pr.createdAt.toISOString(),
-    updatedAt: pr.updatedAt.toISOString(),
-  }));
 }
 
 export async function getAnalyticsData(userId: string) {
@@ -808,7 +613,7 @@ export async function getAnalyticsData(userId: string) {
     }),
     prisma.runAgent.findMany({
       where: { run: { userId } },
-      include: { run: { select: { engine: true } } },
+
     }),
     prisma.project.findMany({
       where: { userId },
@@ -871,7 +676,6 @@ export async function getAnalyticsData(userId: string) {
     {
       role: string;
       model: string;
-      engine: string;
       runs: number;
       passed: number;
       failed: number;
@@ -882,11 +686,10 @@ export async function getAnalyticsData(userId: string) {
 
   for (const a of agents) {
     const model = a.model || "default";
-    const key = `${a.role}|${model}|${a.run.engine}`;
+    const key = `${a.role}|${model}`;
     const entry = scoreMap.get(key) ?? {
       role: a.role,
       model,
-      engine: a.run.engine,
       runs: 0,
       passed: 0,
       failed: 0,
@@ -935,14 +738,12 @@ export async function getAnalyticsData(userId: string) {
 
 const CONTEXT_PATHS = [
   ".factory/project.json",
-  ".factory/init.json",
   ".factory/product.md",
   ".factory/decisions.md",
   ".factory/design/DESIGN.md",
   ".factory/design/tokens.json",
   ".factory/design/ui-store/catalog.md",
   "CODING_STANDARDS.md",
-  "GEMINI.md",
   "CLAUDE.md",
   "AGENTS.md",
   "README.md",

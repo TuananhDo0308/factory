@@ -1,18 +1,19 @@
 # CLAUDE.md
 
-This monorepo holds three independent top-level directories:
+This repository holds:
 
-- `claude/`: self-contained **Claude Code** Factory skill suite (JavaScript Workflow scripts, role briefs, setup/pipeline scripts, `ui-refine-loop`, `pr-judge`, and Node tests). See [claude/CLAUDE.md](claude/CLAUDE.md) for detailed architecture and rules.
-- `antigravity/`: self-contained **Gemini Antigravity** Factory skill suite (Python `run_workflow` scripts, role briefs, setup/pipeline scripts, `ui-refine-loop`, `pr-judge`, and Python + Node tests). See [antigravity/GEMINI.md](antigravity/GEMINI.md) for detailed architecture and rules.
-- `software-factory/`: upcoming Next.js (App Router) + SQLite/Prisma web application and internal `sf` CLI that tracks all Factory projects, tasks, live runs, logs, and approvals (XS Factory Bench has been removed).
+- `software-factory/`: the Software Factory web app (Next.js App Router + Prisma/PostgreSQL) and the `sf` CLI/daemon in a single file, `cli/sf.ts` (served to runners at `/api/cli/sf.ts`, so it must stay one file).
+- `factory_v2/`: the factory v2 skills, `new-ba` and `new-factory`, that Software Factory runs on Claude Code.
+- `factory-v2/`: a separate experimental suite (`/f-plan`, `/f-run`, …), not used by Software Factory.
 
 ## Rules
 
-- Keep `claude/` and `antigravity/` completely self-contained — no cross-directory runtime imports or symlinks between them.
-- Untracked and ignored files (for example `factory-workspace/` or local `live.js` files) are not recoverable through git: move them to the Trash instead of removing them outright, and inspect the target first.
+- Claude Code is the only engine; do not add other engines back. Tokens and cost come from Claude's own numbers, never estimates.
+- The daemon ↔ web contract is `software-factory/docs/factory-v2-contract.md`: change both sides and the contract together.
+- Untracked and ignored files are not recoverable through git: move them to the Trash instead of removing them outright, and inspect the target first.
 - Commit or push only when the user asks.
 
 ## Testing
 
-- **Claude**: `cd claude && node --test tests/*.test.mjs tests/*.test.ts`
-- **Antigravity**: `cd antigravity && python3 -m unittest discover -s tests -v && node --test tests/*.test.mjs tests/*.test.ts`
+- **factory v2**: `cd factory_v2/skills/new-ba && node --test tests/*.test.mjs`, and `cd factory_v2/skills/new-factory && node --test tests/unit/*.test.mjs tests/integration/*.test.mjs`
+- **Software Factory**: `cd software-factory && node --test tests/*.test.mjs && pnpm db:generate && pnpm lint && pnpm build`

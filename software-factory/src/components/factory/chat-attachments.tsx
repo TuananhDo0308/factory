@@ -217,7 +217,7 @@ export function AttachmentPreviewStrip({
             />
             <div className="flex max-w-[140px] flex-col">
               <span className="truncate text-xs font-medium text-foreground">{att.name}</span>
-              <span className="font-mono text-[10px] text-muted-foreground">
+              <span className="font-mono text-2xs text-muted-foreground">
                 {formatFileSize(att.size)}
               </span>
             </div>
@@ -238,7 +238,7 @@ export function AttachmentPreviewStrip({
           >
             <AttachmentIcon mimeType={att.mimeType} name={att.name} />
             <span className="truncate font-medium text-foreground">{att.name}</span>
-            <span className="shrink-0 font-mono text-[10px] text-muted-foreground">
+            <span className="shrink-0 font-mono text-2xs text-muted-foreground">
               {formatFileSize(att.size)}
             </span>
             <button
@@ -283,7 +283,7 @@ export function MessageAttachments({ attachments }: { attachments: StoredAttachm
                   alt={img.name}
                   className="max-h-40 max-w-[220px] object-cover transition-transform duration-200 group-hover:scale-[1.02]"
                 />
-                <span className="block max-w-[220px] truncate border-t border-border/60 bg-card/90 px-2 py-0.5 font-mono text-[10px] text-muted-foreground">
+                <span className="block max-w-[220px] truncate border-t border-border/60 bg-card/90 px-2 py-0.5 font-mono text-2xs text-muted-foreground">
                   {img.name}
                 </span>
               </a>
@@ -307,7 +307,7 @@ export function MessageAttachments({ attachments }: { attachments: StoredAttachm
                 <AttachmentIcon mimeType={f.mimeType} name={f.name} />
                 <span className="truncate font-medium">{f.name}</span>
                 {f.size > 0 && (
-                  <span className="shrink-0 font-mono text-[10px] text-muted-foreground">
+                  <span className="shrink-0 font-mono text-2xs text-muted-foreground">
                     {formatFileSize(f.size)}
                   </span>
                 )}

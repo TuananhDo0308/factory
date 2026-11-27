@@ -26,10 +26,8 @@ model User {
   apiTokens              ApiToken[]
   runs                   FactoryRun[]
   triggeredRuns          FactoryRun[]    @relation("RunTriggeredBy")
-  missions               Mission[]
   runners                RunnerMachine[]
   runnerCommands         RunnerCommand[]
-  lessons                Lesson[]
 }
 
 model Session {
@@ -72,7 +70,7 @@ model RunnerMachine {
   name            String
   hostname        String
   os              String   @default("darwin")
-  enginesJson      String   @default("[\"antigravity\",\"claude\"]")
+  enginesJson      String   @default("[\"claude\"]")
   modelsJson       String?
   allowedRootsJson       String?
   workspaceDir           String?
@@ -103,7 +101,7 @@ model Project {
   slug                String
   description         String?
   source              String   @default("new") // "github" | "new" | "local"
-  engine              String   @default("antigravity") // "antigravity" | "claude"
+  engine              String   @default("claude") // always "claude"; kept for data compatibility
   localPath           String?
   githubRepoId        Int?
   githubFullName      String?
@@ -115,11 +113,7 @@ model Project {
   botAccessStatus     String   @default("none") // "owner" | "active" | "invited" | "failed" | "none"
   botAccessError      String?
   botInvitationId     Int?
-  initStatus          String   @default("none") // "none" | "partial" | "stale" | "complete"
   stackJson           String?
-  readinessScore      Int?
-  autoDispatch        Boolean  @default(false)
-  autoApprove         Boolean  @default(false)
   defaultRunnerId     String?
   maxConcurrency      Int      @default(2)
   stallTimeoutMinutes Int      @default(15)
@@ -132,9 +126,6 @@ model Project {
   invites        ProjectInvite[]
   runs           FactoryRun[]
   issues         ProjectIssue[]
-  missions       Mission[]
-  pullRequests   PullRequest[]
-  lessons        Lesson[]
   runnerCommands RunnerCommand[]
   contextFiles   ProjectContextFile[]
   prototypes     ProjectPrototype[]
@@ -180,31 +171,10 @@ model ProjectInvite {
   @@index([projectId])
 }
 
-model Mission {
-  id                   String   @id @default(cuid())
-  projectId            String
-  userId               String
-  title                String
-  goal                 String   @default("")
-  validationContractMd String   @default("")
-  status               String   @default("planning") // "planning" | "active" | "paused" | "completed" | "failed"
-  autonomy             String   @default("medium") // "off" | "low" | "medium" | "high"
-  createdAt            DateTime @default(now())
-  updatedAt            DateTime @updatedAt
-
-  project Project        @relation(fields: [projectId], references: [id], onDelete: Cascade)
-  user    User           @relation(fields: [userId], references: [id], onDelete: Cascade)
-  issues  ProjectIssue[]
-  runs    FactoryRun[]
-
-  @@index([projectId, status])
-  @@index([userId])
-}
 
 model ProjectIssue {
   id                String   @id @default(cuid())
   projectId         String
-  missionId         String?
   issueKey          String
   title             String
   goal              String   @default("")
@@ -213,7 +183,7 @@ model ProjectIssue {
   dependsOnJson     String   @default("[]")
   priority          String   @default("P2") // "P0" | "P1" | "P2" | "P3"
   complexity        String   @default("M") // "XS" | "S" | "M" | "L"
-  tier              String   @default("medium") // "low" | "medium" | "high"
+  tier              String   @default("medium") // "low" | "medium" | "high" | "epic"
   tierScore         Int?
   autonomy          String   @default("auto_build_human_merge") // "full_auto" | "auto_build_human_merge" | "human_required"
   modelPlanJson     String?
@@ -225,17 +195,19 @@ model ProjectIssue {
   syncMode          String   @default("local") // "local" | "github"
   githubIssueNumber Int?
   githubIssueUrl    String?
+  epicNumber        Int? // the factory v2 epic this ticket belongs to (also set on the epic row itself)
+  ticketKey         String? // new-ba batch key ("T1")
+  wave              Int?
+  rounds            Int?
   createdAt         DateTime @default(now())
   updatedAt         DateTime @updatedAt
 
   project      Project       @relation(fields: [projectId], references: [id], onDelete: Cascade)
-  mission      Mission?      @relation(fields: [missionId], references: [id], onDelete: SetNull)
   runs         FactoryRun[]
-  pullRequests PullRequest[]
 
   @@unique([projectId, issueKey])
   @@index([projectId, status])
-  @@index([missionId])
+  @@index([projectId, epicNumber])
 }
 
 model ApiToken {
@@ -259,16 +231,16 @@ model FactoryRun {
   userId             String
   triggeredById      String?
   issueId            String?
-  missionId          String?
   runnerMachineId    String?
   runKey             String
   title              String
   prompt             String?
-  mode               String    @default("factory") // "normal" | "clarify" | "factory" | "mission" | "ui-refine" | "pr-judge"
+  mode               String    @default("ba") // "ba" (new-ba session) | "epic" (new-factory run)
   autonomy           String    @default("medium") // "off" | "low" | "medium" | "high"
-  engine             String    @default("antigravity") // "antigravity" | "claude"
+  engine             String    @default("claude") // always "claude"; kept for data compatibility
   status             String    @default("running") // "queued" | "running" | "awaiting_input" | "passed" | "failed" | "blocked" | "stalled" | "cancelled"
-  currentPhase       String    @default("Init")
+  currentPhase       String    @default("BA") // "BA" | "Plan" | "Prepare" | "Build" | "Final" | "Report"
+  epicNumber         Int?
   baseCommit         String?
   targetBranch       String?
   worktreePath       String?
@@ -303,13 +275,11 @@ model FactoryRun {
   user         User             @relation(fields: [userId], references: [id], onDelete: Cascade)
   triggeredBy  User?            @relation("RunTriggeredBy", fields: [triggeredById], references: [id], onDelete: SetNull)
   issue        ProjectIssue?    @relation(fields: [issueId], references: [id], onDelete: SetNull)
-  mission      Mission?         @relation(fields: [missionId], references: [id], onDelete: SetNull)
   runner       RunnerMachine?   @relation(fields: [runnerMachineId], references: [id], onDelete: SetNull)
   agents       RunAgent[]
   steps        RunStep[]
   interactions RunInteraction[]
   artifacts    RunArtifact[]
-  pullRequests PullRequest[]
   commands     RunnerCommand[]
   prototypes   ProjectPrototype[]
 
@@ -317,7 +287,7 @@ model FactoryRun {
   @@index([projectId, startedAt])
   @@index([userId, status])
   @@index([issueId])
-  @@index([missionId])
+  @@index([projectId, epicNumber])
 }
 
 model RunAgent {
@@ -382,7 +352,7 @@ model RunInteraction {
   id           String    @id @default(cuid())
   runId        String
   runAgentId   String?
-  type         String // "question" | "plan_approval" | "mockup_approval" | "merge_approval" | "steer"
+  type         String // "question" | "decision" | "steer"
   title        String
   prompt       String?
   payloadJson  String?
@@ -458,39 +428,6 @@ model ProjectPrototype {
   @@index([runId])
 }
 
-model PullRequest {
-  id              String   @id @default(cuid())
-  projectId       String
-  issueId         String?
-  runId           String?
-  number          Int
-  title           String
-  url             String?
-  headBranch      String
-  baseBranch      String   @default("main")
-  state           String   @default("open") // "open" | "draft" | "merged" | "closed"
-  ciStatus        String   @default("pending") // "pending" | "passing" | "failing" | "unknown"
-  mergeDecision   String   @default("person") // "auto" | "person"
-  autoFix         Boolean  @default(true)
-  queueStatus     String   @default("none") // "none" | "queued" | "rebasing" | "verifying" | "merged" | "conflict"
-  judgeVerdict    String? // "pass" | "fail" | "unknown"
-  judgeReportJson String?
-  walkthroughMd   String?
-  diffSummary     String?
-  additions       Int      @default(0)
-  deletions       Int      @default(0)
-  commentsCount   Int      @default(0)
-  createdAt       DateTime @default(now())
-  updatedAt       DateTime @updatedAt
-
-  project Project       @relation(fields: [projectId], references: [id], onDelete: Cascade)
-  issue   ProjectIssue? @relation(fields: [issueId], references: [id], onDelete: SetNull)
-  run     FactoryRun?   @relation(fields: [runId], references: [id], onDelete: SetNull)
-
-  @@unique([projectId, number])
-  @@index([projectId, state])
-  @@index([queueStatus])
-}
 
 model RunnerCommand {
   id              String   @id @default(cuid())
@@ -498,7 +435,7 @@ model RunnerCommand {
   runnerMachineId String?
   projectId       String?
   runId           String?
-  type            String // "start_run" | "pause_run" | "resume_run" | "retry_phase" | "answer_interaction" | "merge_pr" | "run_clarify" | "run_pr_judge" | "run_ui_refine"
+  type            String // "start_run" | "resume_run" | "answer_interaction" | "pause_run" | "run_epic" | "sync_context" | "create_project"
   payloadJson     String   @default("{}")
   status          String   @default("pending") // "pending" | "claimed" | "done" | "failed"
   error           String?
@@ -514,26 +451,6 @@ model RunnerCommand {
   @@index([runnerMachineId, status])
 }
 
-model Lesson {
-  id           String   @id @default(cuid())
-  userId       String
-  projectId    String?
-  patternKey   String
-  title        String
-  occurrences  Int      @default(1)
-  target       String   @default("role_brief") // "workflow_code" | "role_brief" | "project_rule"
-  proposal     String
-  evidenceJson String?
-  status       String   @default("proposed") // "proposed" | "accepted" | "rejected" | "done"
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
-
-  user    User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  project Project? @relation(fields: [projectId], references: [id], onDelete: SetNull)
-
-  @@unique([userId, patternKey])
-  @@index([userId, status])
-}
 
 model DeviceAuthCode {
   id             String    @id @default(cuid())

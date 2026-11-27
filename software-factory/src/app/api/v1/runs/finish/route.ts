@@ -1,14 +1,8 @@
 import { type NextRequest, NextResponse } from "next/server";
 import { authenticateRequest, resolveUserProject } from "@/lib/api-auth";
-import {
-  dispatchReadyIssuesForProject,
-  getProjectAutoApprove,
-  isUnattendedFactoryMode,
-} from "@/lib/auto-dispatch";
+import { deriveEpicStatus, epicIssueKey } from "@/lib/epics";
 import { emitFactoryEvent } from "@/lib/events";
-import { isProjectFactoryInitCompleteOnDisk } from "@/lib/init-issue";
 import { prisma } from "@/lib/prisma";
-import { safeJsonParse } from "@/lib/workspace-data";
 
 const VALID_OUTCOMES = new Set(["passed", "failed", "blocked"]);
 const VALID_RISKS = new Set(["low", "medium", "high"]);
@@ -69,9 +63,6 @@ export async function POST(request: NextRequest) {
   const summary = str(body.summary || body.reason).slice(0, 200_000) || null;
   const skipVerdictStep = body.skipVerdictStep === true;
   const respectPendingInteraction = body.respectPendingInteraction === true;
-  const workflowOutcomeRaw = str(body.workflowOutcome);
-  const workflowConfirmed =
-    typeof body.workflowConfirmed === "boolean" ? body.workflowConfirmed : undefined;
   const riskRaw = str(body.risk);
   const risk = VALID_RISKS.has(riskRaw) ? riskRaw : undefined;
   const mergeRaw = str(body.merge || body.mergeDecision);
@@ -82,8 +73,6 @@ export async function POST(request: NextRequest) {
   const prUrl = str(body.prUrl) || undefined;
   const now = new Date();
 
-  const autoApprove = await getProjectAutoApprove(project.id);
-
   const updated = await prisma.$transaction(async (tx) => {
     const run = await tx.factoryRun.findUnique({
       where: { projectId_runKey: { projectId: project.id, runKey } },
@@ -93,103 +82,25 @@ export async function POST(request: NextRequest) {
     }
 
     const computedDuration = durationMs ?? Math.max(0, now.getTime() - run.startedAt.getTime());
-    const checkpoint = safeJsonParse<{
-      outcome?: string;
-      questions?: Array<{ question: string; criteria?: string[] }>;
-    } | null>(run.checkpointJson, null);
-    const hasOpenQuestions = Boolean(
-      Array.isArray(checkpoint?.questions) && checkpoint.questions.length > 0,
-    );
-    const formattedQuestions = hasOpenQuestions
-      ? checkpoint!.questions!
-          .map((q, idx) => {
-            const crits =
-              Array.isArray(q.criteria) && q.criteria.length > 0
-                ? ` [${q.criteria.join(", ")}]`
-                : "";
-            return `Q${idx + 1}: ${q.question}${crits}`;
-          })
-          .join("\n")
-      : "";
-
-    const unattendedFactory = isUnattendedFactoryMode(run.mode);
     let effectiveOutcome = outcomeRaw;
-    let effectiveSummary = summary ?? run.summary;
-    let initCompletedOnDisk = false;
-
-    if (run.mode === "init" && outcomeRaw === "passed") {
-      // Stage 1 (Once per project, interactive): stay in `awaiting_input` across discussion turns
-      // until `.factory/init.json` + `.factory/project.json` are completed on disk.
-      initCompletedOnDisk = isProjectFactoryInitCompleteOnDisk(project.localPath);
-      if (!initCompletedOnDisk) {
-        effectiveOutcome = "awaiting_input";
-      }
-    } else if (run.mode === "clarify" && outcomeRaw === "passed") {
-      // Stage 2 (Per feature, interactive): stay in `awaiting_input` across grill & mockup turns
-      // until the human approves the ticket to `ready` (or closes the clarify session).
-      const linkedIssue = run.issueId
-        ? await tx.projectIssue.findUnique({
-            where: { id: run.issueId },
-            select: { status: true },
-          })
-        : null;
-      if (!linkedIssue || linkedIssue.status === "backlog" || linkedIssue.status === "needs_human") {
-        effectiveOutcome = "awaiting_input";
-      }
-    } else if (unattendedFactory) {
-      // Stage 3 (Unattended Factory Build Loop):
-      // 1. NEVER suspend in `awaiting_input`.
-      // 2. NEVER let a CLI exit code 0 falsely mark a ticket `passed` if `live.js` recorded
-      //    `blocked`/`failed` or if the workflow never completed with `passed` (e.g. premature question).
-      const recordedWorkflowOutcome = VALID_OUTCOMES.has(workflowOutcomeRaw)
-        ? workflowOutcomeRaw
-        : checkpoint?.outcome && VALID_OUTCOMES.has(checkpoint.outcome)
-          ? checkpoint.outcome
-          : null;
-
-      if (recordedWorkflowOutcome === "blocked" || recordedWorkflowOutcome === "failed") {
-        effectiveOutcome = recordedWorkflowOutcome;
-        if (hasOpenQuestions && !effectiveSummary) {
-          effectiveSummary = formattedQuestions;
-        }
-      } else if (
-        effectiveOutcome === "passed" &&
-        workflowConfirmed === false &&
-        recordedWorkflowOutcome !== "passed"
-      ) {
-        effectiveOutcome = "blocked";
-        effectiveSummary =
-          "Factory session exited without completing the workflow pipeline (no `passed` verdict in live.js — agent may have stopped early or tried to ask a question). Clarify the ticket or retry." +
-          (summary ? `\n\nLast output:\n${summary.slice(0, 1500)}` : "");
-      }
-    } else if (respectPendingInteraction && outcomeRaw === "passed") {
+    // A BA turn that ends with a question waiting for the user keeps the session open.
+    if (run.mode !== "epic" && respectPendingInteraction && outcomeRaw === "passed") {
       const pendingCount = await tx.runInteraction.count({
-        where: { runId: run.id, status: "pending" },
+        where: { runId: run.id, status: "pending", type: { not: "decision" } },
       });
-      if (pendingCount > 0) {
-        effectiveOutcome = "awaiting_input";
-      }
+      if (pendingCount > 0) effectiveOutcome = "awaiting_input";
     }
-
-    if (initCompletedOnDisk) {
-      await tx.project
-        .update({
-          where: { id: project.id },
-          data: { initStatus: "complete" },
-        })
-        .catch(() => {});
-    }
-
-    const effectiveMergeDecision = mergeDecision ?? run.mergeDecision ?? undefined;
+    const finalPhase = run.mode === "epic" ? "Report" : "BA";
+    const effectiveSummary = summary ?? run.summary;
 
     const finalRun = await tx.factoryRun.update({
       where: { id: run.id },
       data: {
         status: effectiveOutcome,
-        currentPhase: effectiveOutcome === "awaiting_input" ? run.currentPhase : "Verdict",
+        currentPhase: effectiveOutcome === "awaiting_input" ? run.currentPhase : finalPhase,
         summary: effectiveSummary,
         risk: risk ?? run.risk,
-        mergeDecision: effectiveMergeDecision,
+        mergeDecision: mergeDecision ?? run.mergeDecision ?? undefined,
         mergedCommit: mergedCommit ?? run.mergedCommit,
         prNumber: prNumber ?? run.prNumber,
         prUrl: prUrl ?? run.prUrl,
@@ -201,7 +112,7 @@ export async function POST(request: NextRequest) {
 
     await tx.runAgent.updateMany({
       where:
-        effectiveOutcome === "passed"
+        effectiveOutcome === "passed" && run.mode !== "epic"
           ? { runId: run.id, status: { in: ["working", "failed", "idle", "waiting_on_you"] } }
           : { runId: run.id, status: "working" },
       data: {
@@ -217,30 +128,34 @@ export async function POST(request: NextRequest) {
       },
     });
 
-    // Only Factory build runs update the Kanban ticket's build outcome (Clarify leaves it until human approves).
-    if (run.issueId && effectiveOutcome !== "awaiting_input" && run.mode !== "clarify") {
-      const nextIssueStatus =
-        effectiveOutcome === "passed"
-          ? effectiveMergeDecision === "person" && !autoApprove
-            ? "in_review"
-            : "passed"
-          : effectiveOutcome === "blocked" && hasOpenQuestions
-            ? "needs_human"
-            : effectiveOutcome;
-      const issueSummary =
-        hasOpenQuestions && formattedQuestions
-          ? formattedQuestions.slice(0, 1500)
-          : effectiveSummary
-            ? effectiveSummary.slice(0, 500)
-            : undefined;
+    // The epic row on the board follows its tickets once the run ends.
+    if (run.mode === "epic" && run.epicNumber) {
+      const epicKey = epicIssueKey(run.epicNumber);
+      const tickets = await tx.projectIssue.findMany({
+        where: { projectId: project.id, epicNumber: run.epicNumber, NOT: { issueKey: epicKey } },
+        select: { status: true },
+      });
+      const otherActive = await tx.factoryRun.count({
+        where: {
+          projectId: project.id,
+          mode: "epic",
+          epicNumber: run.epicNumber,
+          id: { not: run.id },
+          status: { in: ["queued", "running", "awaiting_input"] },
+        },
+      });
+      let epicStatus = deriveEpicStatus(
+        tickets.map((t) => t.status),
+        otherActive > 0,
+      );
+      if (tickets.length === 0 && effectiveOutcome !== "passed") epicStatus = "blocked";
       await tx.projectIssue
         .update({
-          where: { id: run.issueId },
+          where: { projectId_issueKey: { projectId: project.id, issueKey: epicKey } },
           data: {
-            status: nextIssueStatus,
-            currentPhase:
-              effectiveOutcome === "blocked" && hasOpenQuestions ? "Needs Info" : "Verdict",
-            summary: issueSummary,
+            status: epicStatus,
+            currentPhase: finalPhase,
+            summary: effectiveSummary ? effectiveSummary.slice(0, 1500) : undefined,
           },
         })
         .catch(() => {});
@@ -258,11 +173,11 @@ export async function POST(request: NextRequest) {
           runId: run.id,
           seq: (last?.seq ?? 0) + 1,
           step: "verdict",
-          phase: "Verdict",
+          phase: finalPhase,
           status: effectiveOutcome,
           durationMs: computedDuration,
           summary: effectiveSummary || `Run finished with outcome: ${effectiveOutcome}`,
-          dataJson: JSON.stringify({ kind: "verdict", outcome: effectiveOutcome }),
+          dataJson: JSON.stringify({ kind: "lifecycle", event: "finished", outcome: effectiveOutcome }),
         },
       });
     }
@@ -297,15 +212,6 @@ export async function POST(request: NextRequest) {
     runId: updated.id,
     payload: { status: updated.status, durationMs: updated.durationMs },
   });
-
-  // Auto-advance the Kanban board: if this project has Auto-Dispatch enabled, launch next eligible ready issue!
-  if (updated.issueId && updated.status !== "awaiting_input") {
-    await dispatchReadyIssuesForProject({
-      projectId: project.id,
-      actorUserId: auth.user.id,
-      actorGithubLogin: auth.user.githubLogin,
-    }).catch(() => {});
-  }
 
   return NextResponse.json({
     ok: true,

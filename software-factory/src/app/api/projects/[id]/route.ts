@@ -41,33 +41,33 @@ export async function PATCH(
   }
 
   const body = (await request.json().catch(() => null)) as {
-    initStatus?: unknown;
     defaultRunnerId?: unknown;
+    githubFullName?: unknown;
   } | null;
 
-  const hasInitStatus = body !== null && "initStatus" in body && body.initStatus !== undefined;
   const hasDefaultRunnerId =
     body !== null && "defaultRunnerId" in body && body.defaultRunnerId !== undefined;
+  const hasGithubFullName =
+    body !== null && "githubFullName" in body && body.githubFullName !== undefined;
 
-  if (!hasInitStatus && !hasDefaultRunnerId) {
+  if (!hasDefaultRunnerId && !hasGithubFullName) {
     return NextResponse.json(
-      { error: "Provide initStatus or defaultRunnerId to update" },
+      { error: "Provide defaultRunnerId or githubFullName to update" },
       { status: 400 },
     );
   }
 
-  const updateData: { initStatus?: string; defaultRunnerId?: string | null } = {};
-  let initStatusRaw = "";
+  const updateData: { defaultRunnerId?: string | null; githubFullName?: string | null } = {};
 
-  if (hasInitStatus) {
-    initStatusRaw = typeof body?.initStatus === "string" ? body.initStatus.trim() : "";
-    if (initStatusRaw !== "complete" && initStatusRaw !== "none") {
+  if (hasGithubFullName) {
+    const raw = typeof body?.githubFullName === "string" ? body.githubFullName.trim() : "";
+    if (raw && !/^[\w.-]+\/[\w.-]+$/.test(raw)) {
       return NextResponse.json(
-        { error: "initStatus must be 'complete' or 'none'" },
+        { error: "githubFullName must look like owner/name" },
         { status: 400 },
       );
     }
-    updateData.initStatus = initStatusRaw;
+    updateData.githubFullName = raw || null;
   }
 
   if (hasDefaultRunnerId) {
@@ -96,37 +96,19 @@ export async function PATCH(
     }
   }
 
-  const now = new Date();
   const updated = await prisma.project.update({
     where: { id: access.project.id },
     data: updateData,
-    select: { id: true, initStatus: true, defaultRunnerId: true },
+    select: { id: true, defaultRunnerId: true, githubFullName: true },
   });
-
-  if (initStatusRaw === "complete") {
-    await prisma.factoryRun.updateMany({
-      where: {
-        projectId: access.project.id,
-        mode: "init",
-        status: { in: ["queued", "running", "awaiting_input"] },
-      },
-      data: {
-        status: "passed",
-        currentPhase: "Verdict",
-        summary: "Project Factory Init marked complete.",
-        finishedAt: now,
-        lastHeartbeatAt: now,
-      },
-    });
-  }
 
   emitFactoryEvent({
     type: "project:updated",
     userId: access.project.userId,
     projectId: access.project.id,
     payload: {
-      initStatus: updated.initStatus,
       defaultRunnerId: updated.defaultRunnerId,
+      githubFullName: updated.githubFullName,
     },
   });
 

@@ -485,7 +485,7 @@ function detectRecommendationMatch(
 
 /**
  * Fallback parser that extracts interactive questions from plain-markdown question waves
- * (such as `/factory init`, `/factory clarify`, or `/ba-ticket` replies that don't emit
+ * (such as `/new-ba` replies that don't emit
  * an explicit `sf-questions` block).
  *
  * Designed for high precision: returns `null` on normal numbered summaries/checklists.

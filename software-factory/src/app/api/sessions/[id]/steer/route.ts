@@ -4,10 +4,113 @@ import {
   validateIncomingAttachments,
   type StoredAttachmentRef,
 } from "@/lib/attachments";
-import { isUnattendedFactoryMode } from "@/lib/auto-dispatch";
+import { DispatchError, pickOnlineRunner, startEpicRun } from "@/lib/dispatch";
 import { emitFactoryEvent } from "@/lib/events";
 import { prisma } from "@/lib/prisma";
-import { findAccessibleRun, getAccessibleRunners } from "@/lib/team-access";
+import { findAccessibleRun } from "@/lib/team-access";
+
+type DecisionPayload = { epic?: unknown; issue?: unknown; question?: unknown; reason?: unknown };
+
+/**
+ * Answers a `decision` interaction of an epic run: resolves it and enqueues `run_epic` again with
+ * `retry: [issue]` and `note: <answer>` as a new run of the same epic.
+ */
+async function answerDecision(params: {
+  auth: { user: { id: string; githubLogin: string } };
+  run: NonNullable<Awaited<ReturnType<typeof findAccessibleRun>>>["run"];
+  interactionId: string;
+  decision: string;
+  message: string;
+}) {
+  const { auth, run, interactionId, decision, message } = params;
+  const interaction = await prisma.runInteraction.findFirst({
+    where: { id: interactionId, runId: run.id },
+  });
+  if (!interaction) return NextResponse.json({ error: "Interaction not found" }, { status: 404 });
+  if (interaction.status !== "pending") {
+    return NextResponse.json({ error: "This decision was already answered" }, { status: 409 });
+  }
+  let payload: DecisionPayload = {};
+  try {
+    payload = JSON.parse(interaction.payloadJson || "{}") as DecisionPayload;
+  } catch {
+    payload = {};
+  }
+  const epic = Number(payload.epic ?? run.epicNumber);
+  const issue = Number(payload.issue);
+  const now = new Date();
+  const resolve = (extra: Record<string, unknown>) =>
+    prisma.runInteraction.update({
+      where: { id: interaction.id },
+      data: {
+        status: decision === "dismissed" ? "dismissed" : "resolved",
+        responseJson: JSON.stringify({ decision, message, by: auth.user.githubLogin, ...extra }),
+        resolvedAt: now,
+      },
+    });
+
+  if (decision === "dismissed") {
+    await resolve({});
+  } else {
+    if (!message) {
+      return NextResponse.json({ error: "Write the answer to the question" }, { status: 400 });
+    }
+    if (!Number.isInteger(epic) || epic <= 0 || !Number.isInteger(issue) || issue <= 0) {
+      return NextResponse.json({ error: "Decision payload has no epic or issue" }, { status: 422 });
+    }
+    try {
+      const started = await startEpicRun({
+        user: auth.user,
+        project: run.project,
+        epic,
+        retry: [issue],
+        note: message,
+        preferredRunnerId: run.runnerMachineId,
+      });
+      await resolve({ retryRunId: started.run.id });
+      await prisma.factoryRun.update({
+        where: { id: run.id },
+        data: { humanInterventions: { increment: 1 } },
+      });
+      emitFactoryEvent({
+        type: "interaction:updated",
+        userId: auth.user.id,
+        projectId: run.projectId,
+        runId: run.id,
+        payload: { interactionId, decision, retryRunId: started.run.id },
+      });
+      return NextResponse.json({
+        ok: true,
+        run: { id: run.id, status: run.status },
+        retryRun: { id: started.run.id, runKey: started.run.runKey, status: started.run.status },
+      });
+    } catch (err) {
+      if (err instanceof DispatchError) {
+        return NextResponse.json(
+          {
+            error:
+              err.code === "EPIC_RUNNING"
+                ? `Epic #${epic} is still running. Answer once that run ends, so the retry starts from its state.`
+                : err.message,
+            code: err.code,
+            ...(err.extra ?? {}),
+          },
+          { status: err.status },
+        );
+      }
+      throw err;
+    }
+  }
+
+  emitFactoryEvent({
+    type: "interaction:updated",
+    userId: auth.user.id,
+    projectId: run.projectId,
+    runId: run.id,
+    payload: { interactionId, decision },
+  });
+  return NextResponse.json({ ok: true, run: { id: run.id, status: run.status } });
+}
 
 export async function POST(
   request: NextRequest,
@@ -23,18 +126,6 @@ export async function POST(
     return NextResponse.json({ error: "Viewer role cannot steer sessions" }, { status: 403 });
   }
   const run = found.run;
-
-  // Upstream sangtruong-rgb/factory invariant:
-  // The unattended Factory build loop cannot be chatted with or steered mid-run.
-  if (isUnattendedFactoryMode(run.mode)) {
-    return NextResponse.json(
-      {
-        error:
-          "Factory build runs are strictly unattended and cannot be steered or resumed with chat input. Clarify the ticket or start a fresh Retry run instead.",
-      },
-      { status: 409 },
-    );
-  }
 
   let body: Record<string, unknown>;
   try {
@@ -60,6 +151,20 @@ export async function POST(
       ? `See attached file${validatedAttachments.length === 1 ? "" : "s"} (${validatedAttachments.map((a) => a.name).join(", ")}).`
       : "");
 
+  if (run.mode === "epic") {
+    // An epic run is unattended: the only input it takes is the answer to a ticket's decision.
+    if (!interactionId) {
+      return NextResponse.json(
+        {
+          error:
+            "An epic run cannot be chatted with. Answer a ticket's decision, or run the epic again from the board.",
+        },
+        { status: 409 },
+      );
+    }
+    return answerDecision({ auth, run, interactionId, decision, message: rawMessage });
+  }
+
   if (!message && !interactionId) {
     return NextResponse.json(
       { error: "Provide a message, attachment, or interactionId" },
@@ -69,29 +174,13 @@ export async function POST(
 
   const now = new Date();
   const needsDaemon = decision !== "dismissed" || Boolean(message);
-  let targetRunner:
-    | Awaited<ReturnType<typeof getAccessibleRunners>>[number]
-    | null = null;
+  let targetRunner: Awaited<ReturnType<typeof pickOnlineRunner>> = null;
   if (needsDaemon) {
-    const cutoffMs = Date.now() - 65_000;
-    const onlineRunners = (
-      await getAccessibleRunners(auth.user.id, {
-        projectId: run.projectId,
-        githubLogin: auth.user.githubLogin,
-      })
-    ).filter((r) => r.status === "online" && r.lastHeartbeatAt.getTime() > cutoffMs);
-
-    targetRunner =
-      (run.runnerMachineId
-        ? onlineRunners.find((r) => r.id === run.runnerMachineId) ?? null
-        : null) ??
-      onlineRunners
-        .filter((r) => r.userId === auth.user.id)
-        .sort((a, b) => a.activeRuns - b.activeRuns)[0] ??
-      onlineRunners
-        .filter((r) => r.visibility === "team")
-        .sort((a, b) => a.activeRuns - b.activeRuns)[0] ??
-      null;
+    targetRunner = await pickOnlineRunner({
+      user: auth.user,
+      projectId: run.projectId,
+      preferredRunnerId: run.runnerMachineId,
+    });
 
     if (!targetRunner && body.allowOfflineQueue !== true) {
       return NextResponse.json(
@@ -145,16 +234,6 @@ export async function POST(
           prompt: message,
           status: "resolved",
           responseJson: JSON.stringify({ message, agentKey, by: auth.user.githubLogin }),
-          resolvedAt: now,
-        },
-      });
-      // When the user replies in chat to refine a BA plan (or steer past a plan_approval),
-      // supersede pending plan_approval interactions so the run resumes cleanly.
-      await tx.runInteraction.updateMany({
-        where: { runId: run.id, status: "pending", type: "plan_approval" },
-        data: {
-          status: "resolved",
-          responseJson: JSON.stringify({ decision: "steered", message, by: auth.user.githubLogin }),
           resolvedAt: now,
         },
       });
@@ -258,7 +337,7 @@ export async function POST(
             message,
             ...(storedAttachments.length > 0 ? { attachments: storedAttachments } : {}),
             agentKey: agentKey || null,
-            engine: run.engine,
+            engine: "claude",
             model: run.model,
             autonomy: run.autonomy,
             mode: run.mode,

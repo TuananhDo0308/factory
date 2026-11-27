@@ -1,0 +1,60 @@
+{
+  "id": "todo-v1",
+  "title": "Todo list v1",
+  "architecture": {
+    "layout": "pages-features",
+    "checks": [
+      {
+        "name": "test",
+        "command": "npm test"
+      },
+      {
+        "name": "e2e",
+        "command": "npm run e2e"
+      },
+      {
+        "name": "lint",
+        "command": "npm run lint"
+      }
+    ],
+    "stack": "Vite + React + TypeScript, Vitest, Playwright",
+    "shared": [
+      "src/app/App.tsx",
+      "src/app/registry.ts",
+      "src/shared/tasks/types.ts",
+      "src/pages/list/page.tsx"
+    ],
+    "extensionPoint": "src/pages/<page>/features/<feature>/index.ts, picked up by src/app/registry.ts",
+    "contracts": [
+      {
+        "name": "TaskRepo",
+        "file": "src/shared/tasks/repo.ts",
+        "summary": "list(): Task[]; add(title: string): Task; update(id, patch): Task; remove(id): void; subscribe(fn): () => void. Saved in localStorage key todo.tasks.v1."
+      },
+      {
+        "name": "slot:input",
+        "file": "src/pages/list/page.tsx",
+        "summary": "The area above the list; a feature fills it with registerFeature({ slot: 'input', Component })."
+      },
+      {
+        "name": "slot:item-action",
+        "file": "src/pages/list/page.tsx",
+        "summary": "The trailing area of each row; Component receives { task }."
+      }
+    ]
+  },
+  "tickets": [
+    {
+      "key": "T1",
+      "title": "Set up the app shell, task store and test setup"
+    },
+    {
+      "key": "T2",
+      "title": "Add a task"
+    },
+    {
+      "key": "T3",
+      "title": "Mark a task done"
+    }
+  ]
+}
