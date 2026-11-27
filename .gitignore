@@ -7,16 +7,16 @@ factory-workspace/
 *.swo
 
 # Software Factory app (Next.js / PostgreSQL / Prisma)
-software-factory/node_modules/
-software-factory/.next/
-software-factory/src/generated/
-software-factory/*.db
-software-factory/*.db-journal
-software-factory/prisma/*.db
-software-factory/prisma/*.db-journal
-software-factory/.env
-software-factory/.env.local
-software-factory/.vercel/
+app/node_modules/
+app/.next/
+app/src/generated/
+app/*.db
+app/*.db-journal
+app/prisma/*.db
+app/prisma/*.db-journal
+app/.env
+app/.env.local
+app/.vercel/
 .vercel/
 .env.local
 .playwright-mcp/

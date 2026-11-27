@@ -1,0 +1,537 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+@import "shadcn/tailwind.css";
+
+@custom-variant dark (&:is(.dark *));
+
+@theme inline {
+  --font-heading: var(--font-ui), ui-sans-serif, system-ui, sans-serif;
+  --font-sans: var(--font-ui), ui-sans-serif, system-ui, sans-serif;
+  --font-mono: var(--font-mono-face), ui-monospace, SFMono-Regular, Menlo, monospace;
+  --font-brand: var(--font-space-grotesk), var(--font-ui), ui-sans-serif, system-ui, sans-serif;
+
+  /*
+   * Type scale — four UI steps plus three heading steps. Use only these names;
+   * never text-[Npx].
+   *   2xs  12px  caption: mono metadata, timestamps, tags, badges
+   *   xs   13px  small: labels, sidebar sub-items, helper text
+   *   sm   15px  body: chat, content, buttons, inputs (base is the same step)
+   *   lg   17px  large: card / section titles
+   *   xl 20 · 2xl 24 · 3xl 30  headings
+   */
+  --text-2xs: 0.75rem;
+  --text-2xs--line-height: 1.35;
+  --text-xs: 0.8125rem;
+  --text-xs--line-height: 1.45;
+  --text-sm: 0.9375rem;
+  --text-sm--line-height: 1.55;
+  --text-base: 0.9375rem;
+  --text-base--line-height: 1.55;
+  --text-lg: 1.0625rem;
+  --text-lg--line-height: 1.45;
+  --text-xl: 1.25rem;
+  --text-xl--line-height: 1.35;
+  --text-2xl: 1.5rem;
+  --text-2xl--line-height: 1.25;
+  --text-3xl: 1.875rem;
+  --text-3xl--line-height: 1.2;
+
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-success: var(--success);
+  --color-success-foreground: var(--success-foreground);
+  --color-warning: var(--warning);
+  --color-warning-foreground: var(--warning-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+
+  --color-chart-1: var(--chart-1);
+  --color-chart-2: var(--chart-2);
+  --color-chart-3: var(--chart-3);
+  --color-chart-4: var(--chart-4);
+  --color-chart-5: var(--chart-5);
+
+  --color-sidebar: var(--sidebar);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-ring: var(--sidebar-ring);
+
+  --radius-sm: 4px;
+  --radius-md: 6px;
+  --radius-lg: var(--radius);
+  --radius-xl: 10px;
+  --radius-2xl: 12px;
+}
+
+/* Light Mode — clean neutral white/gray surfaces + XFB green primary accents */
+:root {
+  color-scheme: light;
+  --radius: 0.5rem;
+  --background: #ffffff;
+  --foreground: #111113;
+  --card: #ffffff;
+  --card-foreground: #111113;
+  --popover: #ffffff;
+  --popover-foreground: #111113;
+  --primary: #1a7f48;
+  --primary-foreground: #ffffff;
+  --secondary: #f4f4f5;
+  --secondary-foreground: #18181b;
+  --muted: #f4f4f5;
+  --muted-foreground: #52525b;
+  --accent: #ececef;
+  --accent-foreground: #18181b;
+  --destructive: #dc2626;
+  --destructive-foreground: #ffffff;
+  --success: #125f35;
+  --success-foreground: #ffffff;
+  --warning: #b87d00;
+  --warning-foreground: #ffffff;
+  --border: #e4e4e7;
+  --input: #d4d4d8;
+  --ring: #1f9a55;
+  --selection: #d5e8d6;
+  --link: #17603c;
+
+  --chart-1: #1f9a55;
+  --chart-2: #1a62a8;
+  --chart-3: #125f35;
+  --chart-4: #0b6f66;
+  --chart-5: #a84e0b;
+
+  --signal-go: #1f9a55;
+  --signal-caution: #b87d00;
+  --signal-stop: #d23a2e;
+
+  --sidebar: #f7f7f8;
+  --sidebar-foreground: #27272a;
+  --sidebar-primary: #1a7f48;
+  --sidebar-primary-foreground: #ffffff;
+  --sidebar-accent: #eaeaea;
+  --sidebar-accent-foreground: #111113;
+  --sidebar-border: #e4e4e7;
+  --sidebar-ring: #1f9a55;
+}
+
+/* Dark Mode — clean neutral dark charcoal/gray surfaces + XFB green primary accents */
+.dark {
+  color-scheme: dark;
+  --background: #121213;
+  --foreground: #f4f4f5;
+  --card: #18181b;
+  --card-foreground: #f4f4f5;
+  --popover: #1c1c1f;
+  --popover-foreground: #f4f4f5;
+  --primary: #27b066;
+  --primary-foreground: #09150e;
+  --secondary: #232327;
+  --secondary-foreground: #f4f4f5;
+  --muted: #202024;
+  --muted-foreground: #a1a1aa;
+  --accent: #27272b;
+  --accent-foreground: #f4f4f5;
+  --destructive: #e5483b;
+  --destructive-foreground: #ffffff;
+  --success: #55c98a;
+  --success-foreground: #09150e;
+  --warning: #e5a31b;
+  --warning-foreground: #121213;
+  --border: #27272a;
+  --input: #343438;
+  --ring: #55c98a;
+  --selection: #1f9a5540;
+  --link: #55c98a;
+
+  --chart-1: #27b066;
+  --chart-2: #5aaef0;
+  --chart-3: #55c98a;
+  --chart-4: #35c9b4;
+  --chart-5: #f2924a;
+
+  --signal-go: #2fbf6c;
+  --signal-caution: #e5a31b;
+  --signal-stop: #e5483b;
+
+  --sidebar: #0e0e10;
+  --sidebar-foreground: #c4c4cc;
+  --sidebar-primary: #27b066;
+  --sidebar-primary-foreground: #09150e;
+  --sidebar-accent: #222226;
+  --sidebar-accent-foreground: #f4f4f5;
+  --sidebar-border: #242428;
+  --sidebar-ring: #55c98a;
+}
+
+.dark[data-contrast="high"] {
+  --border: #3f3f46;
+  --input: #52525b;
+  --muted-foreground: #c4c4cc;
+  --sidebar-border: #38383f;
+}
+
+.dark[data-contrast="low"] {
+  --border: #1f1f22;
+  --input: #27272a;
+  --muted-foreground: #71717a;
+  --sidebar-border: #1c1c1f;
+}
+
+:root[data-contrast="high"]:not(.dark) {
+  --border: #a1a1aa;
+  --input: #71717a;
+  --muted-foreground: #27272a;
+  --sidebar-border: #a1a1aa;
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+  html {
+    @apply font-sans;
+    scrollbar-color: var(--input) transparent;
+  }
+  /*
+   * Mono sits beside the UI text everywhere (ids, counts, costs, timestamps). JetBrains Mono's
+   * x-height (0.55) is a touch above Inter's (~0.546); pinning it keeps the scale even in both.
+   */
+  .font-mono,
+  code,
+  kbd,
+  samp,
+  pre {
+    font-size-adjust: ex-height 0.53;
+  }
+  body {
+    @apply bg-background text-foreground;
+    font-size: var(--text-sm);
+    line-height: 1.55;
+    font-variant-numeric: tabular-nums;
+    caret-color: var(--primary);
+    accent-color: var(--primary);
+    font-feature-settings: "cv02", "cv03", "cv04", "cv11";
+  }
+  ::selection {
+    background: var(--selection);
+    color: var(--foreground);
+  }
+}
+
+/*
+ * shadcn's sm Button/Toggle size hardcodes text-[0.8rem]; pin it to the small step
+ * so src/components/ui/* stays untouched.
+ */
+.text-\[0\.8rem\] {
+  font-size: var(--text-xs);
+  line-height: var(--text-xs--line-height);
+}
+
+/*
+ * XS Factory Bench Workbench Component Skin
+ * Unlayered overrides scoped purely via official shadcn data-slot hooks so src/components/ui/* stays untouched.
+ */
+[data-slot="button"] {
+  border-radius: 6px;
+}
+
+[data-slot="badge"] {
+  border-radius: 4px;
+  padding-inline: 0.5rem;
+  font-size: var(--text-2xs);
+  font-weight: 500;
+  letter-spacing: 0.02em;
+}
+
+[data-slot="switch"],
+[data-slot="switch"][data-size="default"] {
+  border-radius: 5px;
+  height: 20px;
+  width: 38px;
+  padding: 2px;
+}
+
+[data-slot="switch"][data-size="sm"] {
+  border-radius: 4px;
+  height: 16px;
+  width: 28px;
+  padding: 2px;
+}
+
+[data-slot="switch"] [data-slot="switch-thumb"] {
+  border-radius: 3px;
+  height: 14px;
+  width: 14px;
+  --sf-switch-x: 0px;
+  translate: var(--sf-switch-x) 0px;
+  transform: none;
+  transition: translate 150ms cubic-bezier(0.4, 0, 0.2, 1), background-color 150ms ease;
+}
+
+[data-slot="switch"][data-size="sm"] [data-slot="switch-thumb"] {
+  border-radius: 2px;
+  height: 10px;
+  width: 10px;
+}
+
+[data-slot="switch"][data-checked] [data-slot="switch-thumb"] {
+  --sf-switch-x: 18px;
+}
+
+[data-slot="switch"][data-size="sm"][data-checked] [data-slot="switch-thumb"] {
+  --sf-switch-x: 12px;
+}
+
+[data-slot="input"],
+[data-slot="textarea"],
+[data-slot="select-trigger"],
+[data-slot="input-group"] {
+  border-radius: 6px;
+}
+
+[data-slot="input"]:focus-visible,
+[data-slot="select-trigger"]:focus-visible,
+[data-slot="input-group"]:has([data-slot="input-group-control"]:focus-visible) {
+  border-color: var(--ring);
+  box-shadow: 0 0 0 1px var(--ring);
+}
+
+/* Measured modal scrim & elevated dialog surfaces (ui-ux-pro-max contrast, spacing & separation) */
+[data-slot="dialog-overlay"] {
+  background-color: rgb(0 0 0 / 0.48);
+  backdrop-filter: blur(4px);
+}
+
+.dark [data-slot="dialog-overlay"] {
+  background-color: rgb(0 0 0 / 0.72);
+  backdrop-filter: blur(5px);
+}
+
+[data-slot="dialog-content"] {
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  padding: 24px;
+  gap: 20px;
+  box-shadow:
+    0 24px 48px -12px rgb(0 0 0 / 0.24),
+    0 8px 16px -8px rgb(0 0 0 / 0.14);
+}
+
+.dark [data-slot="dialog-content"] {
+  box-shadow:
+    0 28px 60px -12px rgb(0 0 0 / 0.78),
+    0 0 0 1px rgb(255 255 255 / 0.06);
+}
+
+[data-slot="dialog-content"] [data-slot="dialog-close"] {
+  top: 16px;
+  right: 16px;
+}
+
+[data-slot="dialog-content"] [data-slot="dialog-footer"] {
+  margin-inline: -24px;
+  margin-bottom: -24px;
+  padding: 14px 24px;
+  border-bottom-left-radius: 10px;
+  border-bottom-right-radius: 10px;
+  gap: 10px;
+}
+
+[data-slot="dialog-content"]:has([data-slot="command"]) {
+  padding: 0;
+  gap: 0;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  [data-slot="switch"] [data-slot="switch-thumb"],
+  [data-slot="dialog-content"],
+  [data-slot="dialog-overlay"] {
+    transition-duration: 0.01ms !important;
+    animation-duration: 0.01ms !important;
+  }
+}
+
+[data-slot="card"],
+[data-slot="dropdown-menu-content"],
+[data-slot="select-content"],
+[data-slot="popover-content"] {
+  border-radius: 8px;
+}
+
+[data-slot="card"] {
+  box-shadow: none;
+}
+
+[data-slot="sidebar-menu-button"],
+[data-slot="sidebar-menu-sub-button"] {
+  border-radius: 8px;
+}
+
+[data-slot="tabs-list"],
+[data-slot="tabs-trigger"],
+[data-slot="dropdown-menu-item"],
+[data-slot="select-item"] {
+  border-radius: 6px;
+}
+
+[data-slot="checkbox"] {
+  border-radius: 4px;
+}
+
+[data-slot="slider-track"] {
+  height: 3px;
+  border-radius: 2px;
+}
+
+[data-slot="slider-thumb"] {
+  height: 14px;
+  width: 10px;
+  border-radius: 3px;
+  border-color: var(--input);
+  background-color: var(--secondary);
+}
+
+@keyframes trace-shimmer {
+  0% {
+    background-position: 200% 0;
+  }
+  100% {
+    background-position: -200% 0;
+  }
+}
+
+@utility shimmer {
+  background: linear-gradient(
+    90deg,
+    var(--muted-foreground) 0%,
+    var(--foreground) 50%,
+    var(--muted-foreground) 100%
+  );
+  background-size: 200% 100%;
+  background-clip: text;
+  color: transparent;
+  animation: trace-shimmer 2.2s linear infinite;
+}
+
+@utility shimmer-none {
+  background: none;
+  background-clip: border-box;
+  color: inherit;
+  animation: none;
+}
+
+/* XS Factory Bench Signal Box & Timeline animations */
+@keyframes xfb-led-run {
+  to {
+    stroke-dashoffset: -18;
+  }
+}
+
+@keyframes xfb-lamp-breathe {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.55;
+  }
+}
+
+.xfb-signal-grid {
+  background-image:
+    linear-gradient(color-mix(in srgb, var(--foreground) 5%, transparent) 1px, transparent 1px),
+    linear-gradient(90deg, color-mix(in srgb, var(--foreground) 5%, transparent) 1px, transparent 1px);
+  background-size: 24px 24px;
+}
+
+.xfb-route-busy {
+  animation: xfb-led-run 0.9s linear infinite;
+}
+
+.xfb-route-repair {
+  animation: xfb-led-run 1.2s linear infinite reverse;
+}
+
+.xfb-lamp-pulse {
+  animation: xfb-lamp-breathe 1.8s ease-in-out infinite;
+}
+
+/* 2x2 four-dot sidebar loading animation */
+@keyframes sf-loader-dot {
+  0%,
+  100% {
+    opacity: 0.24;
+  }
+  32% {
+    opacity: 0.96;
+  }
+  68% {
+    opacity: 0.34;
+  }
+}
+
+.sf-loader-dot {
+  animation: sf-loader-dot 1.04s ease-in-out infinite;
+}
+
+.sf-loader-dot-1 {
+  animation-delay: 0ms;
+}
+
+.sf-loader-dot-2 {
+  animation-delay: 180ms;
+}
+
+.sf-loader-dot-3 {
+  animation-delay: 360ms;
+}
+
+.sf-loader-dot-4 {
+  animation-delay: 540ms;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sf-loader-dot {
+    animation: none;
+  }
+  .sf-loader-dot-1 {
+    opacity: 0.65;
+  }
+  .sf-loader-dot-2 {
+    opacity: 0.95;
+  }
+  .sf-loader-dot-3 {
+    opacity: 0.45;
+  }
+  .sf-loader-dot-4 {
+    opacity: 0.25;
+  }
+}
+
+.no-visible-scrollbar {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+  -webkit-overflow-scrolling: touch;
+}
+
+.no-visible-scrollbar::-webkit-scrollbar {
+  display: none;
+}
