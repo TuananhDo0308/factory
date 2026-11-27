@@ -376,7 +376,7 @@ export function SessionLauncher({
               size="xs"
               variant="ghost"
               nativeButton={false}
-              render={<Link href={`/projects/${selectedProject.id}?tab=issues`} />}
+              render={<Link href={`/projects/${selectedProject.id}/kanban`} />}
             >
               <Columns3Icon data-icon="inline-start" />
               Board

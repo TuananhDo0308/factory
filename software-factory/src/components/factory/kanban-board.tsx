@@ -32,6 +32,7 @@ import {
   EmptyMedia,
   EmptyTitle,
 } from "@/components/ui/empty";
+import { TicketGithubLinks } from "@/components/factory/ticket-github-links";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import {
   Select,
@@ -277,10 +278,12 @@ function EpicHeader({
 function TicketCard({
   issue,
   unmet,
+  repo,
   onOpen,
 }: {
   issue: EnrichedBoardIssue;
   unmet: string[];
+  repo: string | null;
   onOpen: () => void;
 }) {
   const totals = sumAgents(issue);
@@ -337,6 +340,7 @@ function TicketCard({
           {totals.cost > 0 && <span>{formatUsd(totals.cost)}</span>}
         </div>
       )}
+      <TicketGithubLinks issue={issue} repo={repo} />
     </div>
   );
 }
@@ -395,7 +399,15 @@ export function KanbanBoard({
           {(board.epics.length > 0 || hasLooseTickets) && (
             <Select value={epicFilter} onValueChange={(v) => v && setEpicFilter(v)}>
               <SelectTrigger className="h-8 w-72 text-xs">
-                <SelectValue />
+                {/* Base UI shows the raw value ("1") unless told how to label it. */}
+                <SelectValue className="block min-w-0 truncate">
+                  {(value: string) => {
+                    if (value === ALL) return "All epics";
+                    if (value === NO_EPIC) return "Tickets without an epic";
+                    const epic = board.epics.find((e) => String(e.number) === value);
+                    return epic ? `Epic #${epic.number} · ${epic.title}` : `Epic #${value}`;
+                  }}
+                </SelectValue>
               </SelectTrigger>
               <SelectContent>
                 <SelectGroup>
@@ -499,6 +511,7 @@ export function KanbanBoard({
                           key={iss.id}
                           issue={iss}
                           unmet={unmetDependencies(iss)}
+                          repo={project.githubFullName}
                           onOpen={() => {
                             setSelectedIssueId(iss.id);
                             setProtoIdx(0);
@@ -552,19 +565,9 @@ export function KanbanBoard({
                   </span>
                 </div>
                 <SheetTitle className="text-lg leading-snug">{selectedIssue.title}</SheetTitle>
-                {selectedIssue.githubIssueUrl && (
-                  <SheetDescription>
-                    <a
-                      href={selectedIssue.githubIssueUrl}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="inline-flex items-center gap-1 text-xs hover:text-foreground"
-                    >
-                      <ExternalLinkIcon className="size-3" />
-                      Open on GitHub
-                    </a>
-                  </SheetDescription>
-                )}
+                <SheetDescription render={<div />}>
+                  <TicketGithubLinks issue={selectedIssue} repo={project.githubFullName} variant="sheet" />
+                </SheetDescription>
               </SheetHeader>
               <ScrollArea className="min-h-0 flex-1 px-6">
                 <div className="flex flex-col gap-5 py-4">

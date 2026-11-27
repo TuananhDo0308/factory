@@ -9,6 +9,8 @@ import {
   BarChart3Icon,
   ChevronLeftIcon,
   ChevronRightIcon,
+  Columns3Icon,
+  DatabaseIcon,
   FolderIcon,
   InboxIcon,
   KeyRoundIcon,
@@ -18,6 +20,7 @@ import {
   PlugIcon,
   PlusIcon,
   SettingsIcon,
+  SparklesIcon,
   SunMoonIcon,
   TerminalIcon,
   UsersIcon,
@@ -64,8 +67,10 @@ import {
   FactoryWordmark,
   formatRelativeTime,
   getSidebarIndicatorKind,
+  AgentStatusIndicator,
   SidebarStatusIndicator,
 } from "@/components/factory/factory-primitives";
+import { useGithubPoll } from "@/components/factory/use-github-poll";
 import { NewProjectDialog } from "@/components/factory/new-project-dialog";
 import { useFactoryStream } from "@/components/factory/use-factory-stream";
 import { cn } from "@/lib/utils";
@@ -74,6 +79,14 @@ import type { SidebarData } from "@/lib/workspace-data";
 const ACTIVE_RUNS_STORAGE_KEY = "sf.sidebar.activeRunIds";
 const UNREAD_FINISHED_STORAGE_KEY = "sf.sidebar.unreadFinishedRuns";
 const EMPTY_UNREAD_MAP: Record<string, string> = {};
+
+/** The pages of a project, each its own route, listed in the project's sidebar view. */
+const PROJECT_PAGES = [
+  { path: "", label: "Overview", icon: LayoutDashboardIcon },
+  { path: "/kanban", label: "Kanban", icon: Columns3Icon },
+  { path: "/prototypes", label: "Prototypes", icon: SparklesIcon },
+  { path: "/context", label: "Context Lake", icon: DatabaseIcon },
+] as const;
 
 const SETTINGS_SUB_ITEMS = [
   { id: "general", label: "General", icon: SettingsIcon },
@@ -545,11 +558,11 @@ function ProjectRunList({
                     <Link
                       key={ag.id}
                       href={`/sessions/${run.id}?agent=${encodeURIComponent(ag.id)}`}
-                      title={`${ag.name} · ${ag.status.replace("_", " ")}`}
+                      title={`${ag.name} · ${ag.status.replaceAll("_", " ")}`}
                       className="flex h-7 w-full min-w-0 items-center justify-between gap-2 rounded-md px-2 text-xs text-muted-foreground transition-colors hover:bg-sidebar-accent/60 hover:text-foreground"
                     >
                       <span className="min-w-0 flex-1 truncate">{compactAgentLabel(ag)}</span>
-                      <SidebarStatusIndicator status={ag.status} />
+                      <AgentStatusIndicator status={ag.status} />
                     </Link>
                   ))}
                 </div>
@@ -661,6 +674,8 @@ export function AppShell({
 
   // The sidebar view always follows the URL (Vercel-style), so "Back" is a real navigation.
   const view = deriveSidebarView(pathname, data.projects, projectParam);
+  // Tracked repositories stay current on localhost too, where no webhook can reach the app.
+  useGithubPoll(view.kind === "project" ? view.projectId : null);
   const currentProject =
     view.kind === "project" ? data.projects.find((p) => p.id === view.projectId) : undefined;
   const goToRootView = () => router.push(lastRootPathRef.current);
@@ -798,17 +813,23 @@ export function AppShell({
                 <SidebarGroup className="px-2.5 py-1 group-data-[collapsible=icon]:px-2">
                   <SidebarGroupContent>
                     <SidebarMenu className="gap-0.5">
-                      <SidebarMenuItem>
-                        <SidebarMenuButton
-                          isActive={pathname === `/projects/${currentProject.id}`}
-                          tooltip="Overview"
-                          className="h-9 gap-2.5 rounded-lg px-2.5 text-sm"
-                          render={<Link href={`/projects/${currentProject.id}`} />}
-                        >
-                          <LayoutDashboardIcon className="size-4" />
-                          <span>Overview</span>
-                        </SidebarMenuButton>
-                      </SidebarMenuItem>
+                      {PROJECT_PAGES.map((page) => {
+                        const href = `/projects/${currentProject.id}${page.path}`;
+                        const Icon = page.icon;
+                        return (
+                          <SidebarMenuItem key={page.label}>
+                            <SidebarMenuButton
+                              isActive={pathname === href}
+                              tooltip={page.label}
+                              className="h-9 gap-2.5 rounded-lg px-2.5 text-sm"
+                              render={<Link href={href} />}
+                            >
+                              <Icon className="size-4" />
+                              <span>{page.label}</span>
+                            </SidebarMenuButton>
+                          </SidebarMenuItem>
+                        );
+                      })}
                       <SidebarMenuItem>
                         <SidebarMenuButton
                           isActive={pathname === "/sessions"}

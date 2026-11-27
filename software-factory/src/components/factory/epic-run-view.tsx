@@ -5,8 +5,10 @@ import Link from "next/link";
 import {
   AlertTriangleIcon,
   CheckCircle2Icon,
+  ChevronRightIcon,
   CircleDashedIcon,
   ExternalLinkIcon,
+  FileTextIcon,
   TerminalIcon,
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
@@ -22,6 +24,8 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { DecisionAnswer } from "@/components/factory/decision-answer";
+import { EpicGantt } from "@/components/factory/epic-gantt";
+import { MarkdownContent } from "@/components/factory/markdown-content";
 import {
   formatClockDuration,
   formatCompactTokens,
@@ -133,7 +137,7 @@ export function EpicRunView({
   onOpenChat?: () => void;
 }) {
   const [showActivity, setShowActivity] = React.useState(false);
-  const tickets = run.epicTickets ?? [];
+  const tickets = React.useMemo(() => run.epicTickets ?? [], [run.epicTickets]);
   const merged = tickets.filter((t) => t.status === "passed").length;
   const groups = React.useMemo(() => summarizeAgentsByTicket(run.agents), [run.agents]);
   const groupByTicket = new Map(groups.map((g) => [g.ticket, g]));
@@ -144,6 +148,22 @@ export function EpicRunView({
   const finished = ["passed", "failed", "blocked", "cancelled", "stalled"].includes(run.status);
   const epicStep = run.steps.find((s) => stepKind(s) === "epic");
   const epicUrl = typeof stepData(epicStep as Step)?.url === "string" ? String(stepData(epicStep as Step)?.url) : null;
+
+  const mergedAt = React.useMemo(() => {
+    const map = new Map<number, string>();
+    for (const s of run.steps) {
+      const d = stepData(s);
+      if (d?.kind === "ticket" && d.status === "merged" && Number(d.issue) > 0) map.set(Number(d.issue), s.createdAt);
+    }
+    return map;
+  }, [run.steps]);
+  const ganttTickets = React.useMemo(
+    () =>
+      tickets
+        .filter((t) => t.githubIssueNumber)
+        .map((t) => ({ number: t.githubIssueNumber as number, key: t.ticketKey ?? null, title: t.title })),
+    [tickets],
+  );
 
   const timeline = React.useMemo(() => {
     const list = showActivity ? run.steps : run.steps.filter((s) => MILESTONE_KINDS.has(stepKind(s)) || !stepKind(s));
@@ -213,11 +233,14 @@ export function EpicRunView({
           <Kpi label="Cost" value={formatUsd(run.costUsd)} foot={run.runner ? `on ${run.runner.name}` : undefined} />
         </div>
 
-        {run.summary && finished && (
-          <div className="whitespace-pre-wrap rounded-md border bg-muted/30 p-3 text-xs text-foreground/90">
-            {run.summary}
-          </div>
-        )}
+        <EpicGantt
+          runStartedAt={run.startedAt}
+          runFinishedAt={finished ? (run.finishedAt ?? null) : null}
+          agents={run.agents}
+          tickets={ganttTickets}
+          mergedAt={mergedAt}
+          onInspectAgent={onInspectAgent}
+        />
 
         {/* Decisions */}
         {decisions.length > 0 && (
@@ -374,7 +397,13 @@ export function EpicRunView({
 
         {/* Agents */}
         {run.agents.length > 0 && (
-          <div className="overflow-hidden rounded-lg border bg-card">
+          <details className="group overflow-hidden rounded-lg border bg-card">
+            <summary className="flex cursor-pointer list-none items-center gap-2 px-4 py-2.5 text-sm font-medium hover:bg-muted/40 [&::-webkit-details-marker]:hidden">
+              <ChevronRightIcon className="size-4 text-muted-foreground transition-transform group-open:rotate-90" />
+              All agents
+              <span className="font-mono text-2xs font-normal text-muted-foreground">{run.agents.length}</span>
+            </summary>
+            <div className="border-t">
             <Table>
               <TableHeader>
                 <TableRow>
@@ -422,7 +451,22 @@ export function EpicRunView({
                 )}
               </TableBody>
             </Table>
-          </div>
+            </div>
+          </details>
+        )}
+
+        {run.summary && finished && (
+          <details className="group overflow-hidden rounded-lg border bg-card">
+            <summary className="flex cursor-pointer list-none items-center gap-2 px-4 py-2.5 text-sm font-medium hover:bg-muted/40 [&::-webkit-details-marker]:hidden">
+              <ChevronRightIcon className="size-4 text-muted-foreground transition-transform group-open:rotate-90" />
+              <FileTextIcon className="size-4 text-muted-foreground" />
+              Factory report
+              <span className="ml-auto font-mono text-2xs font-normal text-muted-foreground">new-factory · report.md</span>
+            </summary>
+            <div className="border-t px-5 py-4">
+              <MarkdownContent content={run.summary} variant="document" />
+            </div>
+          </details>
         )}
 
         {/* Steps timeline */}
@@ -448,7 +492,7 @@ export function EpicRunView({
             size="xs"
             variant="ghost"
             nativeButton={false}
-            render={<Link href={`/projects/${run.project.id}?tab=issues`} />}
+            render={<Link href={`/projects/${run.project.id}/kanban`} />}
           >
             Open the board
           </Button>

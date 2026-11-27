@@ -308,7 +308,7 @@ export function InboxView({ initialData }: { initialData: InboxPayload }) {
         <div className="flex min-w-0 flex-col gap-0.5">
           <div className="flex flex-wrap items-center gap-1.5">
             <Link
-              href={`/projects/${iss.projectId}?tab=issues`}
+              href={`/projects/${iss.projectId}/kanban`}
               className="truncate text-sm font-medium text-foreground hover:underline"
             >
               {iss.title}
@@ -331,7 +331,7 @@ export function InboxView({ initialData }: { initialData: InboxPayload }) {
           size="xs"
           variant="outline"
           nativeButton={false}
-          render={<Link href={`/projects/${iss.projectId}?tab=issues`} />}
+          render={<Link href={`/projects/${iss.projectId}/kanban`} />}
         >
           Board
         </Button>

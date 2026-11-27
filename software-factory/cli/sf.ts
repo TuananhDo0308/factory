@@ -375,7 +375,23 @@ export type ClaudeStreamOptions = {
   onSession?: (sessionId: string) => void;
   onLive?: (chunk: Record<string, unknown>) => void;
   onToolResult?: (text: string) => void;
+  onToolUse?: (name: string, input: Record<string, unknown>) => void;
+  /** `total_cost_usd` the session had already reported before this process (a `--resume` turn). */
+  costBaseline?: number;
+  /** Called with the session's running `total_cost_usd` after every `result`. */
+  onCostTotal?: (total: number) => void;
 };
+
+/**
+ * Cost of one turn from Claude Code's `total_cost_usd`, which is a running total for the
+ * session: it keeps growing across `result` events and across `--resume` processes. Only the
+ * growth since the last reported total is new. A total below that baseline means a process that
+ * started counting from zero, so all of it is new.
+ */
+export function turnCostDelta(total: number, baseline: number): number {
+  if (!Number.isFinite(total) || total <= 0) return 0;
+  return total >= baseline ? total - baseline : total;
+}
 
 const shortId = (id: string, n = 12) => id.replace(/[^a-zA-Z0-9]+/g, "").slice(-n);
 
@@ -401,6 +417,8 @@ export class ClaudeStreamTracker {
   isError = false;
   costUsd = 0;
   results = 0;
+  /** Last `total_cost_usd` seen for this session. */
+  private costTotal: number;
   readonly pendingTools = new Set<string>();
   private readonly o: ClaudeStreamOptions;
   private readonly usageSeen: ClaudeUsageSeen = new Map();
@@ -415,6 +433,7 @@ export class ClaudeStreamTracker {
   constructor(o: ClaudeStreamOptions) {
     this.o = o;
     this.model = o.model;
+    this.costTotal = o.costBaseline && o.costBaseline > 0 ? o.costBaseline : 0;
   }
 
   /** A tool call or a subagent is still running: no output is expected until it returns. */
@@ -430,6 +449,19 @@ export class ClaudeStreamTracker {
       phase: this.o.phase,
       ...body,
     });
+  }
+
+  private toolStepKey(toolUseId: string): string {
+    return `${this.o.stepPrefix}-t-${shortId(toolUseId)}`;
+  }
+
+  /** The process ended: a subagent with no result never finished, so it must not spin forever. */
+  closeOpenSubagents(activity: string) {
+    for (const [id, sub] of this.subagents) {
+      this.agent({ ...sub, status: "failed", activity });
+      this.subagents.delete(id);
+      this.pendingTools.delete(id);
+    }
   }
 
   private agent(body: Record<string, unknown>) {
@@ -513,6 +545,9 @@ export class ClaudeStreamTracker {
         const toolName = String(block.name || "tool");
         const label = summarizeToolParams(toolName, block.input);
         this.pendingTools.add(id);
+        if (this.o.onToolUse && block.input && typeof block.input === "object") {
+          this.o.onToolUse(toolName, block.input as Record<string, unknown>);
+        }
         if (this.o.trackSubagents && (toolName === "Agent" || toolName === "Task")) {
           const inp = (block.input && typeof block.input === "object" ? block.input : {}) as Record<
             string,
@@ -539,9 +574,12 @@ export class ClaudeStreamTracker {
           status: "working",
           activity: label.slice(0, 150),
         });
-        this.o.onLive?.({ kind: "tool_active", agentKey, agentName, tool: toolName, label: label.slice(0, 155), ts: Date.now() });
+        // Live chunks carry the key of the step they become, so the run page swaps the live row
+        // for the stored one instead of showing both.
+        const toolStepKey = this.toolStepKey(id);
+        this.o.onLive?.({ kind: "tool_active", stepKey: toolStepKey, agentKey, agentName, tool: toolName, label: label.slice(0, 155), ts: Date.now() });
         this.step({
-          step: `${this.o.stepPrefix}-t-${shortId(id)}`,
+          step: toolStepKey,
           status: "passed",
           role,
           agent: agentKey,
@@ -555,9 +593,10 @@ export class ClaudeStreamTracker {
         const text = block.text.trim();
         if (!sub) this.finalText = text;
         this.textSeq += 1;
-        this.o.onLive?.({ kind: "text_delta", agentKey, agentName, delta: text, model, ts: Date.now() });
+        const textStepKey = `${this.o.stepPrefix}-m-${msgId || this.textSeq}-${idx}`;
+        this.o.onLive?.({ kind: "text_delta", stepKey: textStepKey, agentKey, agentName, delta: text, model, ts: Date.now() });
         this.step({
-          step: `${this.o.stepPrefix}-m-${msgId || this.textSeq}-${idx}`,
+          step: textStepKey,
           status: "info",
           role,
           agent: agentKey,
@@ -589,7 +628,7 @@ export class ClaudeStreamTracker {
         this.subagents.delete(id);
         this.agent({ ...sub, status: failed ? "failed" : "passed", activity: failed ? "Failed" : "Completed" });
       }
-      this.o.onLive?.({ kind: "tool_done", agentKey: this.o.agentKey, status: failed ? "failed" : "passed", ts: Date.now() });
+      this.o.onLive?.({ kind: "tool_done", stepKey: this.toolStepKey(id), agentKey: this.o.agentKey, status: failed ? "failed" : "passed", ts: Date.now() });
       if (failed) {
         const parent = typeof ev.parent_tool_use_id === "string" ? ev.parent_tool_use_id : "";
         const owner = parent ? this.subagents.get(parent) : undefined;
@@ -613,9 +652,14 @@ export class ClaudeStreamTracker {
     const isError = ev.is_error === true || subtype.startsWith("error");
     this.isError = isError;
     if (typeof ev.result === "string" && ev.result.trim()) this.finalText = ev.result.trim();
-    // `total_cost_usd` is the exact cost of this `claude -p` process (subagents included);
-    // `usage` covers its main thread, so only the part not yet posted per message is added.
-    const cost = typeof ev.total_cost_usd === "number" ? ev.total_cost_usd : 0;
+    // `total_cost_usd` is the session's running cost (subagents included), so only its growth
+    // is this turn's; `usage` covers the main thread, so only the part not yet posted is added.
+    const total = typeof ev.total_cost_usd === "number" ? ev.total_cost_usd : 0;
+    const cost = turnCostDelta(total, this.costTotal);
+    if (total > 0) {
+      this.costTotal = total;
+      this.o.onCostTotal?.(total);
+    }
     this.costUsd += cost;
     const u = (ev.usage || {}) as Record<string, unknown>;
     const totalIn = Number(u.input_tokens || 0) + Number(u.cache_creation_input_tokens || 0);
@@ -636,7 +680,8 @@ export class ClaudeStreamTracker {
       outputTokens: remOut || undefined,
       cacheReadTokens: remCache || undefined,
       costUsd: cost || undefined,
-      label: `${isError ? `Ended with error (${subtype || "error"})` : "Turn completed"} · $${cost.toFixed(4)}`,
+      // Cost and duration travel as fields; the run page prints them beside the label.
+      label: isError ? `Ended with error (${subtype || "error"})` : "Turn completed",
       data: { kind: "turn_metrics", costUsd: cost, durationMs, subtype },
       keepAgentStatus: true,
     });
@@ -1038,6 +1083,43 @@ export function findPublishedEpic(text: string): { repo: string; number: number;
       }
     }
     if (s === 0) break;
+  }
+  return null;
+}
+
+/**
+ * The batch folder and repository of a `publish-batch.mjs` command (not a dry run). The BA may
+ * send the script's JSON to a file, so the publish is recognised from the command itself.
+ */
+export function findPublishCommand(command: string, cwd: string): { dir: string; repo: string } | null {
+  if (!/publish-batch\.mjs/.test(command) || /--dry-run\b/.test(command)) return null;
+  const arg = (name: string) => {
+    const m = new RegExp(`--${name}(?:=|\\s+)("([^"]*)"|'([^']*)'|(\\S+))`).exec(command);
+    return m ? (m[2] ?? m[3] ?? m[4] ?? "") : "";
+  };
+  const dir = arg("dir");
+  const repo = arg("repo");
+  if (!dir || !/^[\w.-]+\/[\w.-]+$/.test(repo)) return null;
+  const expanded = dir.startsWith("~/") ? join(homedir(), dir.slice(2)) : dir;
+  // A `cd <dir> &&` before the script moves the relative --dir with it.
+  const cdTo = /(?:^|&&|;)\s*cd\s+("([^"]+)"|(\S+))\s*(?:&&|;)/.exec(command);
+  const base = cdTo ? resolve(cwd, cdTo[2] ?? cdTo[3]) : cwd;
+  return { dir: resolve(base, expanded), repo };
+}
+
+/** The epic publish-batch recorded in `<batch>/published.json`, or null. */
+export function readPublishedEpic(dir: string): { repo: string; number: number; url?: string } | null {
+  try {
+    const p = JSON.parse(readFileSync(join(dir, "published.json"), "utf8")) as {
+      repo?: unknown;
+      epic?: unknown;
+      epicUrl?: unknown;
+    };
+    if (typeof p.repo === "string" && typeof p.epic === "number" && p.epic > 0) {
+      return { repo: p.repo, number: p.epic, url: typeof p.epicUrl === "string" ? p.epicUrl : undefined };
+    }
+  } catch {
+    // Not published (yet).
   }
   return null;
 }
@@ -2602,6 +2684,8 @@ async function cmdDaemon(args: string[]): Promise<number> {
     model: string;
     mode: string;
     cwd: string;
+    /** Last `total_cost_usd` the session reported; a resumed turn counts only what it adds. */
+    costTotal?: number;
     updatedAt?: string;
   };
   const sessionsFile = join(sfDir(), "sessions.json");
@@ -2853,6 +2937,7 @@ async function cmdDaemon(args: string[]): Promise<number> {
     const post = poster.post;
     const turnTag = (cmdId || Date.now().toString(36)).replace(/[^a-zA-Z0-9]+/g, "").slice(-8);
     let published: { repo: string; number: number; url?: string } | null = null;
+    const publishDirs: string[] = [];
     const tracker = new ClaudeStreamTracker({
       post,
       run: runKey,
@@ -2864,10 +2949,28 @@ async function cmdDaemon(args: string[]): Promise<number> {
       model: spec.model,
       stepPrefix: `ba-${turnTag}`,
       trackSubagents: true,
-      onSession: (sid) => saveSession(runKey, { sessionId: sid, model: params.model || spec.model, mode: "ba", cwd }),
+      costBaseline: resumeSessionId && sessionMap[runKey]?.sessionId === resumeSessionId ? sessionMap[runKey]?.costTotal : undefined,
+      onSession: (sid) =>
+        saveSession(runKey, {
+          ...(sessionMap[runKey]?.sessionId === sid ? sessionMap[runKey] : {}),
+          sessionId: sid,
+          model: params.model || spec.model,
+          mode: "ba",
+          cwd,
+        }),
+      onCostTotal: (total) => {
+        const entry = sessionMap[runKey];
+        if (entry) saveSession(runKey, { ...entry, costTotal: total });
+      },
       onLive: (chunk) => live.emit(chunk),
       onToolResult: (text) => {
         if (text.includes('"epic"')) published = findPublishedEpic(text) || published;
+      },
+      onToolUse: (name, input) => {
+        if (name === "Bash" && typeof input.command === "string") {
+          const found = findPublishCommand(input.command, cwd);
+          if (found) publishDirs.push(found.dir);
+        }
       },
     });
 
@@ -2932,11 +3035,19 @@ async function cmdDaemon(args: string[]): Promise<number> {
     });
     clearInterval(heartbeat);
     if (lineBuf.trim()) tracker.handleLine(lineBuf);
+    tracker.closeOpenSubagents(
+      exit.signal === "SIGTERM" || exit.signal === "SIGINT" ? "Stopped (turn paused)" : "Stopped before it reported",
+    );
     if (activeChildren.get(runKey)?.child === child) activeChildren.delete(runKey);
     activeRuns = Math.max(0, activeRuns - 1);
 
     const paused = exit.signal === "SIGTERM" || exit.signal === "SIGINT";
     const ok = !exit.error && !paused && exit.code === 0 && !tracker.isError;
+    // publish-batch always writes <batch>/published.json, even when its stdout went to a file.
+    for (const dir of publishDirs.reverse()) {
+      if (published) break;
+      published = readPublishedEpic(dir);
+    }
     if (published) await syncPublishedEpic(post, baseCtx, runKey, published);
     await poster.drain();
     await live.stop();

@@ -74,6 +74,13 @@ export type SerializedProjectIssue = {
   rounds: number | null;
   githubIssueNumber: number | null;
   githubIssueUrl: string | null;
+  /** What GitHub says about the ticket (filled by repository tracking). */
+  github: {
+    state: string | null;
+    labels: string[];
+    pr: { number: number; url: string | null; state: string | null } | null;
+    merge: { sha: string; at: string | null; revertedAt: string | null } | null;
+  };
   createdAt: string;
   updatedAt: string;
 };
@@ -177,6 +184,14 @@ export function serializeProjectIssue(issue: {
   rounds: number | null;
   githubIssueNumber: number | null;
   githubIssueUrl: string | null;
+  githubState?: string | null;
+  githubLabelsJson?: string | null;
+  githubPrNumber?: number | null;
+  githubPrUrl?: string | null;
+  githubPrState?: string | null;
+  mergedSha?: string | null;
+  mergedAt?: Date | null;
+  revertedAt?: Date | null;
   createdAt: Date;
   updatedAt: Date;
 }): SerializedProjectIssue {
@@ -205,6 +220,20 @@ export function serializeProjectIssue(issue: {
     rounds: issue.rounds,
     githubIssueNumber: issue.githubIssueNumber,
     githubIssueUrl: issue.githubIssueUrl,
+    github: {
+      state: issue.githubState ?? null,
+      labels: safeParseJson<string[]>(issue.githubLabelsJson ?? null, []),
+      pr: issue.githubPrNumber
+        ? { number: issue.githubPrNumber, url: issue.githubPrUrl ?? null, state: issue.githubPrState ?? null }
+        : null,
+      merge: issue.mergedSha
+        ? {
+            sha: issue.mergedSha,
+            at: issue.mergedAt?.toISOString() ?? null,
+            revertedAt: issue.revertedAt?.toISOString() ?? null,
+          }
+        : null,
+    },
     createdAt: issue.createdAt.toISOString(),
     updatedAt: issue.updatedAt.toISOString(),
   };

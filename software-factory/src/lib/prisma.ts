@@ -16,7 +16,7 @@ function resolveDatabaseUrl(): string {
   return raw;
 }
 
-const PRISMA_SCHEMA_REV = "v8-prototypes-context-lake";
+const PRISMA_SCHEMA_REV = "v12-github-poll";
 
 const globalForPrisma = globalThis as unknown as {
   prisma?: PrismaClient;

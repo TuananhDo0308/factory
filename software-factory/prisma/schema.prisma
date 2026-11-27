@@ -117,6 +117,15 @@ model Project {
   defaultRunnerId     String?
   maxConcurrency      Int      @default(2)
   stallTimeoutMinutes Int      @default(15)
+  // GitHub tracking: a webhook on the repository keeps epics, tickets, staging merges and prototypes in sync.
+  githubTrackedAt     DateTime?
+  githubWebhookId     Int?
+  githubWebhookSecret String? // sealed
+  githubSyncToken     String? // sealed GitHub token of the person who turned tracking on
+  githubSyncedAt      DateTime?
+  githubSyncError     String?
+  githubEventsEtag    String? // polling GET /repos/{r}/events when GitHub cannot reach a webhook
+  githubLastEventId   String?
   createdAt           DateTime @default(now())
   updatedAt           DateTime @updatedAt
 
@@ -199,6 +208,14 @@ model ProjectIssue {
   ticketKey         String? // new-ba batch key ("T1")
   wave              Int?
   rounds            Int?
+  githubState       String? // "open" | "closed", from GitHub
+  githubLabelsJson  String? // label names on GitHub
+  githubPrNumber    Int? // newest pull request linked to the issue
+  githubPrUrl       String?
+  githubPrState     String? // "open" | "closed" | "merged"
+  mergedSha         String? // new-factory's merge commit on staging
+  mergedAt          DateTime?
+  revertedAt        DateTime?
   createdAt         DateTime @default(now())
   updatedAt         DateTime @updatedAt
 

@@ -46,10 +46,10 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
 import { Spinner } from "@/components/ui/spinner";
-import { Tabs as AceternityTabs, type Tab as AceternityTab } from "@/components/ui/aceternity-tabs";
 import { ContextLakeViewer, type ContextLakeFile } from "@/components/factory/context-lake-viewer";
 import { StatusDot } from "@/components/factory/factory-primitives";
 import { KanbanBoard } from "@/components/factory/kanban-board";
+import { GithubTrackingCard } from "@/components/factory/github-tracking-card";
 import { ProjectDashboard } from "@/components/factory/project-dashboard";
 import { ProjectPrototypesWorkspace } from "@/components/factory/prototype-viewer";
 import { SettingsTeamPanel } from "@/components/factory/settings-team-panel";
@@ -91,7 +91,18 @@ type ProjectWorkspaceProps = {
     source: "local" | "daemon" | "github" | "none";
     syncedAt: string | null;
   };
-  defaultTab?: string;
+  /** The page of the project shown (each has its own route and sidebar entry). */
+  section: ProjectSection;
+  openTeam?: boolean;
+};
+
+export type ProjectSection = "overview" | "kanban" | "prototypes" | "context";
+
+const SECTION_TITLES: Record<ProjectSection, string> = {
+  overview: "Overview",
+  kanban: "Kanban",
+  prototypes: "Prototypes",
+  context: "Context Lake",
 };
 
 function ProjectTabCard({ children }: { children: React.ReactNode }) {
@@ -111,18 +122,14 @@ export function ProjectWorkspace({
   memberCount: initialMemberCount,
   initialBoard,
   contextLake: initialContextLake,
-  defaultTab = "dashboard",
+  section,
+  openTeam = false,
 }: ProjectWorkspaceProps) {
   const router = useRouter();
   const canWrite = myRole === "owner" || myRole === "member";
-  const [teamOpen, setTeamOpen] = React.useState(defaultTab === "team");
+  const [teamOpen, setTeamOpen] = React.useState(openTeam);
   const [deleteOpen, setDeleteOpen] = React.useState(false);
   const [deletingProject, setDeletingProject] = React.useState(false);
-  const [activeTab, setActiveTab] = React.useState<string>(() =>
-    defaultTab === "team" || defaultTab === "runs"
-      ? "dashboard"
-      : defaultTab,
-  );
   const [memberCount, setMemberCount] = React.useState(initialMemberCount);
   const [defaultRunnerId, setDefaultRunnerId] = React.useState<string | null>(
     project.defaultRunnerId,
@@ -149,7 +156,6 @@ export function ProjectWorkspace({
       isMountedRef.current = false;
     };
   }, []);
-  const issues = board.issues;
   const autoFallbackRunner = React.useMemo(
     () =>
       runners.find((r) => r.status === "online" && r.isOwn) ??
@@ -336,7 +342,7 @@ export function ProjectWorkspace({
 
   useFactoryStream((eventType) => {
     scheduleBoardRefresh();
-    if (eventType === "context:updated" || (eventType === "poll:tick" && activeTab === "context")) {
+    if (eventType === "context:updated" || (eventType === "poll:tick" && section === "context")) {
       void refreshContextLake();
     }
   });
@@ -396,7 +402,12 @@ export function ProjectWorkspace({
       <div className="flex shrink-0 flex-wrap items-center justify-between gap-3 border-b pb-3">
         <div className="flex items-center gap-2.5">
           <FolderIcon className="size-4.5 text-muted-foreground" />
-          <h1 className="text-xl font-medium tracking-tight">{project.name}</h1>
+          <h1 className="text-xl font-medium tracking-tight">
+            {project.name}
+            {section !== "overview" && (
+              <span className="text-muted-foreground"> / {SECTION_TITLES[section]}</span>
+            )}
+          </h1>
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
@@ -511,33 +522,23 @@ export function ProjectWorkspace({
         </div>
       </div>
 
-      {/* Main Stacked-Card Tabs (Aceternity UI) */}
-      <div className="relative flex min-h-0 min-w-0 flex-1 flex-col [perspective:1000px]">
-        <AceternityTabs
-          value={activeTab}
-          onValueChange={setActiveTab}
-          containerClassName="shrink-0 gap-1"
-          tabClassName="shrink-0 cursor-pointer px-4 py-1.5 text-xs font-medium transition-colors"
-          activeTabClassName="bg-gray-200 dark:bg-zinc-800 shadow-xs ring-1 ring-border/70"
-          contentClassName="mt-3"
-          tabs={
-            [
-              {
-                title: "Dashboard",
-                value: "dashboard",
-                content: (
+      {/* One page per section; the sidebar switches between them. */}
+      <div className="relative flex min-h-0 min-w-0 flex-1 flex-col">
+        {section === "overview" && (
                   <ProjectTabCard>
+                    <GithubTrackingCard
+                      projectId={project.id}
+                      defaultLink={project.githubUrl ?? githubFullName}
+                      canWrite={canWrite}
+                      onSynced={() => void refreshBoard()}
+                    />
                     <ProjectDashboard
                       board={board}
-                      onOpenKanban={() => setActiveTab("issues")}
+                      onOpenKanban={() => router.push(`/projects/${project.id}/kanban`)}
                     />
                   </ProjectTabCard>
-                ),
-              },
-              {
-                title: `Kanban Board (${issues.length})`,
-                value: "issues",
-                content: (
+        )}
+        {section === "kanban" && (
                   <ProjectTabCard>
                     <KanbanBoard
                       project={{
@@ -550,12 +551,8 @@ export function ProjectWorkspace({
                       onRefresh={refreshBoard}
                     />
                   </ProjectTabCard>
-                ),
-              },
-              {
-                title: `Prototypes (${board.prototypes?.length ?? 0})`,
-                value: "prototypes",
-                content: (
+        )}
+        {section === "prototypes" && (
                   <ProjectTabCard>
                     <ProjectPrototypesWorkspace
                       projectId={project.id}
@@ -564,12 +561,8 @@ export function ProjectWorkspace({
                       onRefresh={refreshBoard}
                     />
                   </ProjectTabCard>
-                ),
-              },
-              {
-                title: `Context Lake (${contextLake.files.length})`,
-                value: "context",
-                content: (
+        )}
+        {section === "context" && (
                   <ProjectTabCard>
                     <ContextLakeViewer
                       files={contextLake.files}
@@ -581,11 +574,7 @@ export function ProjectWorkspace({
                       onSync={handleSyncContext}
                     />
                   </ProjectTabCard>
-                ),
-              },
-            ] satisfies AceternityTab[]
-          }
-        />
+        )}
       </div>
 
       <Dialog open={repoOpen} onOpenChange={setRepoOpen}>

@@ -2,7 +2,7 @@
 
 import * as React from "react";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import {
   ActivityIcon,
   AlertCircleIcon,
@@ -1177,14 +1177,23 @@ export function MissionControl({
   const [showStatusDetails, setShowStatusDetails] = React.useState(false);
   const [prevInitialAgentId, setPrevInitialAgentId] = React.useState<string | null>(initialAgentId);
 
-  // Sync if user clicks a different subagent in the sidebar while already on this session
-  if (initialAgentId !== prevInitialAgentId) {
-    setPrevInitialAgentId(initialAgentId);
-    if (initialAgentId) {
-      setSelectedAgentId(initialAgentId);
-      setViewMode("chat");
-    }
+  // The URL decides the selected agent: `?agent=<id>` from a sidebar subagent, none from the
+  // session itself. Following both ways lets the session row bring the main conversation back.
+  const agentParam = useSearchParams().get("agent");
+  if (agentParam !== prevInitialAgentId) {
+    setPrevInitialAgentId(agentParam);
+    setSelectedAgentId(agentParam);
+    if (agentParam) setViewMode("chat");
   }
+  // Picking an agent inside the page writes it to the URL too, so the sidebar's session link
+  // (`/sessions/<id>`, no agent) is a real navigation back to the main conversation.
+  const selectAgent = React.useCallback((agentId: string | null) => {
+    setSelectedAgentId(agentId);
+    const url = new URL(window.location.href);
+    if (agentId) url.searchParams.set("agent", agentId);
+    else url.searchParams.delete("agent");
+    window.history.replaceState(window.history.state, "", url);
+  }, []);
   // BA / ticket selection -> reveals right-side Issue Detail inspector
   const [selectedTicket, setSelectedTicket] = React.useState<ParsedChatTicket | null>(null);
   const [selectedIssueId, setSelectedIssueId] = React.useState<string | null>(null);
@@ -2348,7 +2357,7 @@ export function MissionControl({
                 variant="outline"
                 size="sm"
                 nativeButton={false}
-                render={<Link href={`/projects/${run.project.id}?tab=issues`} />}
+                render={<Link href={`/projects/${run.project.id}/kanban`} />}
               >
                 <Columns3Icon data-icon="inline-start" />
                 Kanban
@@ -2382,7 +2391,7 @@ export function MissionControl({
             elapsedMs={elapsedMs}
             onRefresh={refreshRun}
             onInspectAgent={(agentId) => {
-              setSelectedAgentId(agentId);
+              selectAgent(agentId);
               setViewMode("chat");
             }}
             onOpenChat={() => setViewMode("chat")}
@@ -2402,7 +2411,7 @@ export function MissionControl({
                         <Button
                           variant="ghost"
                           size="xs"
-                          onClick={() => setSelectedAgentId(null)}
+                          onClick={() => selectAgent(null)}
                         >
                           All
                         </Button>
@@ -2414,7 +2423,7 @@ export function MissionControl({
                           variant={selectedAgentId === null ? "secondary" : "ghost"}
                           size="sm"
                           className="w-full justify-between"
-                          onClick={() => setSelectedAgentId(null)}
+                          onClick={() => selectAgent(null)}
                         >
                           <span className="flex items-center gap-2 truncate">
                             <StatusDot status={run.status} />
@@ -2455,7 +2464,7 @@ export function MissionControl({
                                     variant={selectedAgentId === agent.id ? "secondary" : "ghost"}
                                     size="sm"
                                     className="w-full justify-start gap-2"
-                                    onClick={() => setSelectedAgentId(agent.id)}
+                                    onClick={() => selectAgent(agent.id)}
                                     title={agent.name}
                                   >
                                     <StatusDot status={agent.status} />
@@ -3292,7 +3301,7 @@ export function MissionControl({
                           variant="outline"
                           size="xs"
                           nativeButton={false}
-                          render={<Link href={`/projects/${run.project.id}?tab=issues`} />}
+                          render={<Link href={`/projects/${run.project.id}/kanban`} />}
                         >
                           <Columns3Icon data-icon="inline-start" />
                           Open Board
@@ -3366,7 +3375,7 @@ export function MissionControl({
                               <button
                                 key={agent.id}
                                 type="button"
-                                onClick={() => setSelectedAgentId(agent.id)}
+                                onClick={() => selectAgent(agent.id)}
                                 className="flex w-full items-start justify-between gap-2 rounded-md border border-transparent px-2 py-1.5 text-left text-xs hover:border-border hover:bg-muted/60"
                               >
                                 <div className="flex min-w-0 items-start gap-2">

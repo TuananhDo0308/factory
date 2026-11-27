@@ -1,9 +1,10 @@
-import { type NextRequest, NextResponse } from "next/server";
+import { after, type NextRequest, NextResponse } from "next/server";
 import { authenticateRequest, resolveUserProject } from "@/lib/api-auth";
 import { mapTicketStatus, ticketIssueKey } from "@/lib/epics";
 import { emitFactoryEvent } from "@/lib/events";
 import { prisma } from "@/lib/prisma";
 import { applyHtmlToolCall, readPrototypeToolCall } from "@/lib/prototype-capture";
+import { learnFromBaStep } from "@/lib/github-tracking";
 import { upsertProjectPrototype } from "@/lib/prototype-server";
 
 const VALID_STEP_STATUSES = new Set([
@@ -486,6 +487,19 @@ export async function POST(request: NextRequest) {
       runId: result.run.id,
       payload: { issueId: result.run.issueId, phase: result.step.phase },
     });
+  }
+
+  // A BA run that names its repository or links the issues it published: link the project to the
+  // repository and put the new epics on the board (the daemon only syncs a publish it can parse).
+  if (result.run.mode === "ba") {
+    const stepText =
+      typeof body.data === "object" && body.data && (body.data as Record<string, unknown>).kind === "tool_call"
+        ? JSON.stringify((body.data as Record<string, unknown>).input ?? "")
+        : summary ?? "";
+    if (/--repo[=\s]|github\.com\//.test(stepText)) {
+      const owner = { id: project.id, userId: project.userId };
+      after(() => learnFromBaStep({ project: owner, text: stepText }).catch(() => {}));
+    }
   }
 
   emitFactoryEvent({

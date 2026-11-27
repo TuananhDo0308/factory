@@ -1,6 +1,7 @@
 "use client";
 
 import * as React from "react";
+import { createPortal } from "react-dom";
 import Link from "next/link";
 import {
   CheckCircle2Icon,
@@ -11,6 +12,7 @@ import {
   EyeIcon,
   LayersIcon,
   Maximize2Icon,
+  Minimize2Icon,
   MessageSquareIcon,
   MonitorIcon,
   MoonIcon,
@@ -23,6 +25,7 @@ import {
   Trash2Icon,
   UploadIcon,
   WorkflowIcon,
+  ChevronRightIcon,
 } from "lucide-react";
 import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
@@ -45,6 +48,14 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import {
+  Select,
+  SelectContent,
+  SelectGroup,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { Spinner } from "@/components/ui/spinner";
 import { Textarea } from "@/components/ui/textarea";
 import {
@@ -141,6 +152,7 @@ export function PrototypeStudio({
   );
 
   const [activeScreenId, setActiveScreenId] = React.useState<string>(screens[0]?.id ?? "");
+  const [notShownOpen, setNotShownOpen] = React.useState(false);
   const [viewport, setViewport] = React.useState<ViewportMode>(compact ? "fluid" : "fluid");
   const [protoTheme, setProtoTheme] = React.useState<"light" | "dark">("light");
   const [viewMode, setViewMode] = React.useState<"preview" | "code">("preview");
@@ -224,6 +236,15 @@ export function PrototypeStudio({
   }, []);
 
   const activeScreen = screens.find((s) => s.id === activeScreenId) ?? screens[0] ?? null;
+
+  React.useEffect(() => {
+    if (!fullscreen) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setFullscreen(false);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [fullscreen]);
 
   async function patchPrototype(patch: { binding?: "flow" | "look"; status?: "draft" | "approved" }) {
     if (!prototype.id || !effectiveProjectId) return;
@@ -309,7 +330,7 @@ export function PrototypeStudio({
     ? `/api/prototypes/${encodeURIComponent(prototype.id)}/raw?theme=${protoTheme}${activeScreenId ? `&screen=${encodeURIComponent(activeScreenId)}` : ""}`
     : null;
 
-  function renderStage(targetRef: React.RefObject<HTMLIFrameElement | null>, isModal: boolean) {
+  function renderStage(targetRef: React.RefObject<HTMLIFrameElement | null>) {
     if (viewMode === "code") {
       return (
         <ScrollArea className="h-full w-full bg-background">
@@ -337,7 +358,6 @@ export function PrototypeStudio({
               ? "rounded-lg border border-border shadow-md"
               : "w-full",
             viewport === "mobile" && "max-h-[820px] min-h-[580px] rounded-[24px] border-4 border-foreground/15",
-            isModal && !fixedW && "min-h-[70vh]",
           )}
         >
           <iframe
@@ -358,35 +378,46 @@ export function PrototypeStudio({
     );
   }
 
-  return (
-    <div className="flex h-full min-h-0 flex-col overflow-hidden rounded-lg border bg-card">
-      {/* Top Toolbar */}
+  const showRail = screens.length > 1 && (!compact || fullscreen);
+
+  function renderHeader(inFullscreen: boolean) {
+    return (
       <div className="flex shrink-0 flex-wrap items-center justify-between gap-2 border-b bg-card px-3 py-2">
-        <div className="flex min-w-0 items-center gap-2">
-          <span className="truncate text-xs font-semibold text-foreground">
-            {prototype.title}
-          </span>
-          <Badge variant="outline" className="shrink-0 text-2xs">
-            {kindLabel(prototype.kind)}
-          </Badge>
+        <div className="flex min-w-0 flex-1 items-center gap-2">
+          <span className="truncate text-sm font-medium text-foreground">{prototype.title}</span>
+          {(!compact || inFullscreen) && (
+            <Badge variant="outline" className="shrink-0">
+              {kindLabel(prototype.kind)}
+            </Badge>
+          )}
           {prototype.version ? (
-            <span className="shrink-0 font-mono text-2xs text-muted-foreground">
-              v{prototype.version}
-            </span>
+            <span className="shrink-0 font-mono text-2xs text-muted-foreground">v{prototype.version}</span>
           ) : null}
           {localStatus === "approved" && (
-            <Badge variant="secondary" className="shrink-0 gap-1 text-2xs text-emerald-700 dark:text-emerald-400">
+            <Badge variant="secondary" className="shrink-0 gap-1">
               <CheckCircle2Icon className="size-3" />
               Approved
             </Badge>
           )}
-          {prototype.issueKeys.map((k) => (
-            <Badge key={k} variant="outline" className="shrink-0 font-mono text-2xs">
-              {k}
-            </Badge>
-          ))}
         </div>
-
+        <div className="flex shrink-0 flex-wrap items-center gap-1.5">
+          {/* Compact panes pick the screen from a menu instead of a rail */}
+          {compact && !inFullscreen && screens.length > 1 && (
+            <Select value={activeScreen?.id ?? ""} onValueChange={(v) => v && setActiveScreenId(v)}>
+              <SelectTrigger size="sm" className="h-7 w-44 text-xs" aria-label="Screen">
+                <SelectValue>{activeScreen?.title ?? "Screen"}</SelectValue>
+              </SelectTrigger>
+              <SelectContent>
+                <SelectGroup>
+                  {screens.map((sc) => (
+                    <SelectItem key={sc.id} value={sc.id}>
+                      {sc.title}
+                    </SelectItem>
+                  ))}
+                </SelectGroup>
+              </SelectContent>
+            </Select>
+          )}
         <div className="flex shrink-0 flex-wrap items-center gap-1">
           {/* Viewport Switcher */}
           <div className="flex items-center rounded-md border bg-muted/40 p-0.5">
@@ -410,7 +441,7 @@ export function PrototypeStudio({
                   className="h-6 px-1.5 text-xs"
                 >
                   <Icon className="size-3" />
-                  {!compact && <span className="ml-1 hidden sm:inline">{vp.label}</span>}
+                  {(!compact || inFullscreen) && <span className="ml-1 hidden sm:inline">{vp.label}</span>}
                 </Button>
               );
             })}
@@ -465,10 +496,10 @@ export function PrototypeStudio({
             type="button"
             size="icon-xs"
             variant="outline"
-            title="Fullscreen preview"
-            onClick={() => setFullscreen(true)}
+            title={inFullscreen ? "Exit fullscreen (Esc)" : "Fullscreen preview"}
+            onClick={() => setFullscreen((v) => !v)}
           >
-            <Maximize2Icon />
+            {inFullscreen ? <Minimize2Icon /> : <Maximize2Icon />}
           </Button>
 
           {canWrite && prototype.id && onDeleted && (
@@ -484,72 +515,103 @@ export function PrototypeStudio({
             </Button>
           )}
         </div>
+        </div>
       </div>
+    );
+  }
 
-      {/* Screen / State Switcher Bar */}
-      {screens.length > 0 && (
-        <div className="flex shrink-0 flex-col gap-1.5 border-b bg-muted/25 px-3 py-2">
-          <div className="flex flex-wrap items-center gap-1.5">
-            <span className="font-mono text-2xs uppercase tracking-wider text-muted-foreground">
-              States ({screens.length}):
-            </span>
-            {screens.map((sc) => {
-              const active = sc.id === (activeScreen?.id ?? "");
-              return (
-                <button
-                  key={sc.id}
-                  type="button"
-                  onClick={() => setActiveScreenId(sc.id)}
-                  className={cn(
-                    "inline-flex items-center gap-1 rounded-md border px-2 py-0.5 text-xs transition-colors",
-                    active
-                      ? "border-primary/50 bg-primary/10 font-medium text-foreground"
-                      : "border-border/70 bg-card text-muted-foreground hover:border-foreground/25 hover:text-foreground",
-                  )}
-                >
-                  <span className="font-mono text-2xs text-primary">#{sc.id}</span>
-                  <span>{sc.title}</span>
-                  {sc.criteria.length > 0 && (
-                    <span className="rounded bg-muted px-1 font-mono text-2xs text-muted-foreground">
-                      {sc.criteria.join(",")}
-                    </span>
-                  )}
-                </button>
-              );
-            })}
-          </div>
-          {activeScreen?.shows && (
-            <div className="flex items-center gap-2 text-xs text-muted-foreground">
-              <span className="font-mono text-2xs text-foreground/80">
-                #{activeScreen.id}:
+  function renderScreenRail() {
+    return (
+      <nav aria-label="Screens" className="flex w-56 shrink-0 flex-col border-r bg-muted/20">
+        <div className="flex items-center justify-between px-3 pt-3 pb-2">
+          <span className="text-xs font-medium text-muted-foreground">Screens</span>
+          <span className="font-mono text-2xs text-muted-foreground tabular-nums">{screens.length}</span>
+        </div>
+        <div className="flex min-h-0 flex-1 flex-col gap-0.5 overflow-y-auto px-2 pb-2">
+          {screens.map((sc) => {
+            const active = sc.id === activeScreen?.id;
+            return (
+              <button
+                key={sc.id}
+                type="button"
+                onClick={() => setActiveScreenId(sc.id)}
+                aria-current={active ? "true" : undefined}
+                className={cn(
+                  "flex w-full flex-col gap-0.5 rounded-md px-2.5 py-1.5 text-left transition-colors",
+                  active ? "bg-background shadow-xs ring-1 ring-border" : "hover:bg-muted/60",
+                )}
+              >
+                <span className={cn("truncate text-xs", active ? "font-medium text-foreground" : "text-foreground/85")}>
+                  {sc.title}
+                </span>
+                <span className="truncate font-mono text-2xs text-muted-foreground">
+                  #{sc.id}
+                  {sc.criteria.length > 0 ? ` · ${sc.criteria.length} criteria` : ""}
+                </span>
+              </button>
+            );
+          })}
+        </div>
+      </nav>
+    );
+  }
+
+  function renderScreenInfo() {
+    if (!activeScreen || (!activeScreen.shows && activeScreen.criteria.length === 0)) return null;
+    const shown = activeScreen.criteria.slice(0, 6);
+    const more = activeScreen.criteria.length - shown.length;
+    return (
+      <div className="flex shrink-0 items-center gap-2 border-b bg-muted/20 px-3 py-1.5 text-xs text-muted-foreground">
+        <span className="shrink-0 font-mono text-2xs text-primary">#{activeScreen.id}</span>
+        <span className="min-w-0 flex-1 truncate" title={activeScreen.shows}>
+          {activeScreen.shows}
+        </span>
+        {shown.length > 0 && (
+          <span
+            className="flex shrink-0 items-center gap-1 font-mono text-2xs"
+            title={activeScreen.criteria.join(", ")}
+          >
+            {shown.map((c) => (
+              <span key={c} className="rounded bg-muted px-1 py-px">
+                {c}
               </span>
-              <span className="truncate">{activeScreen.shows}</span>
-            </div>
-          )}
-        </div>
-      )}
-
-      {/* Interactive Sandboxed Stage */}
-      <div className="min-h-0 flex-1 overflow-hidden">
-        {renderStage(iframeRef, false)}
+            ))}
+            {more > 0 && <span>+{more}</span>}
+          </span>
+        )}
       </div>
+    );
+  }
 
-      {/* Not-shown criteria note */}
-      {prototype.notShown.length > 0 && (
-        <div className="flex shrink-0 flex-wrap items-center gap-x-3 gap-y-1 border-t bg-muted/20 px-3 py-1.5 text-xs text-muted-foreground">
-          <span className="font-mono text-2xs uppercase tracking-wider">Not drawn:</span>
-          {prototype.notShown.map((ns) => (
-            <span key={ns.criterion}>
-              <strong className="font-mono text-foreground/85">{ns.criterion}</strong> ({ns.why})
-            </span>
-          ))}
-        </div>
-      )}
-
-      {/* Binding, Approval & Steering Footer */}
-      {(canWrite || onSteer) && (
-        <div className="flex shrink-0 flex-col gap-2 border-t bg-card px-3 py-2">
-          <div className="flex flex-wrap items-center justify-between gap-2">
+  function renderFooter() {
+    const hasNotShown = prototype.notShown.length > 0;
+    if (!hasNotShown && !canWrite && !onSteer) return null;
+    return (
+      <div className="flex shrink-0 flex-col border-t bg-card">
+        {notShownOpen && hasNotShown && (
+          <div className="flex max-h-40 flex-wrap gap-x-3 gap-y-1 overflow-y-auto border-b bg-muted/20 px-3 py-2 text-xs text-muted-foreground">
+            {prototype.notShown.map((ns) => (
+              <span key={ns.criterion}>
+                <strong className="font-mono text-foreground/85">{ns.criterion}</strong> {ns.why}
+              </span>
+            ))}
+          </div>
+        )}
+        <div className="flex flex-wrap items-center justify-between gap-2 px-3 py-2">
+          <div className="flex flex-wrap items-center gap-3">
+            {hasNotShown && (
+              <button
+                type="button"
+                onClick={() => setNotShownOpen((v) => !v)}
+                aria-expanded={notShownOpen}
+                className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
+              >
+                <ChevronRightIcon className={cn("size-3 transition-transform", notShownOpen && "rotate-90")} />
+                Not drawn ({prototype.notShown.length})
+              </button>
+            )}
+            {(canWrite || onSteer) && (
+            <>
             {/* Binding Switch: Flow vs Look + Flow */}
             <div className="flex items-center gap-1.5">
               <span className="font-mono text-2xs uppercase tracking-wider text-muted-foreground">
@@ -583,6 +645,11 @@ export function PrototypeStudio({
               </div>
             </div>
 
+            </>
+            )}
+          </div>
+          {(canWrite || onSteer) && (
+            <>
             {/* Action buttons */}
             <div className="flex flex-wrap items-center gap-1.5">
               {onSteer && (
@@ -642,10 +709,11 @@ export function PrototypeStudio({
                 </Button>
               )}
             </div>
-          </div>
-
+            </>
+          )}
+        </div>
           {feedbackOpen && onSteer && (
-            <div className="flex items-center gap-2 pt-0.5">
+            <div className="flex items-center gap-2 px-3 pb-2">
               <Input
                 value={feedbackText}
                 onChange={(e) => setFeedbackText(e.target.value)}
@@ -680,71 +748,43 @@ export function PrototypeStudio({
               </Button>
             </div>
           )}
-        </div>
-      )}
+      </div>
+    );
+  }
 
-      {/* Fullscreen Preview Dialog */}
-      <Dialog open={fullscreen} onOpenChange={setFullscreen}>
-        <DialogContent className="flex h-[90vh] max-w-[95vw] flex-col gap-0 p-0 sm:max-w-[95vw]">
-          <DialogHeader className="shrink-0 border-b px-4 py-3 pr-12">
-            <div className="flex flex-wrap items-center justify-between gap-2">
-              <div className="flex items-center gap-2">
-                <DialogTitle className="text-sm font-semibold">{prototype.title}</DialogTitle>
-                <Badge variant="outline">{kindLabel(prototype.kind)}</Badge>
-                <Badge variant="secondary">
-                  {localBinding === "look" ? "Look + Flow" : "Flow only"}
-                </Badge>
-              </div>
-              <div className="flex items-center gap-1.5">
-                {(["fluid", "desktop", "tablet", "mobile"] as const).map((vp) => (
-                  <Button
-                    key={vp}
-                    type="button"
-                    size="xs"
-                    variant={viewport === vp ? "secondary" : "outline"}
-                    onClick={() => setViewport(vp)}
-                  >
-                    {vp === "fluid" ? "Fit" : vp === "desktop" ? "1440px" : vp === "tablet" ? "768px" : "390px"}
-                  </Button>
-                ))}
-                <Button
-                  type="button"
-                  size="xs"
-                  variant="outline"
-                  onClick={() => setProtoTheme((t) => (t === "light" ? "dark" : "light"))}
-                >
-                  {protoTheme === "dark" ? <MoonIcon data-icon="inline-start" /> : <SunIcon data-icon="inline-start" />}
-                  {protoTheme === "dark" ? "Dark" : "Light"}
-                </Button>
-              </div>
-            </div>
-            {screens.length > 0 && (
-              <div className="mt-2 flex flex-wrap items-center gap-1.5">
-                {screens.map((sc) => (
-                  <button
-                    key={sc.id}
-                    type="button"
-                    onClick={() => setActiveScreenId(sc.id)}
-                    className={cn(
-                      "inline-flex items-center gap-1 rounded-md border px-2 py-0.5 text-xs transition-colors",
-                      sc.id === activeScreen?.id
-                        ? "border-primary/50 bg-primary/10 font-medium text-foreground"
-                        : "border-border bg-card text-muted-foreground hover:text-foreground",
-                    )}
-                  >
-                    <span className="font-mono text-xs text-primary">#{sc.id}</span>
-                    <span>{sc.title}</span>
-                  </button>
-                ))}
-              </div>
-            )}
-          </DialogHeader>
-          <div className="min-h-0 flex-1 overflow-hidden">
-            {renderStage(fullscreenIframeRef, true)}
-          </div>
-        </DialogContent>
-      </Dialog>
-    </div>
+  function renderStudio(ref: React.RefObject<HTMLIFrameElement | null>, inFullscreen: boolean) {
+    return (
+      <>
+        {renderHeader(inFullscreen)}
+        {renderScreenInfo()}
+        <div className="flex min-h-0 flex-1">
+          {showRail && renderScreenRail()}
+          <div className="min-h-80 min-w-0 flex-1 overflow-hidden">{renderStage(ref)}</div>
+        </div>
+        {renderFooter()}
+      </>
+    );
+  }
+
+  return (
+    <>
+      <div className="flex h-full min-h-0 flex-col overflow-hidden rounded-lg border bg-card">
+        {renderStudio(iframeRef, false)}
+      </div>
+      {/* Fullscreen: a full-viewport layer with the same studio, Esc closes it */}
+      {fullscreen &&
+        createPortal(
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-label={`${prototype.title}, fullscreen`}
+            className="fixed inset-0 z-50 flex flex-col bg-background"
+          >
+            {renderStudio(fullscreenIframeRef, true)}
+          </div>,
+          document.body,
+        )}
+    </>
   );
 }
 

@@ -7,7 +7,9 @@ import {
   ClaudeStreamTracker,
   claudeUsageDelta,
   EpicTracker,
+  findPublishCommand,
   findPublishedEpic,
+  readPublishedEpic,
   mapV2TicketStatus,
   resolveResumeCwd,
 } from "../cli/sf.ts";
@@ -121,12 +123,65 @@ describe("Claude stream-json usage accounting", () => {
   });
 });
 
+describe("live chunks", () => {
+  it("carry the key of the step they become, so the run page replaces them instead of duplicating", () => {
+    const s = fakeServer();
+    const live = [];
+    const t = tracker(s, { onLive: (c) => live.push(c) });
+    t.handle({ type: "assistant", message: { id: "m1", content: [{ type: "text", text: "Looking." }, { type: "tool_use", id: "tu_7", name: "Bash", input: { command: "ls" } }] } });
+    t.handle({ type: "user", message: { content: [{ type: "tool_result", tool_use_id: "tu_7", content: "a" }] } });
+    const keys = [...s.steps.keys()];
+    const text = live.find((c) => c.kind === "text_delta");
+    const active = live.find((c) => c.kind === "tool_active");
+    const done = live.find((c) => c.kind === "tool_done");
+    assert.ok(keys.includes(text.stepKey), `text_delta key ${text.stepKey} is a step`);
+    assert.ok(keys.includes(active.stepKey), `tool_active key ${active.stepKey} is a step`);
+    assert.equal(done.stepKey, active.stepKey);
+  });
+});
+
+describe("subagents left open when a turn ends", () => {
+  it("are closed as failed when the process stops before their result", () => {
+    const s = fakeServer();
+    const t = tracker(s, { trackSubagents: true });
+    t.handle({ type: "assistant", message: { id: "m1", content: [{ type: "tool_use", id: "tu_B1", name: "Agent", input: { description: "Design reviewer" } }] } });
+    t.closeOpenSubagents("Stopped before it reported");
+    const last = s.posts.filter((p) => p.path === "/api/v1/runs/agent" && p.body.name === "Design reviewer").at(-1);
+    assert.equal(last.body.status, "failed");
+    assert.equal(last.body.activity, "Stopped before it reported");
+    assert.equal(t.busy, false);
+  });
+});
+
 describe("published epic detection", () => {
   it("reads the epic from publish-batch output and ignores a dry run", () => {
     const out = `publishing…\n${JSON.stringify({ repo: "o/r", visibility: "PRIVATE", epic: { number: 41, url: "https://github.com/o/r/issues/41" }, tickets: [{ issue: 42 }] }, null, 2)}`;
     assert.deepEqual(findPublishedEpic(out), { repo: "o/r", number: 41, url: "https://github.com/o/r/issues/41" });
     assert.equal(findPublishedEpic(JSON.stringify({ dryRun: true, repo: "o/r", epic: "create" })), null);
     assert.equal(findPublishedEpic("no json here"), null);
+  });
+});
+
+describe("publish found from the command, not its output", () => {
+  it("reads --dir and --repo from a publish-batch command, however its output is redirected", () => {
+    assert.deepEqual(
+      findPublishCommand("cd /w && node ~/.claude/skills/new-ba/scripts/publish-batch.mjs --dir ./batch --repo o/r --label ready > /tmp/pub.json 2>&1", "/w"),
+      { dir: "/w/batch", repo: "o/r" },
+    );
+    assert.deepEqual(findPublishCommand('node scripts/publish-batch.mjs --repo "o/r" --dir "/s/b 1"', "/x"), { dir: "/s/b 1", repo: "o/r" });
+    assert.equal(findPublishCommand("node publish-batch.mjs --dir b --repo o/r --dry-run", "/w"), null);
+    assert.equal(findPublishCommand("node check-batch.mjs --dir b", "/w"), null);
+  });
+
+  it("reads the epic from published.json in the batch folder", () => {
+    const dir = mkdtempSync(join(tmpdir(), "sf-batch-"));
+    try {
+      assert.equal(readPublishedEpic(dir), null);
+      writeFileSync(join(dir, "published.json"), JSON.stringify({ repo: "o/r", epic: 41, epicUrl: "https://github.com/o/r/issues/41", issues: {} }));
+      assert.deepEqual(readPublishedEpic(dir), { repo: "o/r", number: 41, url: "https://github.com/o/r/issues/41" });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
 

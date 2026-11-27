@@ -1,16 +1,20 @@
 import type { Metadata } from "next";
-import { Geist, Geist_Mono, Space_Grotesk } from "next/font/google";
+import { JetBrains_Mono, Source_Serif_4, Space_Grotesk } from "next/font/google";
 import { Providers } from "@/components/providers";
 import "./globals.css";
 
-const geistSans = Geist({
-  variable: "--font-geist-sans",
-  subsets: ["latin"],
+// UI text: a Claude-style serif. Source Serif 4 has an optical-size axis, so 12–13px sidebar
+// text stays crisp, and a Vietnamese subset, so accented letters never fall back to a system font.
+const uiFont = Source_Serif_4({
+  variable: "--font-ui",
+  subsets: ["latin", "vietnamese"],
+  axes: ["opsz"],
 });
 
-const geistMono = Geist_Mono({
-  variable: "--font-geist-mono",
-  subsets: ["latin"],
+// Mono for numbers and code. Not Geist Mono: its zero is slashed; JetBrains Mono's is dotted.
+const monoFont = JetBrains_Mono({
+  variable: "--font-mono-face",
+  subsets: ["latin", "vietnamese"],
 });
 
 const spaceGrotesk = Space_Grotesk({
@@ -30,7 +34,7 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
     <html
       lang="en"
       suppressHydrationWarning
-      className={`${geistSans.variable} ${geistMono.variable} ${spaceGrotesk.variable} h-full antialiased`}
+      className={`${uiFont.variable} ${monoFont.variable} ${spaceGrotesk.variable} h-full antialiased`}
     >
       <body className="flex min-h-full flex-col bg-background text-foreground">
         <Providers>{children}</Providers>

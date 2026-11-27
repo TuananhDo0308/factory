@@ -5,10 +5,10 @@
 @custom-variant dark (&:is(.dark *));
 
 @theme inline {
-  --font-heading: var(--font-geist-sans), ui-sans-serif, system-ui, sans-serif;
-  --font-sans: var(--font-geist-sans), ui-sans-serif, system-ui, sans-serif;
-  --font-mono: var(--font-geist-mono), ui-monospace, SFMono-Regular, Menlo, monospace;
-  --font-brand: var(--font-space-grotesk), var(--font-geist-sans), ui-sans-serif, system-ui, sans-serif;
+  --font-heading: var(--font-ui), ui-serif, Georgia, serif;
+  --font-sans: var(--font-ui), ui-serif, Georgia, serif;
+  --font-mono: var(--font-mono-face), ui-monospace, SFMono-Regular, Menlo, monospace;
+  --font-brand: var(--font-space-grotesk), var(--font-ui), ui-serif, Georgia, serif;
 
   /*
    * Type scale — four UI steps plus three heading steps. Use only these names;
@@ -209,6 +209,19 @@
   html {
     @apply font-sans;
     scrollbar-color: var(--input) transparent;
+  }
+  /*
+   * Mono sits beside the serif UI text everywhere (ids, counts, costs, timestamps). JetBrains
+   * Mono's x-height is 0.55 of its size, Source Serif 4's is 0.452, so at one font-size the mono
+   * reads ~22% larger and the type scale looks random. Bringing it to 0.5 (just above the serif,
+   * so 12px captions stay legible) keeps the steps of the scale close in both fonts. Revisit if the UI font changes.
+   */
+  .font-mono,
+  code,
+  kbd,
+  samp,
+  pre {
+    font-size-adjust: ex-height 0.5;
   }
   body {
     @apply bg-background text-foreground;

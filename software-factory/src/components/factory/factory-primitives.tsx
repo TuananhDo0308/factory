@@ -203,6 +203,68 @@ export function SidebarStatusIndicator({
   );
 }
 
+export type AgentStatusKind = "running" | "done" | "failed" | "waiting" | "idle";
+
+/** What a subagent is doing now, from its RunAgent status: every state is shown, done included. */
+export function getAgentStatusKind(status: string): AgentStatusKind {
+  const s = status.toLowerCase();
+  if (s === "working" || s === "running" || s === "in_progress" || s === "queued") return "running";
+  if (s === "passed" || s === "completed" || s === "done" || s === "merged") return "done";
+  if (s === "failed" || s === "blocked" || s === "stalled") return "failed";
+  if (s === "waiting_on_you" || s === "awaiting_input" || s === "needs_human") return "waiting";
+  return "idle";
+}
+
+const AGENT_STATUS_LABEL: Record<AgentStatusKind, string> = {
+  running: "Running",
+  done: "Done",
+  failed: "Failed",
+  waiting: "Waiting on you",
+  idle: "Idle",
+};
+
+/** Sidebar status of one subagent: spinner while running, check when done, red when failed. */
+export function AgentStatusIndicator({ status, className }: { status: string; className?: string }) {
+  const kind = getAgentStatusKind(status);
+  const label = AGENT_STATUS_LABEL[kind];
+  const box = cn("inline-flex size-4 shrink-0 items-center justify-center", className);
+  if (kind === "running") {
+    return (
+      <span role="status" aria-label={label} title={label} className={box}>
+        <FourDotLoader />
+      </span>
+    );
+  }
+  if (kind === "done") {
+    return (
+      <span aria-label={label} title={label} className={cn(box, "text-emerald-600 dark:text-emerald-400")}>
+        <svg viewBox="0 0 12 12" className="size-3" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden>
+          <path d="M2.5 6.2l2.3 2.3 4.7-5" strokeLinecap="round" strokeLinejoin="round" />
+        </svg>
+      </span>
+    );
+  }
+  if (kind === "failed") {
+    return (
+      <span aria-label={label} title={label} className={cn(box, "rounded-full bg-red-500/20")}>
+        <span className="size-[6.5px] rounded-full bg-red-500" />
+      </span>
+    );
+  }
+  if (kind === "waiting") {
+    return (
+      <span aria-label={label} title={label} className={cn(box, "rounded-full bg-[#3b82f6]/20")}>
+        <span className="size-[6.5px] rounded-full bg-[#3b82f6]" />
+      </span>
+    );
+  }
+  return (
+    <span aria-label={label} title={label} className={box}>
+      <span className="size-[6px] rounded-full bg-muted-foreground/40" />
+    </span>
+  );
+}
+
 export function formatRelativeTime(iso: string | null | undefined): string {
   if (!iso) return "—";
   const diffSec = Math.max(0, Math.floor((Date.now() - new Date(iso).getTime()) / 1000));
